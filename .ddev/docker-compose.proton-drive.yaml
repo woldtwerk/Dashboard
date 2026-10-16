@@ -1,0 +1,26 @@
+# Proton Drive CLI, driven by the setup wizard and the file explorer through a
+# control API.
+# Token: PROTON_DRIVE_CONTROL_TOKEN in .ddev/.env.proton-drive, the same value as
+# NUXT_PROTON_DRIVE_TOKEN in .ddev/.env.web (both gitignored, paired by ensure-secrets.sh).
+services:
+  proton-drive:
+    container_name: ddev-${DDEV_SITENAME}-proton-drive
+    build: ./proton-drive
+    image: ddev-${DDEV_SITENAME}-proton-drive
+    hostname: proton-drive
+    labels:
+      com.ddev.site-name: ${DDEV_SITENAME}
+      com.ddev.approot: ${DDEV_APPROOT}
+    restart: "no"
+    # 8080: control API; only reachable inside the project network
+    expose:
+      - 8080
+    volumes:
+      # The signed-in session, its vault key and the CLI cache: as sensitive as the drive itself
+      - "proton-drive:/home/drive"
+    x-ddev:
+      describe-info: |
+        Control API proton-drive:8080
+
+volumes:
+  proton-drive:

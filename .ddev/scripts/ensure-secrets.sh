@@ -13,6 +13,7 @@ WEB="$DDEV_DIR/.env.web"
 MEILI="$DDEV_DIR/.env.meilisearch"
 BRIDGE="$DDEV_DIR/.env.proton-bridge"
 CARBONATE="$DDEV_DIR/.env.carbonate"
+DRIVE="$DDEV_DIR/.env.proton-drive"
 
 random() {
   openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
@@ -68,3 +69,4 @@ ensure "$WEB" NUXT_APP_SECRET
 ensure_pair "$MEILI" MEILI_MASTER_KEY "$WEB" NUXT_MEILISEARCH_API_KEY
 ensure_pair "$BRIDGE" BRIDGE_CONTROL_TOKEN "$WEB" NUXT_PROTON_BRIDGE_TOKEN
 ensure_pair "$CARBONATE" CARBONATE_CONTROL_TOKEN "$WEB" NUXT_CARBONATE_TOKEN
+ensure_pair "$DRIVE" PROTON_DRIVE_CONTROL_TOKEN "$WEB" NUXT_PROTON_DRIVE_TOKEN

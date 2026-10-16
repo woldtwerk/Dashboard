@@ -1,0 +1,16 @@
+{
+  "name": "@allmight/drive",
+  "private": true,
+  "type": "module",
+  "description": "Drive domain: entities, provider port, API and UI",
+  "main": "./nuxt.config.ts",
+  "dependencies": {
+    "@allmight/core": "workspace:*",
+    "@nuxt/ui": "catalog:",
+    "@vueuse/core": "catalog:",
+    "zod": "catalog:"
+  },
+  "peerDependencies": {
+    "nuxt": "catalog:"
+  }
+}
