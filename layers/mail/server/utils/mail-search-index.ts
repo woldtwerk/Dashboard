@@ -1,5 +1,5 @@
 import type { MailDocument } from '../mail-index/document'
-import type { MailSearch, MailSummary } from '../../shared/types/mail'
+import type { MailFacets, MailSearch, MailSummary } from '../../shared/types/mail'
 
 export type { MailDocument }
 
@@ -9,7 +9,12 @@ export interface MailIndexQuery {
   mailbox?: string
   search: MailSearch
   limit: number
+  /** Skip this many best matches; for "load more" */
+  offset?: number
 }
+
+/** Everything that narrows the result, without paging; for facet suggestions */
+export type MailFacetQuery = Pick<MailIndexQuery, 'services' | 'mailbox' | 'search'>
 
 /** Port for a search engine holding indexed mail (e.g. Meilisearch) */
 export interface MailSearchIndex {
@@ -20,6 +25,8 @@ export interface MailSearchIndex {
   removeMailbox(service: string, mailbox?: string): Promise<void>
   /** Newest first without text, by relevance with text */
   search(query: MailIndexQuery): Promise<MailSummary[]>
+  /** Filter suggestions for the current query, e.g. the most frequent senders */
+  facets(query: MailFacetQuery): Promise<MailFacets>
 }
 
 let factory: (() => MailSearchIndex) | undefined

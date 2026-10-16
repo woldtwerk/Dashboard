@@ -1,6 +1,7 @@
 import { tool } from 'ai'
 import { z } from 'zod'
 import type { MailAddress, MailSearch, MailSummary } from '../../../mail/shared/types/mail'
+import { HIGHLIGHT_POST_TAG, HIGHLIGHT_PRE_TAG } from '../../../mail/shared/mail-highlight'
 import type { AssistantMailSource } from '../../shared/types/assistant'
 import { aiSearchSchema, normalizeAiSearch } from './search'
 
@@ -24,6 +25,10 @@ export const formatAddresses = (addresses: MailAddress[]) =>
 export const mailLink = (service: string, mailbox: string, uid: number) =>
   `/mail?${new URLSearchParams({ service, mailbox, uid: String(uid) })}`
 
+/** The index marks matches for the UI; the model should read plain text */
+const stripHighlights = (value?: string) =>
+  value?.replaceAll(HIGHLIGHT_PRE_TAG, '').replaceAll(HIGHLIGHT_POST_TAG, '')
+
 export function toMailSource(service: string, mail: MailSummary): AssistantMailSource {
   return {
     service,
@@ -33,7 +38,7 @@ export function toMailSource(service: string, mail: MailSummary): AssistantMailS
     from: formatAddresses(mail.from),
     date: mail.date,
     unread: mail.unread,
-    snippet: mail.snippet,
+    snippet: stripHighlights(mail.snippet),
     link: mailLink(service, mail.mailbox, mail.uid)
   }
 }

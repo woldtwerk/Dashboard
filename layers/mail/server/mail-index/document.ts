@@ -20,6 +20,8 @@ export interface MailDocument {
   date: number
   unread: boolean
   flagged: boolean
+  /** Only from indexed bodies; listing an envelope does not reveal attachments */
+  hasAttachment: boolean
   text: string
 }
 
@@ -78,6 +80,7 @@ export function toMailDocument(service: string, mailbox: string, message: MailMe
     date: Math.floor(new Date(message.date).getTime() / 1000),
     unread: message.unread,
     flagged: message.flagged,
+    hasAttachment: message.hasAttachment ?? false,
     text: (message.text ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_TEXT_LENGTH)
   }
 }

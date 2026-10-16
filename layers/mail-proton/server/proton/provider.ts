@@ -17,7 +17,8 @@ async function toMailMessage(mailbox: string, message: FetchMessageObject): Prom
     to: toMailAddresses(parsed.to),
     cc: toMailAddresses(parsed.cc),
     text: parsed.text,
-    html: parsed.html || undefined
+    html: parsed.html || undefined,
+    hasAttachment: parsed.attachments.length > 0
   }
 }
 
@@ -30,6 +31,7 @@ function toSearchObject(search?: MailSearch): SearchObject | undefined {
   if (search?.since) criteria.since = new Date(search.since)
   if (search?.before) criteria.before = new Date(search.before)
   if (search?.from) criteria.from = search.from
+  // `hasAttachment` has no IMAP search criterion; the endpoint only offers it when the index serves the query
 
   return Object.keys(criteria).length ? criteria : undefined
 }

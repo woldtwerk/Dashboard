@@ -1,20 +1,29 @@
 <script setup lang="ts">
 import { format, isToday } from 'date-fns'
 import type { MailSummary } from '#layers/mail/shared/types/mail'
+import { highlightToHtml } from '#layers/mail/shared/mail-highlight'
 
 const props = defineProps<{
   mails: MailSummary[]
+  /** Show the folder of each hit, e.g. when searching across all folders */
+  showMailbox?: boolean
+  /** Display names by `service/mailbox`, resolved by the page */
+  mailboxNames?: Record<string, string>
 }>()
 
-const mailsRefs = ref<Record<number, Element | null>>({})
+const mailsRefs = ref<Record<string, Element | null>>({})
 
 const selectedMail = defineModel<MailSummary | null>()
 
+const selectedKey = computed(() => selectedMail.value ? mailKey(selectedMail.value) : undefined)
+
+const mailboxName = (mail: MailSummary) => props.mailboxNames?.[`${mail.service}/${mail.mailbox}`] ?? mail.mailbox
+
 watch(selectedMail, () => {
-  if (!selectedMail.value) {
+  if (!selectedKey.value) {
     return
   }
-  const ref = mailsRefs.value[selectedMail.value.uid]
+  const ref = mailsRefs.value[selectedKey.value]
   if (ref) {
     ref.scrollIntoView({ block: 'nearest' })
   }
@@ -22,7 +31,7 @@ watch(selectedMail, () => {
 
 defineShortcuts({
   arrowdown: () => {
-    const index = props.mails.findIndex(mail => mail.uid === selectedMail.value?.uid)
+    const index = props.mails.findIndex(mail => mailKey(mail) === selectedKey.value)
 
     if (index === -1) {
       selectedMail.value = props.mails[0]
@@ -31,7 +40,7 @@ defineShortcuts({
     }
   },
   arrowup: () => {
-    const index = props.mails.findIndex(mail => mail.uid === selectedMail.value?.uid)
+    const index = props.mails.findIndex(mail => mailKey(mail) === selectedKey.value)
 
     if (index === -1) {
       selectedMail.value = props.mails[props.mails.length - 1]
@@ -46,14 +55,14 @@ defineShortcuts({
   <div class="overflow-y-auto divide-y divide-default">
     <div
       v-for="mail in mails"
-      :key="mail.uid"
-      :ref="(el: unknown) => { mailsRefs[mail.uid] = el as Element | null }"
+      :key="mailKey(mail)"
+      :ref="(el: unknown) => { mailsRefs[mailKey(mail)] = el as Element | null }"
     >
       <div
         class="p-4 sm:px-6 text-sm cursor-pointer border-l-2 transition-colors"
         :class="[
           mail.unread ? 'text-highlighted' : 'text-toned',
-          selectedMail && selectedMail.uid === mail.uid
+          selectedMail && selectedKey === mailKey(mail)
             ? 'border-primary bg-primary/10'
             : 'border-bg hover:border-primary hover:bg-primary/5'
         ]"
@@ -67,15 +76,20 @@ defineShortcuts({
             <UIcon v-if="mail.flagged" name="i-lucide-star" class="size-3.5 shrink-0 text-warning" />
           </div>
 
-          <span class="shrink-0">{{ isToday(new Date(mail.date)) ? format(new Date(mail.date), 'HH:mm') : format(new Date(mail.date), 'dd MMM') }}</span>
+          <div class="flex shrink-0 items-center gap-2">
+            <span v-if="showMailbox" class="rounded bg-elevated px-1.5 py-0.5 text-xs font-normal text-dimmed">
+              {{ mailboxName(mail) }}
+            </span>
+            <span>{{ isToday(new Date(mail.date)) ? format(new Date(mail.date), 'HH:mm') : format(new Date(mail.date), 'dd MMM') }}</span>
+          </div>
         </div>
-        <p class="truncate" :class="[mail.unread && 'font-semibold']">
-          {{ mail.subject || '(no subject)' }}
-        </p>
-        <p v-if="mail.snippet" class="text-dimmed line-clamp-2">
-          {{ mail.snippet }}
-        </p>
+        <!-- eslint-disable-next-line vue/no-v-html -- highlightToHtml escapes the mail content -->
+        <p class="truncate" :class="[mail.unread && 'font-semibold']" v-html="highlightToHtml(mail.subjectHighlight ?? mail.subject) || '(no subject)'" />
+        <!-- eslint-disable-next-line vue/no-v-html -- highlightToHtml escapes the mail content -->
+        <p v-if="mail.snippet" class="text-dimmed line-clamp-2" v-html="highlightToHtml(mail.snippet)" />
       </div>
     </div>
+
+    <slot name="more" />
   </div>
 </template>

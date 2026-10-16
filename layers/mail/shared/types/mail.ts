@@ -19,12 +19,16 @@ export interface MailSummary {
   service?: string
   mailbox: string
   subject: string
+  /** Subject with Meilisearch match markers, from the search index */
+  subjectHighlight?: string
   from: MailAddress[]
   date: string
   unread: boolean
   flagged: boolean
-  /** Matching excerpt, from the search index */
+  /** Matching excerpt with Meilisearch match markers, from the search index */
   snippet?: string
+  /** Only known for indexed mail; listing a mailbox does not parse the body */
+  hasAttachment?: boolean
 }
 
 export interface MailMessage extends MailSummary {
@@ -48,6 +52,20 @@ export interface MailSearch {
   before?: string
   /** Sender name, address or domain */
   from?: string
+  /** Only messages carrying an attachment; index-only, the provider cannot answer it */
+  hasAttachment?: boolean
+}
+
+/** A facet value with how many matching messages carry it */
+export interface MailFacetValue {
+  value: string
+  count: number
+}
+
+/** Filter suggestions for the current query, from the search index */
+export interface MailFacets {
+  /** Most frequent senders, in the normalized form the `from` filter expects */
+  from: MailFacetValue[]
 }
 
 /** Flags of one message, for index sync */

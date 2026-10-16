@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { breakpointsTailwind, refDebounced, useIntervalFn } from '@vueuse/core'
-import type { DropdownMenuItem } from '@nuxt/ui'
 import type { LocationQuery } from 'vue-router'
 import type { MailSummary } from '#layers/mail/shared/types/mail'
 
@@ -26,14 +25,40 @@ function updateQuery(patch: LocationQuery) {
   router.replace({ query: Object.fromEntries(Object.entries({ ...route.query, ...patch }).filter(([, value]) => value)) })
 }
 
+// A changed filter starts a fresh list; opening a mail or loading more keeps the loaded pages
+function updateFilters(patch: LocationQuery) {
+  updateQuery({ ...patch, pages: null })
+}
+
 const service = computed(() => services.value.find(item => item.id === queryString('service'))?.id ?? services.value[0]?.id ?? '')
 const mailbox = computed(() => queryString('mailbox') ?? 'INBOX')
 
+const list = computed(() => mailListFromQuery(route.query))
+const allFolders = computed({
+  get: () => list.value.allFolders,
+  set: (value: boolean) => updateFilters({ scope: value ? 'all' : null })
+})
+
 const folderName = computed(() => {
+  if (allFolders.value) {
+    const account = services.value.find(item => item.id === service.value)
+    return services.value.length > 1 && account ? `All folders · ${account.name}` : 'All folders'
+  }
   const entry = folders.value.find(item => item.service.id === service.value)
   const current = entry?.mailboxes.find(item => item.path === mailbox.value)
   const name = current ? mailboxLabel(current) : mailbox.value
   return services.value.length > 1 && entry ? `${name} · ${entry.service.name}` : name
+})
+
+// Folder display name for hits that can come from any folder (scope=all), by `service/mailbox`
+const mailboxNames = computed(() => {
+  const names: Record<string, string> = {}
+  for (const entry of folders.value) {
+    for (const item of entry.mailboxes) {
+      names[`${entry.service.id}/${item.path}`] = mailboxLabel(item)
+    }
+  }
+  return names
 })
 
 const tabItems = [{
@@ -46,12 +71,12 @@ const tabItems = [{
 
 const selectedTab = computed({
   get: () => queryString('unread') ? 'unread' : 'all',
-  set: value => updateQuery({ unread: value === 'unread' ? 'true' : null })
+  set: value => updateFilters({ unread: value === 'unread' ? 'true' : null })
 })
 
 const search = ref(queryString('q') ?? '')
 const debouncedSearch = refDebounced(search, 400)
-watch(debouncedSearch, value => updateQuery({ q: value.trim() || null }))
+watch(debouncedSearch, value => updateFilters({ q: value.trim() || null }))
 // Folder links in the sidebar drop the search from the URL
 watch(() => queryString('q'), (value) => {
   if ((value ?? '') !== debouncedSearch.value.trim()) {
@@ -69,24 +94,39 @@ const periods = [
 ]
 const period = computed(() => Number(queryString('days')) || undefined)
 
-const filterItems = computed<DropdownMenuItem[][]>(() => [[{
-  label: 'Starred',
-  icon: 'i-lucide-star',
-  type: 'checkbox',
-  checked: !!criteria.value.flagged,
-  onUpdateChecked: (checked: boolean) => updateQuery({ flagged: checked ? 'true' : null })
-}], periods.map(item => ({
-  label: item.label,
-  type: 'checkbox' as const,
-  checked: period.value === item.value && !queryString('since'),
-  onSelect: () => updateQuery({ days: item.value ? String(item.value) : null, since: null, before: null })
-}))])
+function setPeriod(value?: number) {
+  updateFilters({ days: value ? String(value) : null, since: null, before: null })
+}
 
-// Criteria without a control of their own (e.g. set by the search assistant), shown as removable chips
+// Sender, date range and toggles have controls of their own and keep the URL authoritative
+const from = computed({
+  get: () => queryString('from') ?? '',
+  set: value => updateFilters({ from: value?.trim() || null })
+})
+const since = computed({
+  get: () => queryString('since') ?? '',
+  set: value => updateFilters({ since: value || null, days: null })
+})
+const before = computed({
+  get: () => queryString('before') ?? '',
+  set: value => updateFilters({ before: value || null, days: null })
+})
+const starred = computed({
+  get: () => !!criteria.value.flagged,
+  set: (value: boolean) => updateFilters({ flagged: value ? 'true' : null })
+})
+const hasAttachment = computed({
+  get: () => !!criteria.value.hasAttachment,
+  set: (value: boolean) => updateFilters({ attachment: value ? 'true' : null })
+})
+
+// Set criteria, shown as removable chips
 const criteriaChips = computed(() => [
   queryString('from') && { key: 'from', label: `From: ${queryString('from')}` },
   queryString('since') && { key: 'since', label: `Since ${queryString('since')}` },
-  queryString('before') && { key: 'before', label: `Before ${queryString('before')}` }
+  queryString('before') && { key: 'before', label: `Before ${queryString('before')}` },
+  queryString('attachment') === 'true' && { key: 'attachment', label: 'Has attachment' },
+  queryString('scope') === 'all' && { key: 'scope', label: 'All folders' }
 ].filter(chip => !!chip))
 
 const activeFilters = computed(() => Number(!!criteria.value.flagged) + Number(!!period.value) + criteriaChips.value.length)
@@ -94,7 +134,7 @@ const isFiltered = computed(() => !!(criteria.value.text || criteria.value.unrea
 
 function resetFilters() {
   search.value = ''
-  updateQuery(mailSearchToQuery({}))
+  updateFilters({ ...mailSearchToQuery({}), scope: null })
 }
 
 // Optional: another layer may turn free text into criteria (see mail-search-assistant.ts)
@@ -110,7 +150,7 @@ async function applyAssistant() {
   try {
     const result = await assistant.toSearch(search.value)
     search.value = result.text ?? ''
-    updateQuery(mailSearchToQuery(result))
+    updateFilters(mailSearchToQuery(result))
   } catch {
     toast.add({ title: 'Could not interpret the search', color: 'error', icon: 'i-lucide-circle-alert' })
   } finally {
@@ -121,7 +161,9 @@ async function applyAssistant() {
 const { data: mails, status, error, refresh } = await useFetch('/api/mail/messages', {
   query: computed(() => ({
     service: service.value,
-    mailbox: mailbox.value,
+    scope: allFolders.value ? 'all' : undefined,
+    mailbox: allFolders.value ? undefined : mailbox.value,
+    limit: list.value.pages * MAIL_PAGE_SIZE,
     ...mailSearchToApiQuery(criteria.value)
   })),
   default: () => []
@@ -130,24 +172,47 @@ const { data: mails, status, error, refresh } = await useFetch('/api/mail/messag
 // Search index status (null without an index); polled while it's being built
 const { data: indexStatus, refresh: refreshIndexStatus } = await useFetch('/api/mail/index-status')
 const currentIndex = computed(() => indexStatus.value?.find(item => item.service === service.value))
+const indexAvailable = computed(() => !!indexStatus.value)
 const indexing = computed(() => !!currentIndex.value && (currentIndex.value.syncing || !currentIndex.value.complete))
 const { pause, resume } = useIntervalFn(() => refreshIndexStatus(), 5000, { immediate: false })
 watch(indexing, value => value ? resume() : pause(), { immediate: true })
 
-// The open mail lives in the URL (?uid=), so links (e.g. from the assistant) can open it
-const selectedUid = computed(() => Number(queryString('uid')) || undefined)
+// Sender suggestions for the `from` control, from the index facets; null without an index
+const { data: facets } = await useFetch('/api/mail/facets', {
+  query: computed(() => ({
+    service: service.value,
+    scope: allFolders.value ? 'all' : undefined,
+    mailbox: allFolders.value ? undefined : mailbox.value,
+    ...mailSearchToApiQuery({ ...criteria.value, from: undefined })
+  })),
+  default: () => null,
+  lazy: true
+})
+const fromItems = computed(() => (facets.value?.from ?? []).map(item => item.value))
 
-// A linked mail may not be in the current list, e.g. older than the loaded page
+// Only searches and cross-folder listing come from the index and can page; browsing does not
+const loadedLimit = computed(() => list.value.pages * MAIL_PAGE_SIZE)
+const canLoadMore = computed(() => !!currentIndex.value?.complete && (isFiltered.value || allFolders.value) && (mails.value?.length ?? 0) >= loadedLimit.value)
+
+function loadMore() {
+  updateQuery({ pages: String(list.value.pages + 1) })
+}
+
+// The open mail lives in the URL (`?uid=&in=`); `in` names a folder outside the current one
+const selection = computed(() => mailSelectionFromQuery(route.query, mailbox.value))
+const selectionKey = computed(() => selection.value && `${selection.value.mailbox}:${selection.value.uid}`)
+
+// A linked mail may not be in the current list, e.g. outside the loaded pages
 const { data: linkedMail } = await useAsyncData(
-  () => `mail-linked:${service.value}:${mailbox.value}:${selectedUid.value ?? ''}`,
-  () => selectedUid.value && !mails.value.some(mail => mail.uid === selectedUid.value)
-    ? $fetch(`/api/mail/messages/${selectedUid.value}`, { query: { service: service.value, mailbox: mailbox.value } }).catch(() => null)
+  () => `mail-linked:${service.value}:${selectionKey.value ?? ''}`,
+  () => selection.value && !mails.value.some(mail => isSelectedMail(mail, selection.value))
+    ? $fetch(`/api/mail/messages/${selection.value.uid}`, { query: { service: service.value, mailbox: selection.value.mailbox } }).catch(() => null)
     : Promise.resolve(null)
 )
 
 const selectedMail = computed<MailSummary | null>({
-  get: () => mails.value.find(mail => mail.uid === selectedUid.value) ?? linkedMail.value ?? null,
-  set: mail => updateQuery({ uid: mail ? String(mail.uid) : null })
+  get: () => mails.value.find(mail => isSelectedMail(mail, selection.value)) ?? linkedMail.value ?? null,
+  set: mail => updateQuery(mailSelectionToQuery(mail ? { uid: mail.uid, mailbox: mail.mailbox } : null, mailbox.value))
 })
 
 const isMailPanelOpen = computed({
@@ -182,7 +247,7 @@ async function setSeen(mail: MailSummary, seen: boolean) {
   }
 }
 
-watch(() => selectedMail.value?.uid, () => {
+watch(() => selectedMail.value && mailKey(selectedMail.value), () => {
   if (selectedMail.value?.unread) {
     setSeen(selectedMail.value, true)
   }
@@ -266,7 +331,7 @@ const isMobile = breakpoints.smaller('lg')
         <UIcon name="i-lucide-loader-circle" class="size-4 shrink-0 animate-spin text-dimmed" />
       </UTooltip>
 
-      <UDropdownMenu :items="filterItems" :content="{ align: 'end' }">
+      <UPopover :content="{ align: 'end' }">
         <UChip :show="activeFilters > 0" :text="activeFilters" size="xl">
           <UButton
             icon="i-lucide-list-filter"
@@ -276,7 +341,70 @@ const isMobile = breakpoints.smaller('lg')
             aria-label="Filters"
           />
         </UChip>
-      </UDropdownMenu>
+
+        <template #content>
+          <div class="w-72 space-y-4 p-4">
+            <UFormField label="From">
+              <UInputMenu
+                v-if="indexAvailable"
+                v-model="from"
+                :items="fromItems"
+                :create-item="true"
+                icon="i-lucide-user"
+                placeholder="Name, address or domain"
+                size="sm"
+                class="w-full"
+              />
+              <UInput
+                v-else
+                v-model="from"
+                icon="i-lucide-user"
+                placeholder="Name, address or domain"
+                size="sm"
+                class="w-full"
+              />
+            </UFormField>
+
+            <UFormField label="Received">
+              <div class="flex items-center gap-2">
+                <UInput
+                  v-model="since"
+                  type="date"
+                  size="sm"
+                  class="flex-1"
+                  aria-label="Since"
+                />
+                <span class="text-dimmed">–</span>
+                <UInput
+                  v-model="before"
+                  type="date"
+                  size="sm"
+                  class="flex-1"
+                  aria-label="Before"
+                />
+              </div>
+            </UFormField>
+
+            <div class="flex flex-wrap gap-1">
+              <UButton
+                v-for="item in periods"
+                :key="item.label"
+                :label="item.label"
+                :color="period === item.value ? 'primary' : 'neutral'"
+                :variant="period === item.value ? 'soft' : 'ghost'"
+                size="xs"
+                @click="setPeriod(item.value)"
+              />
+            </div>
+
+            <div class="space-y-2">
+              <UCheckbox v-model="starred" label="Starred" />
+              <UCheckbox v-if="indexAvailable" v-model="hasAttachment" label="Has attachment" />
+              <UCheckbox v-if="indexAvailable" v-model="allFolders" label="Search all folders" />
+            </div>
+          </div>
+        </template>
+      </UPopover>
 
       <UTooltip text="Refresh">
         <UButton
@@ -316,7 +444,7 @@ const isMobile = breakpoints.smaller('lg')
             size="xs"
             class="p-0"
             :aria-label="`Remove ${chip.label}`"
-            @click="updateQuery({ [chip.key]: null })"
+            @click="updateFilters({ [chip.key]: null })"
           />
         </template>
       </UBadge>
@@ -340,7 +468,25 @@ const isMobile = breakpoints.smaller('lg')
       variant="naked"
       class="py-12"
     />
-    <MailList v-else v-model="selectedMail" :mails="mails" />
+    <MailList
+      v-else
+      v-model="selectedMail"
+      :mails="mails"
+      :show-mailbox="allFolders"
+      :mailbox-names="mailboxNames"
+    >
+      <template #more>
+        <div v-if="canLoadMore" class="p-4 text-center">
+          <UButton
+            label="Load more"
+            color="neutral"
+            variant="outline"
+            :loading="status === 'pending'"
+            @click="loadMore"
+          />
+        </div>
+      </template>
+    </MailList>
   </UDashboardPanel>
 
   <MailView

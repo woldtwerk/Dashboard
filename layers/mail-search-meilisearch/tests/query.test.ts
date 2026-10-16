@@ -16,15 +16,20 @@ describe('buildMailFilter', () => {
     expect(buildMailFilter({
       services: ['a'],
       mailbox: 'INBOX',
-      search: { unread: true, flagged: true, since: '2026-10-01', before: '2026-10-16', from: ' @Stripe.com ', text: 'ignored here' }
+      search: { unread: true, flagged: true, hasAttachment: true, since: '2026-10-01', before: '2026-10-16', from: ' @Stripe.com ', text: 'ignored here' }
     })).toEqual([
       'service IN ["a"]',
       'mailbox = "INBOX"',
       'unread = true',
       'flagged = true',
+      'hasAttachment = true',
       'date >= 1790812800',
       'date < 1792108800',
       'fromTerms = "stripe.com"'
     ])
+  })
+
+  it('omits criteria that are not set', () => {
+    expect(buildMailFilter({ services: ['a'], search: { hasAttachment: false, unread: false } })).toEqual(['service IN ["a"]'])
   })
 })

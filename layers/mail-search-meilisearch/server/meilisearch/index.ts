@@ -1,8 +1,9 @@
 import { Meilisearch } from 'meilisearch'
 import type { EnqueuedTaskPromise } from 'meilisearch'
-import type { MailDocument, MailIndexQuery, MailSearchIndex } from '../../../mail/server/utils/mail-search-index'
-import type { MailSummary } from '../../../mail/shared/types/mail'
+import type { MailDocument, MailFacetQuery, MailIndexQuery, MailSearchIndex } from '../../../mail/server/utils/mail-search-index'
+import type { MailFacets, MailSummary } from '../../../mail/shared/types/mail'
 import { buildMailFilter } from './query'
+import { buildIndexSettings, EMBEDDER, HIGHLIGHT_POST_TAG, HIGHLIGHT_PRE_TAG, rankingScoreThresholdFor } from './settings'
 
 export interface MeilisearchMailIndexOptions {
   host: string
@@ -11,9 +12,16 @@ export interface MeilisearchMailIndexOptions {
   embedderModel: string
   semanticRatio: number
   rankingScoreThreshold: number
+  typoTolerance: boolean
+  typoOneTypo: number
+  typoTwoTypos: number
+  typoDisableOnNumbers: boolean
+  typoDisableOnAttributes: string[]
 }
 
-const EMBEDDER = 'default'
+/** How many senders the `from` control offers */
+const FACET_LIMIT = 20
+
 /** The first settings update downloads the embedding model */
 const SETTINGS_TIMEOUT_MS = 15 * 60_000
 /** Adding documents includes computing their embeddings on the CPU */
@@ -37,23 +45,15 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
   const ensureSettings = () => ready ??= (async () => {
     // Fails harmlessly when the index exists
     await client.createIndex(options.index, { primaryKey: 'id' }).waitTask().catch(() => {})
-    await settle(index.updateSettings({
-      searchableAttributes: ['subject', 'fromText', 'toText', 'text'],
-      filterableAttributes: ['service', 'mailbox', 'unread', 'flagged', 'date', 'fromTerms'],
-      sortableAttributes: ['date'],
-      // The same mail in several folders/labels is shown once
-      distinctAttribute: 'messageId',
-      embedders: semantic
-        ? {
-            [EMBEDDER]: {
-              source: 'huggingFace',
-              model: options.embedderModel,
-              documentTemplate: 'From: {{doc.fromText}}\nSubject: {{doc.subject}}\n{{doc.text}}',
-              documentTemplateMaxBytes: 1000
-            }
-          }
-        : {}
-    }), SETTINGS_TIMEOUT_MS)
+    await settle(index.updateSettings(buildIndexSettings({
+      semantic,
+      embedderModel: options.embedderModel,
+      typoTolerance: options.typoTolerance,
+      typoOneTypo: options.typoOneTypo,
+      typoTwoTypos: options.typoTwoTypos,
+      typoDisableOnNumbers: options.typoDisableOnNumbers,
+      typoDisableOnAttributes: options.typoDisableOnAttributes
+    })), SETTINGS_TIMEOUT_MS)
   })().catch((error) => {
     ready = undefined
     throw error
@@ -83,19 +83,24 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
       await settle(index.deleteDocuments({ filter: buildMailFilter({ services: [service], mailbox, search: {} }) }))
     },
 
-    async search({ services, mailbox, search, limit }: MailIndexQuery): Promise<MailSummary[]> {
+    async search({ services, mailbox, search, limit, offset }: MailIndexQuery): Promise<MailSummary[]> {
       await ensureSettings()
       const text = search.text?.trim()
       const result = await index.search(text || null, {
         filter: buildMailFilter({ services, mailbox, search }),
         limit,
+        offset,
         // Without text, browse newest first; with text, rank by relevance
         sort: text ? undefined : ['date:desc'],
         hybrid: text && semantic ? { embedder: EMBEDDER, semanticRatio: options.semanticRatio } : undefined,
-        rankingScoreThreshold: text ? options.rankingScoreThreshold : undefined,
-        attributesToRetrieve: ['service', 'mailbox', 'uid', 'subject', 'fromList', 'date', 'unread', 'flagged'],
+        rankingScoreThreshold: text ? rankingScoreThresholdFor(semantic, options.semanticRatio, options.rankingScoreThreshold) : undefined,
+        attributesToRetrieve: ['service', 'mailbox', 'uid', 'subject', 'fromList', 'date', 'unread', 'flagged', 'hasAttachment'],
         attributesToCrop: text ? ['text'] : undefined,
-        cropLength: 24
+        cropLength: 24,
+        // Highlighted matches come back as marker-tagged strings the client escapes before rendering
+        attributesToHighlight: text ? ['subject', 'text'] : undefined,
+        highlightPreTag: HIGHLIGHT_PRE_TAG,
+        highlightPostTag: HIGHLIGHT_POST_TAG
       })
 
       return result.hits.map(hit => ({
@@ -103,12 +108,34 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
         service: hit.service,
         mailbox: hit.mailbox,
         subject: hit.subject,
+        subjectHighlight: hit._formatted?.subject,
         from: hit.fromList,
         date: new Date(hit.date * 1000).toISOString(),
         unread: hit.unread,
         flagged: hit.flagged,
+        hasAttachment: hit.hasAttachment,
         snippet: hit._formatted?.text || undefined
       }))
+    },
+
+    async facets({ services, mailbox, search }: MailFacetQuery): Promise<MailFacets> {
+      await ensureSettings()
+      const text = search.text?.trim()
+      const result = await index.search(text || null, {
+        filter: buildMailFilter({ services, mailbox, search }),
+        limit: 0,
+        facets: ['fromTerms'],
+        attributesToRetrieve: []
+      })
+
+      const distribution = result.facetDistribution?.fromTerms ?? {}
+
+      return {
+        from: Object.entries(distribution)
+          .map(([value, count]) => ({ value, count }))
+          .sort((a, b) => b.count - a.count)
+          .slice(0, FACET_LIMIT)
+      }
     }
   }
 }

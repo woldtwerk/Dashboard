@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { MailMessage } from '../shared/types/mail'
 import { diffMailboxState } from '../server/mail-index/diff'
 import { hasSearchCriteria, mailDocumentId, MAX_TEXT_LENGTH, normalizeSenderTerm, senderTerms, toMailDocument } from '../server/mail-index/document'
+import { mailIndexStateIsCurrent, MAIL_INDEX_SCHEMA_VERSION } from '../server/mail-index/version'
 
 const message: MailMessage = {
   uid: 42,
@@ -14,6 +15,7 @@ const message: MailMessage = {
   unread: true,
   flagged: false,
   messageId: '<abc@stripe.com>',
+  hasAttachment: true,
   text: 'Amount\n\n  paid:   12 €'
 }
 
@@ -47,8 +49,13 @@ describe('toMailDocument', () => {
       toText: 'Me <me@proton.me>, team@example.com',
       date: 1_792_144_800,
       unread: true,
+      hasAttachment: true,
       text: 'Amount paid: 12 €'
     })
+  })
+
+  it('defaults hasAttachment to false without a parsed body', () => {
+    expect(toMailDocument('svc', 'INBOX', { ...message, hasAttachment: undefined }).hasAttachment).toBe(false)
   })
 
   it('falls back to its own id without Message-ID and caps the text', () => {
@@ -64,6 +71,16 @@ describe('hasSearchCriteria', () => {
     expect(hasSearchCriteria({})).toBe(false)
     expect(hasSearchCriteria({ text: '', unread: false })).toBe(false)
     expect(hasSearchCriteria({ from: 'stripe' })).toBe(true)
+    expect(hasSearchCriteria({ hasAttachment: true })).toBe(true)
+  })
+})
+
+describe('mailIndexStateIsCurrent', () => {
+  it('is current only for the same UIDVALIDITY and document schema version', () => {
+    expect(mailIndexStateIsCurrent({ uidValidity: 'v1', schemaVersion: MAIL_INDEX_SCHEMA_VERSION }, 'v1')).toBe(true)
+    expect(mailIndexStateIsCurrent({ uidValidity: 'v1', schemaVersion: MAIL_INDEX_SCHEMA_VERSION }, 'v2')).toBe(false)
+    expect(mailIndexStateIsCurrent({ uidValidity: 'v1', schemaVersion: MAIL_INDEX_SCHEMA_VERSION - 1 }, 'v1')).toBe(false)
+    expect(mailIndexStateIsCurrent(undefined, 'v1')).toBe(false)
   })
 })
 

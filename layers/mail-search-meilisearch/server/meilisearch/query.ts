@@ -15,6 +15,7 @@ export function buildMailFilter({ services, mailbox, search }: Pick<MailIndexQue
   if (mailbox) filter.push(`mailbox = ${filterValue(mailbox)}`)
   if (search.unread) filter.push('unread = true')
   if (search.flagged) filter.push('flagged = true')
+  if (search.hasAttachment) filter.push('hasAttachment = true')
   if (search.since) filter.push(`date >= ${unixSeconds(search.since)}`)
   if (search.before) filter.push(`date < ${unixSeconds(search.before)}`)
   if (search.from) filter.push(`fromTerms = ${filterValue(normalizeSenderTerm(search.from))}`)

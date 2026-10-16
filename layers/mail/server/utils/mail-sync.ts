@@ -3,6 +3,7 @@ import type { Mailbox } from '../../shared/types/mail'
 import { mailIndexMailboxes, mailIndexMessages } from '../db/schema'
 import { diffMailboxState } from '../mail-index/diff'
 import { mailDocumentId, toMailDocument } from '../mail-index/document'
+import { mailIndexStateIsCurrent, MAIL_INDEX_SCHEMA_VERSION } from '../mail-index/version'
 import type { MailProvider } from './mail-provider'
 import type { MailSearchIndex } from './mail-search-index'
 
@@ -72,14 +73,15 @@ async function syncMailbox({ service, mailbox, provider, index, renew }: {
 
   let row = await db.select().from(mailIndexMailboxes).where(where).get()
 
-  // New UIDVALIDITY: the server renumbered the mailbox, so all known UIDs are void
-  if (row && row.uidValidity !== state.uidValidity) {
+  // A new UIDVALIDITY renumbers the mailbox, or an older schema version predates a document
+  // field: either way the known UIDs/documents are void and the mailbox is rebuilt from scratch
+  if (row && !mailIndexStateIsCurrent(row, state.uidValidity)) {
     await index.removeMailbox(service, path)
     await forgetMailbox(service, path)
     row = undefined
   }
   if (!row) {
-    await db.insert(mailIndexMailboxes).values({ service, mailbox: path, uidValidity: state.uidValidity })
+    await db.insert(mailIndexMailboxes).values({ service, mailbox: path, uidValidity: state.uidValidity, schemaVersion: MAIL_INDEX_SCHEMA_VERSION })
   }
 
   const messagesWhere = and(eq(mailIndexMessages.service, service), eq(mailIndexMessages.mailbox, path))

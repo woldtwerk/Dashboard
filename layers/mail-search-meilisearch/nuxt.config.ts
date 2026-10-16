@@ -14,8 +14,18 @@ export default defineNuxtConfig({
       embedderModel: 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',
       // NUXT_MEILISEARCH_SEMANTIC_RATIO — 0 = keyword only, 1 = semantic only
       semanticRatio: 0.5,
-      // NUXT_MEILISEARCH_RANKING_SCORE_THRESHOLD — hits below are dropped; semantic search otherwise returns every mail
-      rankingScoreThreshold: 0.65
+      // NUXT_MEILISEARCH_RANKING_SCORE_THRESHOLD — guards pure semantic results, relaxed for keyword/typo matches; see settings.ts
+      rankingScoreThreshold: 0.65,
+      // NUXT_MEILISEARCH_TYPO_TOLERANCE — enable typo tolerance, so "Rechnnug" finds "Rechnung"
+      typoTolerance: true,
+      // NUXT_MEILISEARCH_TYPO_ONE_TYPO — words this long tolerate one typo
+      typoOneTypo: 4,
+      // NUXT_MEILISEARCH_TYPO_TWO_TYPOS — words this long tolerate two typos
+      typoTwoTypos: 8,
+      // NUXT_MEILISEARCH_TYPO_DISABLE_ON_NUMBERS — numbers, amounts and dates must stay exact
+      typoDisableOnNumbers: true,
+      // NUXT_MEILISEARCH_TYPO_DISABLE_ON_ATTRIBUTES — comma separated attributes exempt from typos; empty = none
+      typoDisableOnAttributes: ''
     }
   }
 })

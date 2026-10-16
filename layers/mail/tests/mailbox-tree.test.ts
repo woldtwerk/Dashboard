@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Mailbox } from '../shared/types/mail'
-import { buildMailboxTree, mailboxTreeContains } from '../app/utils/mail'
+import { buildMailboxTree, mailKey, mailboxTreeContains } from '../app/utils/mail'
 
 const mailbox = (path: string, extra: Partial<Mailbox> = {}): Mailbox => ({
   path,
@@ -68,5 +68,13 @@ describe('mailboxTreeContains', () => {
     expect(mailboxTreeContains(folders, 'Folders/Work/Clients')).toBe(true)
     expect(mailboxTreeContains(folders, 'Folders')).toBe(true)
     expect(mailboxTreeContains(folders, 'Labels/Receipts')).toBe(false)
+  })
+})
+
+describe('mailKey', () => {
+  it('includes the mailbox, so the same uid in two folders does not collide', () => {
+    expect(mailKey({ uid: 7, mailbox: 'INBOX', service: 'a' })).toBe('a/INBOX/7')
+    expect(mailKey({ uid: 7, mailbox: 'Folders/Work', service: 'a' })).not.toBe(mailKey({ uid: 7, mailbox: 'INBOX', service: 'a' }))
+    expect(mailKey({ uid: 7, mailbox: 'INBOX' })).toBe('/INBOX/7')
   })
 })

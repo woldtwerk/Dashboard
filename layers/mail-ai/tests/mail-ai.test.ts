@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { HIGHLIGHT_POST_TAG, HIGHLIGHT_PRE_TAG } from '../../mail/shared/mail-highlight'
 import type { AssistantMailAccess } from '../server/mail-ai/assistant'
 import { assistantInstructions, createAssistantTools, formatAddresses, mailLink, toMailSource } from '../server/mail-ai/assistant'
 import { normalizeAiSearch, searchInstructions } from '../server/mail-ai/search'
@@ -38,6 +39,12 @@ describe('mail sources', () => {
   it('format senders and fall back for missing subjects', () => {
     expect(formatAddresses([{ name: 'Alice', address: 'a@x.io' }, { address: 'b@x.io' }])).toBe('Alice <a@x.io>, b@x.io')
     expect(toMailSource('svc', { uid: 1, mailbox: 'INBOX', subject: '', from: [], date: '2026-10-16T10:00:00Z', unread: false, flagged: false }).subject).toBe('(no subject)')
+  })
+
+  it('strips the search highlight markers the index adds for the UI', () => {
+    const mail = { uid: 1, mailbox: 'INBOX', subject: 'x', from: [], date: '2026-10-16T10:00:00Z', unread: false, flagged: false, snippet: `${HIGHLIGHT_PRE_TAG}Rechnung${HIGHLIGHT_POST_TAG} bezahlt` }
+
+    expect(toMailSource('svc', mail).snippet).toBe('Rechnung bezahlt')
   })
 })
 

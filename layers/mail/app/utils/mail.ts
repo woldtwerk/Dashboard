@@ -1,7 +1,12 @@
-import type { MailAddress, Mailbox } from '#layers/mail/shared/types/mail'
+import type { MailAddress, Mailbox, MailSummary } from '#layers/mail/shared/types/mail'
 
 export function formatMailAddress(address?: MailAddress): string {
   return address?.name || address?.address || 'Unknown sender'
+}
+
+/** Stable key for a mail; uids repeat across folders, so the mailbox is part of it */
+export function mailKey(mail: Pick<MailSummary, 'uid' | 'mailbox' | 'service'>): string {
+  return `${mail.service ?? ''}/${mail.mailbox}/${mail.uid}`
 }
 
 const SPECIAL_USE: Record<string, { icon: string, order: number }> = {
