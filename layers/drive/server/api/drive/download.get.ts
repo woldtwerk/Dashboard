@@ -1,9 +1,8 @@
+import { sendWebResponse } from 'h3'
+import type { H3Event } from 'h3'
 import { defineEventHandler, getValidatedQuery } from 'nuxt/server'
 import { baseName } from '../../../shared/drive-path'
 import { previewContentType } from '../../../shared/drive-preview'
-
-// The h3 auto-import is typed against another h3 build; call it through a narrow cast
-const sendResponse = sendWebResponse as (event: unknown, response: Response) => unknown
 
 /** A conservative content type, so nothing the provider says can inject a header. */
 const SAFE_TYPE = /^[\w.+-]+\/[\w.+-]+(?:;\s*[\w.-]+=[\w.-]+)*$/
@@ -42,5 +41,6 @@ export default defineEventHandler(async (event) => {
     headers.set('content-length', length)
   }
 
-  return sendResponse(event, new Response(response.body, { status: response.status, headers }))
+  // Nuxt's RequestEvent is a narrower type than h3's H3Event; cast at the h3 boundary
+  return sendWebResponse(event as unknown as H3Event, new Response(response.body, { status: response.status, headers }))
 })

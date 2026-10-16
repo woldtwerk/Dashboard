@@ -212,6 +212,9 @@ catalogs:
     eslint-plugin-better-tailwindcss:
       specifier: ^4.9.0
       version: 4.9.0
+    h3:
+      specifier: 1.15.11
+      version: 1.15.11
     hookable:
       specifier: ^6.1.2
       version: 6.1.2
@@ -408,6 +411,42 @@ importers:
         specifier: 'catalog:'
         version: 4.6.1(77eba58fd1fbc6c7fc8df3be8a606621)
 
+  layers/documents:
+    dependencies:
+      '@allmight/core':
+        specifier: workspace:*
+        version: link:../core
+      '@nuxt/ui':
+        specifier: 'catalog:'
+        version: 4.11.3(c33e7b9ea8d2921466bb7b53476c153c)
+      '@vueuse/core':
+        specifier: 'catalog:'
+        version: 15.0.0(vue@3.5.43(typescript@6.0.3))
+      h3:
+        specifier: 'catalog:'
+        version: 1.15.11
+      nuxt:
+        specifier: 'catalog:'
+        version: 4.6.1(77eba58fd1fbc6c7fc8df3be8a606621)
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
+
+  layers/documents-paperless:
+    dependencies:
+      '@allmight/core':
+        specifier: workspace:*
+        version: link:../core
+      '@allmight/documents':
+        specifier: workspace:*
+        version: link:../documents
+      nuxt:
+        specifier: 'catalog:'
+        version: 4.6.1(77eba58fd1fbc6c7fc8df3be8a606621)
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
+
   layers/drive:
     dependencies:
       '@allmight/core':
@@ -419,6 +458,9 @@ importers:
       '@vueuse/core':
         specifier: 'catalog:'
         version: 15.0.0(vue@3.5.43(typescript@6.0.3))
+      h3:
+        specifier: 'catalog:'
+        version: 1.15.11
       nuxt:
         specifier: 'catalog:'
         version: 4.6.1(77eba58fd1fbc6c7fc8df3be8a606621)
