@@ -1,0 +1,14 @@
+{
+  "name": "@allmight/redis",
+  "private": true,
+  "type": "module",
+  "description": "Redis as Nitro storage mount `redis`, shared by all cluster workers",
+  "main": "./nuxt.config.ts",
+  "dependencies": {
+    "ioredis": "catalog:",
+    "unstorage": "catalog:"
+  },
+  "peerDependencies": {
+    "nuxt": "catalog:"
+  }
+}

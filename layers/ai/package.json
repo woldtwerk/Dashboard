@@ -1,0 +1,14 @@
+{
+  "name": "@allmight/ai",
+  "private": true,
+  "type": "module",
+  "description": "AI domain: language model port; providers are services configured through the setup wizard",
+  "main": "./nuxt.config.ts",
+  "dependencies": {
+    "@allmight/core": "workspace:*",
+    "ai": "catalog:"
+  },
+  "peerDependencies": {
+    "nuxt": "catalog:"
+  }
+}

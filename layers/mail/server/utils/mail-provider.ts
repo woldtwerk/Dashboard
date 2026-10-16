@@ -1,0 +1,38 @@
+import { createError } from 'nuxt/server'
+import type { SetupValues } from '../../../core/shared/types/setup'
+import type { Mailbox, MailMessage, MailMessageState, MailSearch, MailSummary } from '../../shared/types/mail'
+
+/** Port every mail provider adapter implements. */
+export interface MailProvider {
+  listMailboxes(): Promise<Mailbox[]>
+  /** Newest first; `search` narrows the result server-side */
+  listMessages(mailbox: string, options: { limit: number, search?: MailSearch }): Promise<MailSummary[]>
+  getMessage(mailbox: string, uid: number): Promise<MailMessage | null>
+  setSeen(mailbox: string, uid: number, seen: boolean): Promise<void>
+
+  // --- Search index sync ---
+  /** All messages of a mailbox with their flags; a new `uidValidity` invalidates all known UIDs */
+  listMessageStates(mailbox: string): Promise<{ uidValidity: string, messages: MailMessageState[] }>
+  /** Messages including their text, for indexing */
+  getMessages(mailbox: string, uids: number[]): Promise<MailMessage[]>
+}
+
+/** Creates a provider from the settings of one service instance */
+export type MailProviderFactory = (values: SetupValues) => MailProvider
+
+const providers = new Map<string, MailProviderFactory>()
+
+export function registerMailProvider(connector: string, factory: MailProviderFactory) {
+  providers.set(connector, factory)
+}
+
+export async function useMailProvider(serviceId: string): Promise<MailProvider> {
+  const service = await getService(serviceId, 'mail')
+  const factory = providers.get(service.connector)
+
+  if (!factory) {
+    throw createError({ status: 503, statusText: `Mail provider "${service.connector}" is not available` })
+  }
+
+  return factory(service.values)
+}

@@ -1,0 +1,40 @@
+packages:
+  - layers/*
+
+# Single source of versions; packages reference them as "catalog:"
+catalog:
+  '@ai-sdk/openai-compatible': 3.0.62
+  '@ai-sdk/vue': 4.0.127
+  '@nuxt/kit': ^4.6.1
+  '@iconify-json/lucide': ^1.2.142
+  '@iconify-json/simple-icons': ^1.2.99
+  '@nuxt/eslint': ^1.17.0
+  '@nuxt/ui': ^4.11.3
+  '@types/mailparser': ^3.9.0
+  '@vueuse/core': ^15.0.0
+  '@vueuse/nuxt': ^15.0.0
+  ai: 7.0.127
+  date-fns: ^4.4.0
+  drizzle-kit: 0.31.11
+  drizzle-orm: 0.45.4
+  eslint: ^10.12.0
+  eslint-plugin-better-tailwindcss: ^4.9.0
+  hookable: ^6.1.2
+  imapflow: ^2.4.3
+  ioredis: ^5.10.1
+  mailparser: ^3.9.39
+  meilisearch: 0.62.0
+  nuxt: ^4.6.1
+  tailwindcss: ^4.3.3
+  typescript: ^6.0.3
+  unstorage: ^1.17.5
+  vitest: 4.1.11
+  vue-tsc: ^3.3.13
+  zod: ^4.6.7
+
+allowBuilds:
+  '@parcel/watcher': false
+  '@tailwindcss/oxide': false
+  esbuild: false
+  unrs-resolver: false
+  vue-demi: false

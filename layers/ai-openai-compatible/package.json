@@ -1,0 +1,16 @@
+{
+  "name": "@allmight/ai-openai-compatible",
+  "private": true,
+  "type": "module",
+  "description": "AI connectors for OpenAI-compatible APIs: OpenCode (Go/Zen) and any other endpoint, e.g. Ollama",
+  "main": "./nuxt.config.ts",
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "catalog:",
+    "@allmight/ai": "workspace:*",
+    "@allmight/core": "workspace:*",
+    "ai": "catalog:"
+  },
+  "peerDependencies": {
+    "nuxt": "catalog:"
+  }
+}

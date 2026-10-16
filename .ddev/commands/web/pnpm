@@ -1,0 +1,9 @@
+#!/bin/bash
+
+## Description: Run pnpm in the web container
+## Usage: pnpm
+## Example: "ddev pnpm"
+## ExecRaw: true
+## HostWorkingDir: true
+
+pnpm "$@"

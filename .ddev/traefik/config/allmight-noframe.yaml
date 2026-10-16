@@ -1,0 +1,33 @@
+# Custom (NOT ddev-generated) Traefik config, adapted from fewobuddy.
+#
+# Purpose: strip the `X-Frame-Options` response header from the RedisInsight UI
+# so it can be embedded as a Nuxt DevTools iframe (the app runs on another origin).
+#
+# Traefik's file provider merges every *.yaml in this directory into one config
+# namespace. The router below reuses the generated RedisInsight service and runs
+# at a higher `priority`, so it shadows the generated https router for the same
+# host and attaches the header-stripping middleware. If DDEV ever renames that
+# service, Traefik falls back to its generated router.
+#
+# Dev-only: X-Frame-Options is a clickjacking safeguard — do not replicate this
+# on any production/staging router.
+
+http:
+  middlewares:
+    allmight-noframe:
+      headers:
+        # An empty value tells Traefik to remove the header entirely.
+        customResponseHeaders:
+          X-Frame-Options: ""
+
+  routers:
+    # Shadows allmight-redisinsight-5540-https (RedisInsight UI)
+    allmight-redisinsight-5540-https-noframe:
+      entrypoints:
+        - http-443
+      rule: HostRegexp(`^redis\.allmight\..+$`)
+      priority: 100000
+      service: allmight-redisinsight-5540
+      tls: true
+      middlewares:
+        - allmight-noframe

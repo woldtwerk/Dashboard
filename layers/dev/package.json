@@ -1,0 +1,13 @@
+{
+  "name": "@allmight/dev",
+  "private": true,
+  "type": "module",
+  "description": "Development tooling: Nuxt DevTools tabs for the DDEV services",
+  "main": "./nuxt.config.ts",
+  "dependencies": {
+    "@nuxt/kit": "catalog:"
+  },
+  "peerDependencies": {
+    "nuxt": "catalog:"
+  }
+}

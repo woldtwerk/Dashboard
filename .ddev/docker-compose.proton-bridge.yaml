@@ -1,0 +1,25 @@
+# Proton Mail Bridge (CLI), driven by the setup wizard through a control API.
+# Token: BRIDGE_CONTROL_TOKEN in .ddev/.env.proton-bridge, the same value as NUXT_PROTON_BRIDGE_TOKEN in .ddev/.env.web (both gitignored).
+services:
+  proton-bridge:
+    container_name: ddev-${DDEV_SITENAME}-proton-bridge
+    build: ./proton-bridge
+    image: ddev-${DDEV_SITENAME}-proton-bridge
+    hostname: proton-bridge
+    labels:
+      com.ddev.site-name: ${DDEV_SITENAME}
+      com.ddev.approot: ${DDEV_APPROOT}
+    restart: "no"
+    # 1144: IMAP, 8080: control API; only reachable inside the project network
+    expose:
+      - 1144
+      - 8080
+    volumes:
+      # Signed-in accounts, the vault and its key: as sensitive as the mailbox itself
+      - "proton-bridge:/home/bridge"
+    x-ddev:
+      describe-info: |
+        IMAP proton-bridge:1144, control API :8080
+
+volumes:
+  proton-bridge:

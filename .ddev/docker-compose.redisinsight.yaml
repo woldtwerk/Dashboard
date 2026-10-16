@@ -1,0 +1,33 @@
+# RedisInsight UI for the DDEV Redis, at https://redis.<project>.ddev.site
+# and as a Nuxt DevTools tab (layers/dev). Adapted from fewobuddy.
+services:
+  redisinsight:
+    container_name: ddev-${DDEV_SITENAME}-redisinsight
+    image: redis/redisinsight:3.8.0
+    hostname: redisinsight
+    # These labels ensure this service is discoverable by ddev.
+    labels:
+      com.ddev.site-name: ${DDEV_SITENAME}
+      com.ddev.approot: ${DDEV_APPROOT}
+    restart: "no"
+    expose:
+      - 5540
+    environment:
+      # Route this container under its own subdomain via the ddev router.
+      - VIRTUAL_HOST=redis.$DDEV_HOSTNAME
+      - HTTP_EXPOSE=80:5540
+      - HTTPS_EXPOSE=443:5540
+      # Pre-register the Redis instance on first start.
+      - RI_REDIS_HOST=redis
+      - RI_REDIS_PORT=6379
+      - RI_REDIS_ALIAS=${DDEV_SITENAME}
+    volumes:
+      - "redisinsight:/data"
+    depends_on:
+      - redis
+    x-ddev:
+      describe-url-port: |
+        RedisInsight UI: https://redis.${DDEV_HOSTNAME}
+
+volumes:
+  redisinsight:

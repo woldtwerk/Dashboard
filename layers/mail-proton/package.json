@@ -1,0 +1,20 @@
+{
+  "name": "@allmight/mail-proton",
+  "private": true,
+  "type": "module",
+  "description": "Proton Mail connector via Proton Mail Bridge (IMAP)",
+  "main": "./nuxt.config.ts",
+  "dependencies": {
+    "@allmight/core": "workspace:*",
+    "@allmight/mail": "workspace:*",
+    "imapflow": "catalog:",
+    "mailparser": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/mailparser": "catalog:"
+  },
+  "peerDependencies": {
+    "nuxt": "catalog:"
+  }
+}

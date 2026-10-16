@@ -1,0 +1,19 @@
+{
+  "name": "@allmight/core",
+  "private": true,
+  "type": "module",
+  "description": "Dashboard shell, services, setup wizard and database",
+  "main": "./nuxt.config.ts",
+  "dependencies": {
+    "@nuxt/ui": "catalog:",
+    "@vueuse/core": "catalog:",
+    "@vueuse/nuxt": "catalog:",
+    "drizzle-orm": "catalog:",
+    "hookable": "catalog:",
+    "tailwindcss": "catalog:",
+    "zod": "catalog:"
+  },
+  "peerDependencies": {
+    "nuxt": "catalog:"
+  }
+}

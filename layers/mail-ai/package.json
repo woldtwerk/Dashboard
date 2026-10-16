@@ -1,0 +1,20 @@
+{
+  "name": "@allmight/mail-ai",
+  "private": true,
+  "type": "module",
+  "description": "AI features for mail: natural language filters and an assistant that answers questions about your inbox",
+  "main": "./nuxt.config.ts",
+  "dependencies": {
+    "@ai-sdk/vue": "catalog:",
+    "@allmight/ai": "workspace:*",
+    "@allmight/core": "workspace:*",
+    "@allmight/mail": "workspace:*",
+    "@nuxt/ui": "catalog:",
+    "ai": "catalog:",
+    "date-fns": "catalog:",
+    "zod": "catalog:"
+  },
+  "peerDependencies": {
+    "nuxt": "catalog:"
+  }
+}

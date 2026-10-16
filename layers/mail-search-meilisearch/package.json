@@ -1,0 +1,15 @@
+{
+  "name": "@allmight/mail-search-meilisearch",
+  "private": true,
+  "type": "module",
+  "description": "Meilisearch adapter for the mail search index (hybrid search with a local embedder)",
+  "main": "./nuxt.config.ts",
+  "dependencies": {
+    "@allmight/core": "workspace:*",
+    "@allmight/mail": "workspace:*",
+    "meilisearch": "catalog:"
+  },
+  "peerDependencies": {
+    "nuxt": "catalog:"
+  }
+}
