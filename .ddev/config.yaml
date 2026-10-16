@@ -22,6 +22,8 @@ web_environment:
   - NUXT_CARBONATE_URL=http://carbonate:8080
   # Token: .ddev/.env.web (NUXT_PROTON_DRIVE_TOKEN), .ddev/.env.proton-drive (PROTON_DRIVE_CONTROL_TOKEN), both gitignored
   - NUXT_PROTON_DRIVE_URL=http://proton-drive:8080
+  # Paperless-ngx archive: secrets in .ddev/.env.paperless, injected into the paperless service
+  - NUXT_PAPERLESS_URL=http://paperless:8000
 # Nuxt is started by hand: ddev exec pnpm dev --host 0.0.0.0
 web_extra_exposed_ports:
   - name: nuxt

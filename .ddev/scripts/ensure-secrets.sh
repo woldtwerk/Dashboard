@@ -14,6 +14,7 @@ MEILI="$DDEV_DIR/.env.meilisearch"
 BRIDGE="$DDEV_DIR/.env.proton-bridge"
 CARBONATE="$DDEV_DIR/.env.carbonate"
 DRIVE="$DDEV_DIR/.env.proton-drive"
+PAPERLESS="$DDEV_DIR/.env.paperless"
 
 random() {
   openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
@@ -45,6 +46,12 @@ ensure() {
   [[ -n "$(get "$file" "$key")" ]] || set_value "$file" "$key" "$(random)"
 }
 
+# Like ensure(), but with a fixed, non-secret default
+ensure_default() {
+  local file="$1" key="$2" value="$3"
+  [[ -n "$(get "$file" "$key")" ]] || set_value "$file" "$key" "$value"
+}
+
 # Both sides of a shared secret get the same value
 ensure_pair() {
   local file_a="$1" key_a="$2" file_b="$3" key_b="$4"
@@ -70,3 +77,8 @@ ensure_pair "$MEILI" MEILI_MASTER_KEY "$WEB" NUXT_MEILISEARCH_API_KEY
 ensure_pair "$BRIDGE" BRIDGE_CONTROL_TOKEN "$WEB" NUXT_PROTON_BRIDGE_TOKEN
 ensure_pair "$CARBONATE" CARBONATE_CONTROL_TOKEN "$WEB" NUXT_CARBONATE_TOKEN
 ensure_pair "$DRIVE" PROTON_DRIVE_CONTROL_TOKEN "$WEB" NUXT_PROTON_DRIVE_TOKEN
+
+# Paperless-ngx admin, secret key and initial superuser (injected into the paperless service)
+ensure_default "$PAPERLESS" PAPERLESS_ADMIN_USER admin
+ensure "$PAPERLESS" PAPERLESS_ADMIN_PASSWORD
+ensure "$PAPERLESS" PAPERLESS_SECRET_KEY

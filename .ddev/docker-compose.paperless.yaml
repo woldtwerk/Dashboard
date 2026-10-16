@@ -1,0 +1,55 @@
+# Paperless-ngx document archive (GPL-3.0, used unmodified via its REST API).
+# The dashboard only talks to the API; no Paperless source code lives in this repo.
+#
+# Secrets come from the gitignored .ddev/.env.paperless, injected into this
+# service by DDEV and created by .ddev/scripts/ensure-secrets.sh:
+#   PAPERLESS_SECRET_KEY, PAPERLESS_ADMIN_USER, PAPERLESS_ADMIN_PASSWORD
+# Queue uses the project Redis on database index 2 (index 0 is free,
+# Meilisearch/Nuxt caches may use others); SQLite, media and consume live on
+# named volumes.
+# A `ddev restart` is required before this service is created and the subdomain
+# route is registered (the task must not restart it for you).
+services:
+  paperless:
+    container_name: ddev-${DDEV_SITENAME}-paperless
+    image: ghcr.io/paperless-ngx/paperless-ngx:${PAPERLESS_VERSION:-3.3.2}
+    hostname: paperless
+    labels:
+      com.ddev.site-name: ${DDEV_SITENAME}
+      com.ddev.approot: ${DDEV_APPROOT}
+    restart: "no"
+    environment:
+      # Public URL of the archive; also used for share links and CSRF
+      - PAPERLESS_URL=${PAPERLESS_URL:-https://paperless.${DDEV_HOSTNAME}}
+      - PAPERLESS_CSRF_TRUSTED_ORIGINS=https://paperless.${DDEV_HOSTNAME}
+      # Shared Redis, separate database index
+      - PAPERLESS_REDIS=redis://redis:6379/2
+      - PAPERLESS_DBENGINE=sqlite
+      - PAPERLESS_DATA_DIR=/usr/src/paperless/data
+      - PAPERLESS_MEDIA_ROOT=/usr/src/paperless/media
+      - PAPERLESS_CONSUMPTION_DIR=/usr/src/paperless/consume
+      - PAPERLESS_OCR_LANGUAGE=deu+eng
+      - PAPERLESS_TIME_ZONE=${TZ:-Europe/Berlin}
+      # Route the web UI under its own subdomain via the ddev router
+      - VIRTUAL_HOST=paperless.$DDEV_HOSTNAME
+      - HTTP_EXPOSE=80:8000
+      - HTTPS_EXPOSE=443:8000
+    # 8000: web UI and REST API; reachable in the project network as paperless:8000
+    expose:
+      - 8000
+    volumes:
+      - "paperless-data:/usr/src/paperless/data"
+      - "paperless-media:/usr/src/paperless/media"
+      - "paperless-consume:/usr/src/paperless/consume"
+    depends_on:
+      - redis
+    x-ddev:
+      describe-url-port: |
+        Paperless-ngx: https://paperless.${DDEV_HOSTNAME}
+      describe-info: |
+        REST API paperless:8000
+
+volumes:
+  paperless-data:
+  paperless-media:
+  paperless-consume:

@@ -15,6 +15,8 @@ Every domain is a [Nuxt layer](https://nuxt.com/docs/getting-started/layers) in 
 | `ai` | AI domain: language model port; providers are services (`registerAiProvider`) |
 | `ai-openai-compatible` | AI connectors: OpenCode (Go/Zen) and any OpenAI-compatible API (e.g. Ollama) |
 | `mail-ai` | Natural language search filters for the mail page and the `/assistant` chat |
+| `documents` | Documents domain: entities (`shared/types`), `DocumentsProvider` port (`server/utils`), API (`/api/documents/*`), UI (`/documents`) |
+| `documents-paperless` | Paperless-ngx connector: wizard (URL + token, or username/password) + `DocumentsProvider` via the Paperless-ngx REST API |
 | `redis` | Redis as Nitro storage mount `redis` (when `NUXT_REDIS_URL` is set) |
 | `dev` | Development only: Nuxt DevTools tab for RedisInsight |
 
@@ -90,14 +92,25 @@ Migrations land in `layers/core/server/db/migrations`, are bundled with the serv
 
 ## DDEV
 
-`.ddev/` runs the Nuxt dev server plus Meilisearch, Redis, RedisInsight and Proton Mail Bridge:
+`.ddev/` runs the Nuxt dev server plus Meilisearch, Redis, RedisInsight, Paperless-ngx and Proton Mail Bridge:
 
 ```bash
 ddev start
-ddev describe   # URLs: app, Meilisearch dashboard (:7701), RedisInsight (https://redis.allmight.<tld>)
+ddev describe   # URLs: app, Meilisearch dashboard (:7701), RedisInsight (https://redis.allmight.<tld>), Paperless-ngx (https://paperless.allmight.<tld>)
 ```
 
-Secrets live in gitignored env files (`.ddev/.env.web`, `.ddev/.env.meilisearch`, `.ddev/.env.proton-bridge`). A `pre-start` hook (`.ddev/scripts/ensure-secrets.sh`) creates missing ones on `ddev start` — `NUXT_APP_SECRET`, the Meilisearch key and the Bridge token — and never overwrites existing values: a new `NUXT_APP_SECRET` would make stored services unreadable. The app's SQLite database is shared with a dev server started outside DDEV, so don't run both at once.
+Secrets live in gitignored env files (`.ddev/.env.web`, `.ddev/.env.meilisearch`, `.ddev/.env.proton-bridge`, `.ddev/.env.paperless`). A `pre-start` hook (`.ddev/scripts/ensure-secrets.sh`) creates missing ones on `ddev start` — `NUXT_APP_SECRET`, the Meilisearch key, the Bridge token and the Paperless admin/secret key — and never overwrites existing values: a new `NUXT_APP_SECRET` would make stored services unreadable. The app's SQLite database is shared with a dev server started outside DDEV, so don't run both at once.
+
+Paperless-ngx is a new service in `.ddev/docker-compose.paperless.yaml`; DDEV only creates it and registers its subdomain on the next **`ddev restart`**, which you have to run yourself.
+
+## Documents
+
+The `documents` layer is a provider-agnostic document archive (list with table/grid and thumbnails, full-text and "more like this", tags/correspondent/type/storage path/custom fields/date/ASN/owner filters, saved views, detail with preview and metadata/notes/history/suggestions/share links, upload with task progress, bulk edit and download). `documents-paperless` connects it to a running [Paperless-ngx](https://docs.paperless-ngx.com/) instance over its REST API.
+
+- *Services → Add service → Paperless-ngx*: enter the base URL and either an API token or a username/password, from which the server obtains a token (`POST /api/token/`). Only the token is stored (encrypted, like every service credential); the password is never persisted and never reaches the browser.
+- The browser never sees the token: every Paperless call goes through `/api/documents/*`, which builds the upstream URL from validated ids server side. File previews/thumbnails/downloads stream through the proxy with a conservative content type, `X-Content-Type-Options: nosniff` and a `sandbox` CSP.
+- The API version is read from the instance (`X-Api-Version` on `/api/`) and sent back as `Accept: application/json; version=N`.
+- Paperless-ngx is GPL-3.0; this repo only talks to its API and runs its unmodified image, it does not copy its source.
 
 ## Development
 

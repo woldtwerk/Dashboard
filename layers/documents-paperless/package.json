@@ -1,0 +1,15 @@
+{
+  "name": "@allmight/documents-paperless",
+  "private": true,
+  "type": "module",
+  "description": "Paperless-ngx connector: setup wizard and DocumentsProvider over the Paperless-ngx REST API",
+  "main": "./nuxt.config.ts",
+  "dependencies": {
+    "@allmight/core": "workspace:*",
+    "@allmight/documents": "workspace:*",
+    "zod": "catalog:"
+  },
+  "peerDependencies": {
+    "nuxt": "catalog:"
+  }
+}
