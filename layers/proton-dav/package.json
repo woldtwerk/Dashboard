@@ -1,0 +1,16 @@
+{
+  "name": "@allmight/proton-dav",
+  "private": true,
+  "type": "module",
+  "description": "Proton Calendar and Contacts connectors via carbonate (CalDAV/CardDAV bridge), plus a generic CalDAV/CardDAV connector. carbonate is MIT, unreleased third-party software talking to Proton's private API.",
+  "main": "./nuxt.config.ts",
+  "dependencies": {
+    "@allmight/calendar": "workspace:*",
+    "@allmight/contacts": "workspace:*",
+    "@allmight/core": "workspace:*",
+    "zod": "catalog:"
+  },
+  "peerDependencies": {
+    "nuxt": "catalog:"
+  }
+}

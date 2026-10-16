@@ -1,0 +1,33 @@
+# carbonate: CalDAV + CardDAV bridge for Proton Calendar and Contacts, driven by
+# the setup wizard through a control API.
+# Token: CARBONATE_CONTROL_TOKEN in .ddev/.env.carbonate, the same value as
+# NUXT_CARBONATE_TOKEN in .ddev/.env.web (both gitignored, paired by ensure-secrets.sh).
+services:
+  carbonate:
+    container_name: ddev-${DDEV_SITENAME}-carbonate
+    build: ./carbonate
+    image: ddev-${DDEV_SITENAME}-carbonate
+    hostname: carbonate
+    labels:
+      com.ddev.site-name: ${DDEV_SITENAME}
+      com.ddev.approot: ${DDEV_APPROOT}
+    restart: "no"
+    environment:
+      # Address the dashboard reaches CalDAV/CardDAV at over the project network
+      CARBONATE_DAV_URL: http://carbonate:8081
+      CARBONATE_SESSION: /home/carbonate/auth.json
+      CARBONATE_BRIDGE_PASSWORD_FILE: /home/carbonate/bridge-password
+    # 8080: control API, 8081: CalDAV/CardDAV; only reachable inside the project network
+    expose:
+      - 8080
+      - 8081
+    volumes:
+      # The encrypted session, its bridge password and the decrypted cache:
+      # as sensitive as the calendar and contacts themselves
+      - "carbonate:/home/carbonate"
+    x-ddev:
+      describe-info: |
+        Control API carbonate:8080, CalDAV/CardDAV carbonate:8081
+
+volumes:
+  carbonate:

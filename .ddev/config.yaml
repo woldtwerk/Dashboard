@@ -18,6 +18,8 @@ web_environment:
   - NUXT_REDIS_URL=redis://redis:6379
   # Token: .ddev/.env.web (NUXT_PROTON_BRIDGE_TOKEN), .ddev/.env.proton-bridge (BRIDGE_CONTROL_TOKEN), both gitignored
   - NUXT_PROTON_BRIDGE_URL=http://proton-bridge:8080
+  # Token: .ddev/.env.web (NUXT_CARBONATE_TOKEN), .ddev/.env.carbonate (CARBONATE_CONTROL_TOKEN), both gitignored
+  - NUXT_CARBONATE_URL=http://carbonate:8080
 # Nuxt is started by hand: ddev exec pnpm dev --host 0.0.0.0
 web_extra_exposed_ports:
   - name: nuxt

@@ -215,6 +215,9 @@ catalogs:
     hookable:
       specifier: ^6.1.2
       version: 6.1.2
+    ical.js:
+      specifier: ^2.2.1
+      version: 2.2.1
     imapflow:
       specifier: ^2.4.3
       version: 2.4.3
@@ -233,6 +236,9 @@ catalogs:
     tailwindcss:
       specifier: ^4.3.3
       version: 4.3.3
+    tsdav:
+      specifier: ^2.5.0
+      version: 2.5.0
     typescript:
       specifier: ^6.0.3
       version: 6.0.3
@@ -317,6 +323,54 @@ importers:
       nuxt:
         specifier: 'catalog:'
         version: 4.6.1(77eba58fd1fbc6c7fc8df3be8a606621)
+
+  layers/calendar:
+    dependencies:
+      '@allmight/core':
+        specifier: workspace:*
+        version: link:../core
+      '@nuxt/ui':
+        specifier: 'catalog:'
+        version: 4.11.3(c33e7b9ea8d2921466bb7b53476c153c)
+      '@vueuse/core':
+        specifier: 'catalog:'
+        version: 15.0.0(vue@3.5.43(typescript@6.0.3))
+      date-fns:
+        specifier: 'catalog:'
+        version: 4.4.0
+      ical.js:
+        specifier: 'catalog:'
+        version: 2.2.1
+      nuxt:
+        specifier: 'catalog:'
+        version: 4.6.1(77eba58fd1fbc6c7fc8df3be8a606621)
+      tsdav:
+        specifier: 'catalog:'
+        version: 2.5.0(supports-color@10.2.2)
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
+
+  layers/contacts:
+    dependencies:
+      '@allmight/core':
+        specifier: workspace:*
+        version: link:../core
+      '@nuxt/ui':
+        specifier: 'catalog:'
+        version: 4.11.3(c33e7b9ea8d2921466bb7b53476c153c)
+      '@vueuse/core':
+        specifier: 'catalog:'
+        version: 15.0.0(vue@3.5.43(typescript@6.0.3))
+      nuxt:
+        specifier: 'catalog:'
+        version: 4.6.1(77eba58fd1fbc6c7fc8df3be8a606621)
+      tsdav:
+        specifier: 'catalog:'
+        version: 2.5.0(supports-color@10.2.2)
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
 
   layers/core:
     dependencies:
@@ -447,6 +501,24 @@ importers:
       nuxt:
         specifier: 'catalog:'
         version: 4.6.1(77eba58fd1fbc6c7fc8df3be8a606621)
+
+  layers/proton-dav:
+    dependencies:
+      '@allmight/calendar':
+        specifier: workspace:*
+        version: link:../calendar
+      '@allmight/contacts':
+        specifier: workspace:*
+        version: link:../contacts
+      '@allmight/core':
+        specifier: workspace:*
+        version: link:../core
+      nuxt:
+        specifier: 'catalog:'
+        version: 4.6.1(77eba58fd1fbc6c7fc8df3be8a606621)
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
 
   layers/redis:
     dependencies:
@@ -4420,6 +4492,9 @@ packages:
     resolution: {integrity: sha512-AXcZb6vzzrFAUE61HnN4mpLqd/cSIwNQjtNWR0euPm6y0iqx3G4gOXaIDdtdDwZmhwe82LA6+zinmW4UBWVePQ==}
     engines: {node: '>=16.17.0'}
 
+  ical.js@2.2.1:
+    resolution: {integrity: sha512-yK/UlPbEs316igb/tjRgbFA8ZV75rCsBJp/hWOatpyaPNlgw0dGDmU+FoicOcwX4xXkeXOkYiOmCqNPFpNPkQg==}
+
   iconv-lite@0.6.3:
     resolution: {integrity: sha512-4fCk79wshMdzMp2rH06qWrJE4iolqLhCUH+OiuIgU++RB0+94NlDL81atO7GX55uUKueo0txHNtvEyI6D7WdMw==}
     engines: {node: '>=0.10.0'}
@@ -6026,6 +6101,10 @@ packages:
     resolution: {integrity: sha512-NoZ4roiN7LnbKn9QqE1amc9DJfzvZXxF4xDavcOWt1BPkdx+m+0gJuPM+S0vCe7zTJMYUP0R8pO2XMr+Y8oLIg==}
     engines: {node: '>=6'}
 
+  tsdav@2.5.0:
+    resolution: {integrity: sha512-xcLbZ1Lwfr9OOlnLZGgICwkbqDHTGO9Gcn/k6ycwByt5TZf8LjEQhWFcim46M9Jq2aY19Nz4CV2tzJkWiqq2Iw==}
+    engines: {node: '>=18'}
+
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
 
@@ -6600,6 +6679,10 @@ packages:
   wsl-utils@0.3.1:
     resolution: {integrity: sha512-g/eziiSUNBSsdDJtCLB8bdYEUMj4jR7AGeUo96p/3dTafgjHhpF4RiCFPiRILwjQoDXx5MqkBr4fwWtR3Ky4Wg==}
     engines: {node: '>=20'}
+
+  xml-js@1.6.11:
+    resolution: {integrity: sha512-7rVi2KMfwfWFl+GpPg6m80IVMWXLRjO+PxTq7V2CDhoGak0wzYzFgUY2m4XJ47OGdXd8eLE8EmwfAmdjw7lC1g==}
+    hasBin: true
 
   xml-name-validator@5.0.0:
     resolution: {integrity: sha512-EvGK8EJ3DhaHfbRlETOWAS5pO9MZITeauHKJyb8wyajUfQUenkIg2MvLDTZ4T/TgIcm3HU0TFBgWWboAZ30UHg==}
@@ -10781,6 +10864,8 @@ snapshots:
 
   human-signals@5.0.0: {}
 
+  ical.js@2.2.1: {}
+
   iconv-lite@0.6.3:
     dependencies:
       safer-buffer: 2.1.2
@@ -12602,6 +12687,13 @@ snapshots:
       minimist: 1.2.8
       strip-bom: 3.0.0
 
+  tsdav@2.5.0(supports-color@10.2.2):
+    dependencies:
+      debug: 4.4.3(supports-color@10.2.2)
+      xml-js: 1.6.11
+    transitivePeerDependencies:
+      - supports-color
+
   tslib@2.8.1: {}
 
   tsx@4.23.15:
@@ -13159,6 +13251,10 @@ snapshots:
     dependencies:
       is-wsl: 3.1.1
       powershell-utils: 0.1.0
+
+  xml-js@1.6.11:
+    dependencies:
+      sax: 1.6.1
 
   xml-name-validator@5.0.0: {}
 
