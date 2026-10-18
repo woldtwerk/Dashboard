@@ -96,26 +96,29 @@ const { data: recentLogs, pending: logsPending } = useFetch<LogEntry[]>('/api/lo
 // --- Upcoming (only with a calendar service) ---
 
 const hasCalendar = computed(() => services.value.some(service => service.domain === 'calendar'))
+const timeZone = useCalendarTimeZone()
 const upcomingRange = computed(() => {
   const start = startOfDay(new Date())
   return { start: start.toISOString(), end: addDays(start, 7).toISOString() }
 })
-const { data: upcoming, refresh: refreshUpcoming } = useFetch<CalendarEvent[]>('/api/calendar/events', {
+// Fetched during the server render too, so the markup and the hydration payload
+// agree on the list instead of rendering an empty card first
+const { data: upcoming } = useFetch<CalendarEvent[]>('/api/calendar/events', {
   key: 'dashboard-upcoming',
   query: computed(() => upcomingRange.value),
   lazy: true,
-  immediate: false,
   default: () => []
 })
-watch(hasCalendar, (value) => {
-  if (value) {
-    refreshUpcoming()
-  }
-}, { immediate: true })
 
 const upcomingEvents = computed(() => [...upcoming.value]
   .sort((a, b) => a.start.localeCompare(b.start))
   .slice(0, 5))
+
+// In the same zone on the server and the first client pass; see useCalendarTimeZone
+const eventTime = (event: CalendarEvent) => format(
+  zoned(parseISO(event.start), timeZone.value),
+  event.allDay ? 'EEE d MMM' : 'EEE d MMM HH:mm'
+)
 
 // --- Table views (the charts' accessible twin) ---
 
@@ -360,7 +363,7 @@ useDomainEvents({}, (event) => {
               class="flex items-center gap-3 py-2"
             >
               <span class="w-28 shrink-0 text-xs text-muted">
-                {{ format(parseISO(event.start), event.allDay ? 'EEE d MMM' : 'EEE d MMM HH:mm') }}
+                {{ eventTime(event) }}
               </span>
               <span class="truncate text-sm text-highlighted">{{ event.title }}</span>
             </li>

@@ -11,7 +11,8 @@ import {
   seriesTableRows,
   statusColor,
   syncDurationRows,
-  warningErrorRows
+  warningErrorRows,
+  yDomainFromZero
 } from '../app/utils/chart'
 
 const day = (date: string, domain: string, patch: Partial<ActivityDay> = {}): ActivityDay => ({
@@ -108,6 +109,19 @@ describe('seriesTableRows', () => {
     const series: DashboardSeries = { id: 'a', domain: 'mail', label: 'A', bucket: 'day', points: [{ date: '2024-01-01', value: 2 }] }
     expect(seriesTableRows(series)).toEqual([{ date: '2024-01-01', value: 2 }])
     expect(seriesTableRows(undefined)).toEqual([])
+  })
+})
+
+describe('yDomainFromZero', () => {
+  it('starts at zero and leaves headroom above the maximum', () => {
+    expect(yDomainFromZero([2.6])).toEqual([0, 2.6 * 1.1])
+    expect(yDomainFromZero([1, 4.2, 3])).toEqual([0, 4.2 * 1.1])
+  })
+
+  it('falls back to [0, 1] without data', () => {
+    expect(yDomainFromZero([])).toEqual([0, 1])
+    expect(yDomainFromZero([0])).toEqual([0, 1])
+    expect(yDomainFromZero([Number.NaN, Number.POSITIVE_INFINITY])).toEqual([0, 1])
   })
 })
 
