@@ -74,6 +74,9 @@ http {
 
 mail {
     server_name dav.allmight.localhost;
+    # The global level is `notice`, which hides the mail module's `info` lines
+    # (backend handshake, auth_http result). Failures are silent without this.
+    error_log /dev/stderr info;
     auth_http http://web:3000/_client-access/mail-auth;
     auth_http_header X-Client-Access-Secret ${CLIENT_ACCESS_SECRET};
     proxy_pass_error_message on;
@@ -97,5 +100,14 @@ mail {
         listen 465 ssl;
         protocol smtp;
         smtp_auth login plain;
+        # nginx advertises only AUTH unless capabilities are given; mail clients
+        # expect a submission server to announce SIZE, 8BITMIME and PIPELINING.
+        smtp_capabilities "SIZE 26214400" "8BITMIME" "PIPELINING";
+        # nginx sends XCLIENT to the backend by default to pass the client's
+        # address on. Proton Bridge does not implement it and answers
+        # "501 5.5.2 Bad command", which nginx reads as an invalid response and
+        # closes the connection — the client sees SMTPServerDisconnected. Bridge
+        # does not need the client address, so XCLIENT stays off.
+        xclient off;
     }
 }
