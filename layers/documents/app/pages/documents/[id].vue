@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { DocumentsDocument, DocumentsDocumentPatch, DocumentsHistoryEntry, DocumentsMetadata, DocumentsNote, DocumentsShareLink, DocumentsSuggestions } from '#layers/documents/shared/types/documents'
 import { documentKindLabel, formatBytes, formatDateTime, isInlinePreview } from '#layers/documents/shared/documents-format'
+import { entityKey } from '#layers/core/shared/entities'
 
 useSeoMeta({ title: 'Document' })
 
@@ -39,6 +40,20 @@ const { data: metadata } = await useFetch<DocumentsMetadata>(`/api/documents/${i
 const previewUrl = computed(() => documentsFileUrl('preview', service, id))
 const inline = computed(() => isInlinePreview(document.value?.mimeType ?? ''))
 const image = computed(() => (document.value?.mimeType ?? '').startsWith('image/'))
+
+// The context the generic item actions menu reads; the domain owns the fields,
+// the actions other layers registered read them
+function nameOf(items: Array<{ id: number, name: string }>, value: number | null | undefined): string | undefined {
+  return value === null || value === undefined ? undefined : items.find(item => item.id === value)?.name
+}
+
+const documentRef = computed(() => entityKey({ type: 'document', service, id: String(id) }))
+const itemContext = computed<Record<string, unknown>>(() => ({
+  title: document.value?.title,
+  correspondent: nameOf(correspondentList.value, document.value?.correspondent),
+  documentType: nameOf(documentTypeList.value, document.value?.documentType),
+  tags: (document.value?.tags ?? []).map(tag => nameOf(tagList.value, tag)).filter((name): name is string => !!name)
+}))
 
 const saving = ref(false)
 
@@ -144,6 +159,12 @@ async function removeDocument() {
 
       <template #right>
         <GraphLinkButton :entity="{ type: 'document', service, id: String(id) }" />
+        <ItemActionsMenu
+          domain="documents"
+          :service="service"
+          :entity-ref="documentRef"
+          :item="itemContext"
+        />
         <UButton
           label="Original"
           icon="i-lucide-download"

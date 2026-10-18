@@ -10,7 +10,7 @@ import type {
 } from '../../shared/types/automation'
 import { runDecisionNodes, runWorkflow, validateWorkflow } from '../../shared/workflow'
 import type { WorkflowDecide } from '../../shared/workflow'
-import { createDocumentsApplier, createMailApplier } from './appliers'
+import { createDocumentsApplier, createMailApplier, toMailActionProvider } from './appliers'
 import type { AutomationApplier, AutomationDeps, AutomationLogger } from './engine'
 import { applyRunActions, evaluateCandidates, runService, undoPlan } from './engine'
 import { sweepAll } from './automation-sweep'
@@ -50,7 +50,7 @@ async function applierFor(domain: AutomationDomain, service: string): Promise<Au
 
   if (domain === 'mail') {
     return createMailApplier({
-      provider: await useMailProvider(service),
+      provider: toMailActionProvider(await useMailProvider(service)),
       publish: mailbox => publishDomainEvent({ domain: 'mail', service, type: 'changed', resource: mailbox }),
       logger
     })

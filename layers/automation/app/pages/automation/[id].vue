@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import type { AutomationWorkflow, WorkflowGraph, WorkflowNode, WorkflowNodeType } from '#layers/automation/shared/types/automation'
+import type { AutomationDomain, AutomationWorkflow, WorkflowGraph, WorkflowNode, WorkflowNodeType } from '#layers/automation/shared/types/automation'
 import { createDefaultGraph, validateWorkflow } from '#layers/automation/shared/workflow'
+import { DRAFT_ACTION_ID, draftFromItem } from '#layers/automation/shared/workflow-draft'
+import type { DraftItemContext } from '#layers/automation/shared/workflow-draft'
 import {
   addWorkflowNode,
   canRedoWorkflow,
@@ -26,14 +28,32 @@ definePageMeta({
 const route = useRoute()
 const router = useRouter()
 const id = route.params.id as string
+/** `/automation/new` is the same builder, fed by a draft item instead of an id */
+const isDraft = id === 'new'
 const toast = useToast()
 
-const { data: workflow } = await useFetch<AutomationWorkflow>(`/api/automation/workflows/${id}`)
+const workflow = ref<AutomationWorkflow | null>(null)
+if (!isDraft) {
+  const { data } = await useFetch<AutomationWorkflow>(`/api/automation/workflows/${id}`)
+  workflow.value = data.value ?? null
+}
 
-const name = ref(workflow.value?.name ?? '')
-const domain = ref(workflow.value?.domain ?? 'mail')
-const service = ref(workflow.value?.service ?? null)
-const enabled = ref(workflow.value?.enabled ?? true)
+// "Create workflow…" only carries the item's key; read it back, then let the
+// pure `draftFromItem` build the graph the builder opens with. Nothing is stored
+// until Save.
+const draftRef = isDraft && typeof route.query.from === 'string' ? route.query.from : ''
+const draftContext = ref<DraftItemContext | null>(null)
+if (draftRef) {
+  const { data } = await useFetch<DraftItemContext>('/api/automation/item', { query: { ref: draftRef } })
+  draftContext.value = data.value ?? null
+}
+const draft = draftContext.value ? draftFromItem(draftContext.value.domain, draftContext.value.item) : null
+
+const name = ref(workflow.value?.name ?? draft?.name ?? '')
+const domain = ref<AutomationDomain>(workflow.value?.domain ?? draftContext.value?.domain ?? 'mail')
+const service = ref(workflow.value?.service ?? (typeof route.query.service === 'string' ? route.query.service : null))
+// A draft is stored disabled and in suggest mode; an existing workflow keeps its own state
+const enabled = ref(workflow.value?.enabled ?? !isDraft)
 const mode = ref(workflow.value?.mode ?? 'suggest')
 
 const { data: services } = useServices()
@@ -46,20 +66,21 @@ const serviceSelection = computed({
   set: (value) => { service.value = value || null }
 })
 
-const history = ref<WorkflowHistory>(createWorkflowHistory(workflow.value?.graph ?? createDefaultGraph('mail')))
+const history = ref<WorkflowHistory>(createWorkflowHistory(workflow.value?.graph ?? draft?.graph ?? createDefaultGraph('mail')))
 const graph = computed(() => history.value.present)
 
 const errors = computed(() => validateWorkflow(graph.value, domain.value))
 const valid = computed(() => errors.value.length === 0)
 
-const selectedId = ref<string | null>(null)
+// The draft opens with the inspector on its placeholder action, ready to be set
+const selectedId = ref<string | null>(draft ? DRAFT_ACTION_ID : null)
 const selectedEdgeId = ref<string | null>(null)
 const selectedNode = computed(() => graph.value.nodes.find(node => node.id === selectedId.value) ?? null)
 const selectedEdge = computed(() => graph.value.edges.find(edge => edge.id === selectedEdgeId.value) ?? null)
 
 const highlightedNodes = ref<Set<string>>(new Set())
 const highlightedEdges = ref<Set<string>>(new Set())
-const previewOpen = ref(false)
+const previewOpen = ref(!!draftRef)
 
 const tone = computed(() => domain.value === 'mail' ? 'primary' as const : 'info' as const)
 
@@ -67,7 +88,7 @@ function payload() {
   return { name: name.value, domain: domain.value, service: service.value, enabled: enabled.value, mode: mode.value, graph: graph.value }
 }
 
-const saved = ref(JSON.stringify(payload()))
+const saved = ref(isDraft ? '' : JSON.stringify(payload()))
 const dirty = computed(() => JSON.stringify(payload()) !== saved.value)
 
 function commitGraph(next: WorkflowGraph) {
@@ -141,6 +162,19 @@ function removeEdge(edgeId: string) {
 
 async function save() {
   const body = payload()
+
+  // A draft does not exist yet: create it (disabled, suggest) and open the real builder
+  if (isDraft) {
+    try {
+      const created = await $fetch<AutomationWorkflow>('/api/automation/workflows', { method: 'POST', body })
+      toast.add({ title: 'Workflow saved', color: 'success', icon: 'i-lucide-check' })
+      await router.replace(`/automation/${created.id}`)
+    } catch (failure) {
+      toast.add({ title: failure instanceof Error ? failure.message : 'Could not save', color: 'error', icon: 'i-lucide-circle-alert' })
+    }
+    return
+  }
+
   try {
     const updated = await $fetch<AutomationWorkflow>(`/api/automation/workflows/${id}`, { method: 'PATCH', body })
     saved.value = JSON.stringify({ name: updated.name, domain: updated.domain, service: updated.service, enabled: updated.enabled, mode: updated.mode, graph: updated.graph })
@@ -222,6 +256,7 @@ function focusNode(nodeId: string | null) {
           @click="previewOpen = !previewOpen"
         />
         <UButton
+          v-if="!isDraft"
           icon="i-lucide-trash-2"
           color="error"
           variant="ghost"
@@ -308,6 +343,7 @@ function focusNode(nodeId: string | null) {
             :graph="graph"
             :domain="domain"
             :service="service"
+            :initial-ref="draftRef || undefined"
             @highlight="highlight"
             @focus="focusNode"
           />
@@ -329,7 +365,7 @@ function focusNode(nodeId: string | null) {
     </div>
   </UDashboardPanel>
 
-  <UModal v-model:open="deleteOpen" title="Delete workflow">
+  <UModal v-if="!isDraft" v-model:open="deleteOpen" title="Delete workflow">
     <template #body>
       <p class="text-sm text-muted">
         Delete "{{ name || 'this workflow' }}"? Its history stays in the activity log.

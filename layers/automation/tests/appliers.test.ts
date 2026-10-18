@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createDocumentsApplier, createMailApplier, labelMailbox } from '../server/utils/appliers'
+import { createDocumentsApplier, createMailApplier, labelMailbox, toMailActionProvider } from '../server/utils/appliers'
 import type { DocumentsActionProvider, MailActionProvider } from '../server/utils/appliers'
+import type { MailProvider } from '../../mail/server/utils/mail-provider'
 import type { AutomationItem } from '../shared/types/automation'
 
 function mailItem(overrides: Partial<AutomationItem> = {}): AutomationItem {
@@ -122,6 +123,27 @@ describe('createMailApplier', () => {
   it('refuses a document action on a mail item', async () => {
     const applier = createMailApplier({ provider: mailProvider(), publish: vi.fn() })
     await expect(applier.apply([{ type: 'add-tag', tag: 1 }], mailItem())).rejects.toThrow('not a mail action')
+  })
+})
+
+describe('toMailActionProvider', () => {
+  it('carries the optional createMailbox through to the applier port', async () => {
+    const created: string[] = []
+    const provider = Object.assign(mailProvider(), {
+      createMailbox: async (mailbox: string) => {
+        created.push(mailbox)
+      }
+    }) as unknown as MailProvider
+
+    const port = toMailActionProvider(provider)
+    await port.createMailbox?.('Labels/Invoices')
+
+    expect(created).toEqual(['Labels/Invoices'])
+  })
+
+  it('omits createMailbox when the provider cannot create folders', () => {
+    const port = toMailActionProvider(mailProvider() as unknown as MailProvider)
+    expect(port.createMailbox).toBeUndefined()
   })
 })
 

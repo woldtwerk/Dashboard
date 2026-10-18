@@ -26,6 +26,12 @@ export interface MailProvider {
    * UID where the server reports one; the label folder must already exist.
    */
   addLabel(mailbox: string, uid: number, label: string): Promise<{ uid?: number }>
+  /**
+   * Creates an IMAP folder (e.g. the `Labels/<label>` a label is filed under).
+   * Optional: a provider that creates the folder itself omits it. An existing
+   * folder is not an error.
+   */
+  createMailbox?(path: string): Promise<void>
 
   // --- Sending ---
   /**

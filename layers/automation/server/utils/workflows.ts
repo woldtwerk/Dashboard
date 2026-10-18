@@ -14,7 +14,7 @@ const nodeIdSchema = z.string().regex(/^[a-z0-9_-]{1,64}$/i, 'Invalid node id')
 const positionSchema = z.object({ x: z.number().finite(), y: z.number().finite() })
 
 export const automationConditionSchema = z.object({
-  field: z.enum(['from', 'subject', 'text', 'correspondent', 'title']),
+  field: z.enum(['from', 'listId', 'subject', 'text', 'correspondent', 'title']),
   op: z.enum(['contains', 'equals', 'matches']),
   value: z.string().trim().min(1).max(500)
 })
@@ -126,7 +126,9 @@ export const automationWorkflowCreateSchema = z.object({
   domain: z.enum(['mail', 'documents']),
   service: z.string().trim().min(1).max(80).nullable().default(null),
   enabled: z.boolean().default(true),
-  mode: z.enum(['suggest', 'auto']).default('suggest')
+  mode: z.enum(['suggest', 'auto']).default('suggest'),
+  /** A builder sends the draft it edited; without one a fresh default graph is used */
+  graph: workflowGraphSchema.optional()
 })
 
 const previewSourceSchema = z.discriminatedUnion('kind', [
@@ -213,7 +215,7 @@ export async function insertWorkflow(input: AutomationWorkflowInput): Promise<Au
 }
 
 export async function createWorkflow(input: z.infer<typeof automationWorkflowCreateSchema>): Promise<AutomationWorkflow> {
-  const graph = createDefaultGraph(input.domain)
+  const graph = input.graph ?? createDefaultGraph(input.domain)
   assertValidGraph(graph, input.domain)
 
   return insertWorkflow({ ...input, graph })

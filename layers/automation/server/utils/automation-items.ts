@@ -5,14 +5,27 @@ import { EMPTY_DOCUMENTS_FILTERS } from '../../../documents/shared/types/documen
 import type { DocumentsDocument } from '../../../documents/shared/types/documents'
 import type { AutomationDomain, AutomationItem } from '../../shared/types/automation'
 import { buildDocumentState, buildMailState } from '../../shared/automation'
+import type { DraftItemContext } from '../../shared/workflow-draft'
 
 /** The mailbox automation watches for new mail */
 export const AUTOMATION_INBOX = 'INBOX'
 
-/** `Name <address>` lines, the form a condition and a decision read */
+/** `Name <address>` lines, the form a decision reads */
 export function formatAddresses(addresses: MailAddress[]): string {
   return addresses
     .map(address => address.name ? `${address.name} <${address.address ?? ''}>` : address.address ?? '')
+    .filter(Boolean)
+    .join(', ')
+}
+
+/**
+ * The bare addresses of a sender line, the form the `from` condition tests, so a
+ * condition built from one mail's sender (`from equals <address>`) still matches
+ * the same sender when the display name changes.
+ */
+export function addressLine(addresses: MailAddress[]): string {
+  return addresses
+    .map(address => address.address || address.name || '')
     .filter(Boolean)
     .join(', ')
 }
@@ -29,7 +42,7 @@ function mailItem(service: string, mailbox: string, message: MailMessage): Autom
     messageId: message.messageId,
     unread: message.unread,
     flagged: message.flagged,
-    fields: { from, subject: message.subject, text: message.text ?? '' },
+    fields: { from: addressLine(message.from), listId: message.listId ?? '', subject: message.subject, text: message.text ?? '' },
     state: buildMailState(from, message.subject, message.text ?? ''),
     title: message.subject || '(no subject)'
   }
@@ -174,6 +187,70 @@ export async function loadRecentItems(domain: AutomationDomain, service: string,
       ? correspondents.find(entry => entry.id === document.correspondent)?.name
       : undefined
     return documentItem(service, document, name)
+  }
+
+  throw createError({ status: 400, statusText: 'The item reference is not a mail or document' })
+}
+
+// --- Draft from one item --------------------------------------------------
+
+function nameFor(entries: Array<{ id: number, name: string }>, id: number | null | undefined): string | undefined {
+  return id === null || id === undefined ? undefined : entries.find(entry => entry.id === id)?.name
+}
+
+/**
+ * The item a "Create workflow…" action was opened with, in the shape
+ * `draftFromItem` expects: a mail's sender line, subject and mailbox, or a
+ * document's title and the names of its correspondent, type and tags. Read from
+ * the same providers the run uses, so the draft matches the preview.
+ */
+export async function loadDraftItem(ref: string): Promise<DraftItemContext> {
+  const parsed = parseEntityKey(ref)
+  const service = parsed?.service
+  if (!parsed || !service) {
+    throw createError({ status: 400, statusText: 'Invalid item reference' })
+  }
+
+  if (parsed.type === 'mail') {
+    const at = parsed.id.lastIndexOf('/')
+    const mailbox = at < 0 ? AUTOMATION_INBOX : parsed.id.slice(0, at)
+    const uid = Number(parsed.id.slice(at + 1))
+    if (!Number.isInteger(uid) || uid <= 0) {
+      throw createError({ status: 400, statusText: 'Invalid mail reference' })
+    }
+    const message = await (await useMailProvider(service)).getMessage(mailbox, uid)
+    if (!message) {
+      throw createError({ status: 404, statusText: 'Mail not found' })
+    }
+    return {
+      domain: 'mail',
+      ref,
+      item: { from: message.from, to: message.to, subject: message.subject, mailbox, listId: message.listId, snippet: message.snippet }
+    }
+  }
+
+  if (parsed.type === 'document') {
+    const id = Number(parsed.id)
+    if (!Number.isInteger(id) || id <= 0) {
+      throw createError({ status: 400, statusText: 'Invalid document reference' })
+    }
+    const provider = await useDocumentsProvider(service)
+    const document = await provider.get(id)
+    const [correspondents, documentTypes, tags] = await Promise.all([
+      provider.listCorrespondents(),
+      provider.listDocumentTypes(),
+      provider.listTags()
+    ])
+    return {
+      domain: 'documents',
+      ref,
+      item: {
+        title: document.title,
+        correspondent: nameFor(correspondents, document.correspondent),
+        documentType: nameFor(documentTypes, document.documentType),
+        tags: document.tags.map(tag => nameFor(tags, tag)).filter((name): name is string => !!name)
+      }
+    }
   }
 
   throw createError({ status: 400, statusText: 'The item reference is not a mail or document' })

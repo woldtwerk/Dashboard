@@ -4,6 +4,7 @@ import type {
   AutomationItem,
   UndoOperation
 } from '../../shared/types/automation'
+import type { MailProvider } from '../../../mail/server/utils/mail-provider'
 import type { AutomationApplier, AutomationLogger } from './engine'
 
 // --- Mail -----------------------------------------------------------------
@@ -21,6 +22,22 @@ export interface MailActionProvider {
    * created here. Optional: a provider that creates the folder itself omits it.
    */
   createMailbox?(mailbox: string): Promise<void>
+}
+
+/**
+ * Adapts a mail provider to the applier's port, forwarding the optional
+ * `createMailbox` too, so a label folder is created before the first copy.
+ */
+export function toMailActionProvider(provider: MailProvider): MailActionProvider {
+  const createMailbox = provider.createMailbox
+  return {
+    moveMessage: (mailbox, uid, target) => provider.moveMessage(mailbox, uid, target),
+    addLabel: (mailbox, uid, label) => provider.addLabel(mailbox, uid, label),
+    setSeen: (mailbox, uid, seen) => provider.setSeen(mailbox, uid, seen),
+    setFlagged: (mailbox, uid, flagged) => provider.setFlagged(mailbox, uid, flagged),
+    deleteMessage: (mailbox, uid) => provider.deleteMessage(mailbox, uid),
+    ...(createMailbox ? { createMailbox: (mailbox: string) => createMailbox(mailbox) } : {})
+  }
 }
 
 export interface MailApplierContext {

@@ -2,7 +2,7 @@
 import { format } from 'date-fns'
 import type { MailSummary } from '#layers/mail/shared/types/mail'
 import type { EntityRef } from '#layers/core/shared/types/entities'
-import { normalizeEmail } from '#layers/core/shared/entities'
+import { normalizeEmail, entityKey } from '#layers/core/shared/entities'
 import { isTrustedImageSender } from '#layers/mail/shared/mail-images'
 
 const props = defineProps<{
@@ -57,6 +57,18 @@ const mailEntity = computed<EntityRef>(() => ({
   type: 'mail',
   service: props.service,
   id: `${props.mail.mailbox}/${props.mail.uid}`
+}))
+
+const mailRef = computed(() => entityKey(mailEntity.value))
+
+// What other layers' item actions may read; the mail layer knows none of them
+const itemContext = computed<Record<string, unknown>>(() => ({
+  from: message.value?.from ?? props.mail.from,
+  to: message.value?.to ?? props.mail.to,
+  subject: props.mail.subject,
+  mailbox: props.mail.mailbox,
+  listId: props.mail.listId,
+  snippet: props.mail.snippet
 }))
 
 // The person panel lives in the URL (`?person=<email>`), so a link can open it directly
@@ -136,13 +148,14 @@ function openPerson(address?: string) {
           />
         </UTooltip>
         <GraphLinkButton :entity="mailEntity" />
-        <UDropdownMenu :items="dropdownItems">
-          <UButton
-            icon="i-lucide-ellipsis-vertical"
-            color="neutral"
-            variant="ghost"
-          />
-        </UDropdownMenu>
+        <ItemActionsMenu
+          domain="mail"
+          :service="service"
+          :entity-ref="mailRef"
+          :item="itemContext"
+          :items="dropdownItems"
+          icon="i-lucide-ellipsis-vertical"
+        />
       </template>
     </UDashboardNavbar>
 

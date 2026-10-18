@@ -22,10 +22,14 @@ const { data: services } = useServices()
 
 const serviceId = computed(() => props.service ?? services.value.find(service => service.domain === props.domain)?.id ?? '')
 
-const draft = ref<WorkflowNode | null>(props.node ? structuredClone(props.node) : null)
+// The node arrives as a reactive proxy; unwrap it before the structured clone,
+// which a proxy cannot be cloned from.
+const cloneNode = (node: WorkflowNode): WorkflowNode => structuredClone(toRaw(node))
+
+const draft = ref<WorkflowNode | null>(props.node ? cloneNode(props.node) : null)
 watch(() => props.node, (node) => {
   if (JSON.stringify(node) !== JSON.stringify(draft.value)) {
-    draft.value = node ? structuredClone(node) : null
+    draft.value = node ? cloneNode(node) : null
   }
 })
 
@@ -33,7 +37,7 @@ const nodeErrors = computed(() => props.errors.filter(error => error.nodeId === 
 
 function commit() {
   if (draft.value) {
-    emit('update', structuredClone(draft.value))
+    emit('update', cloneNode(draft.value))
   }
 }
 
@@ -99,6 +103,7 @@ const yesnoData = computed<YesNoData | null>(() => {
 
 const CONDITION_FIELDS = [
   { label: 'From', value: 'from' },
+  { label: 'List-Id', value: 'listId' },
   { label: 'Subject', value: 'subject' },
   { label: 'Body', value: 'text' },
   { label: 'Correspondent', value: 'correspondent' },

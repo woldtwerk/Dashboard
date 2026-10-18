@@ -3,6 +3,7 @@ import { format } from 'date-fns'
 import type { MailAddress, MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
 import type { OwnMailContext } from '#layers/mail/shared/mail-thread'
 import { isTrustedImageSender } from '#layers/mail/shared/mail-images'
+import { entityKey } from '#layers/core/shared/entities'
 import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
 
 const props = defineProps<{
@@ -181,6 +182,24 @@ function deleteFor(value: string) {
     emits('delete', mail)
   }
 }
+
+/** The entity key and the fields the generic item actions menu reads */
+function mailRef(value: string): string {
+  const mail = mailFor(value)
+  return mail ? entityKey({ type: 'mail', service: props.service, id: `${mail.mailbox}/${mail.uid}` }) : ''
+}
+
+function actionContext(value: string): Record<string, unknown> {
+  const mail = mailFor(value)
+  return {
+    from: mail?.from ?? [],
+    to: mail?.to,
+    subject: mail?.subject,
+    mailbox: mail?.mailbox,
+    listId: mail?.listId,
+    snippet: mail?.snippet
+  }
+}
 </script>
 
 <template>
@@ -265,6 +284,14 @@ function deleteFor(value: string) {
                 @click="deleteFor(item.value)"
               />
             </UTooltip>
+            <ItemActionsMenu
+              domain="mail"
+              :service="service"
+              :entity-ref="mailRef(item.value)"
+              :item="actionContext(item.value)"
+              icon="i-lucide-ellipsis"
+              size="xs"
+            />
           </div>
         </div>
 

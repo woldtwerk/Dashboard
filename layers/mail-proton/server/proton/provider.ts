@@ -6,7 +6,7 @@ import type { Mailbox, MailMessage, MailMessageState, MailSearch, MailStreamHead
 import { mailStreamFlags, parseRawStreamHeaders } from '../../../mail/shared/mail-thread'
 import { sequenceRange, uidPage } from './sequence'
 import { isProtonLabel, protonSpecialUse } from './special-use'
-import { toMailAddresses, toMailSummary, toProtonSettings, withProtonBridge, withProtonMailbox } from './bridge'
+import { toMailAddresses, toMailSummary, toProtonSettings, isMailboxExistsError, withProtonBridge, withProtonMailbox } from './bridge'
 import { sendProtonMail } from './mailer'
 
 const MESSAGE_QUERY = { uid: true, flags: true, envelope: true, internalDate: true } as const
@@ -222,6 +222,19 @@ export function createProtonMailProvider(values: SetupValues): MailProvider {
         // its real folder, so the label only adds a second place it is filed under.
         const result = await client.messageCopy(String(uid), `Labels/${label}`, { uid: true })
         return { uid: result ? result.uidMap?.get(uid) : undefined }
+      })
+    },
+
+    createMailbox(path) {
+      return withProtonBridge(settings, async (client) => {
+        try {
+          await client.mailboxCreate(path)
+        } catch (error) {
+          // An existing folder is the common case and not an error
+          if (!isMailboxExistsError(error)) {
+            throw error
+          }
+        }
       })
     },
 

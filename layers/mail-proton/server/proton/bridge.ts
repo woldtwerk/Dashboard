@@ -148,6 +148,23 @@ export function toMailAddresses(addresses?: MessageAddressObject[] | AddressObje
     .map(({ name, address }) => ({ name: name || undefined, address: address || undefined }))
 }
 
+/**
+ * Whether a `CREATE` failed only because the folder already exists. ImapFlow
+ * itself answers an RFC 5530 `[ALREADYEXISTS]` with `{ created: false }`; a
+ * server that only says "Mailbox already exists" reaches us as an error.
+ */
+export function isMailboxExistsError(error: unknown): boolean {
+  const value = error as { serverResponseCode?: string, response?: unknown, message?: string } | undefined
+  if (!value) {
+    return false
+  }
+  if (value.serverResponseCode === 'ALREADYEXISTS') {
+    return true
+  }
+  const text = typeof value.response === 'string' ? value.response : value.message ?? ''
+  return /already exists/i.test(text)
+}
+
 export function toMailSummary(mailbox: string, message: {
   uid: number
   flags?: Set<string>

@@ -13,7 +13,7 @@ export type AutomationMode = 'suggest' | 'auto'
 // --- Conditions -----------------------------------------------------------
 
 /** The item fields a classic condition may test */
-export type ConditionField = 'from' | 'subject' | 'text' | 'correspondent' | 'title'
+export type ConditionField = 'from' | 'listId' | 'subject' | 'text' | 'correspondent' | 'title'
 
 export type ConditionOperator = 'contains' | 'equals' | 'matches'
 

@@ -9,6 +9,8 @@ const props = defineProps<{
   graph: WorkflowGraph
   domain: AutomationDomain
   service: string | null
+  /** An item to preview as soon as the panel opens, e.g. the draft's source item */
+  initialRef?: string
 }>()
 
 const emit = defineEmits<{
@@ -26,7 +28,9 @@ const tabs = [
 ]
 
 const activeTab = computed({
-  get: () => typeof route.query.preview === 'string' && tabs.some(tab => tab.value === route.query.preview) ? route.query.preview : 'recent',
+  get: () => typeof route.query.preview === 'string' && tabs.some(tab => tab.value === route.query.preview)
+    ? route.query.preview
+    : props.initialRef ? 'item' : 'recent',
   set: value => router.replace({ query: { ...route.query, preview: value } })
 })
 
@@ -57,6 +61,18 @@ async function request(source: WorkflowPreviewSource) {
 }
 
 const runRecent = () => request({ kind: 'recent', limit: 50 })
+
+// A builder opened from one item ("Create workflow…") previews that item as soon
+// as the panel mounts, so the user sees the draft run against it immediately.
+let previewedInitial = false
+watch(() => props.initialRef, async (ref) => {
+  if (!import.meta.client || !ref || previewedInitial) {
+    return
+  }
+  previewedInitial = true
+  activeTab.value = 'item'
+  await request({ kind: 'item', ref })
+}, { immediate: true })
 
 // --- Pick an item ---------------------------------------------------------
 
