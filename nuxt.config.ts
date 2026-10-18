@@ -23,6 +23,10 @@ export default defineNuxtConfig({
   // Their file changes must not restart this dev server
   vite: {
     server: {
+      // imgproxy fetches the app's session-less source endpoint as
+      // http://web:3000 inside the project network; without this Vite's host
+      // check answers that request with a 403 before it reaches the route.
+      allowedHosts: ['web'],
       watch: {
         ignored: ['**/.worktrees/**']
       }

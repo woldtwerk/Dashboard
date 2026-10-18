@@ -6,6 +6,7 @@
   "main": "./nuxt.config.ts",
   "dependencies": {
     "@allmight/core": "workspace:*",
+    "@allmight/image": "workspace:*",
     "@nuxt/ui": "catalog:",
     "@vueuse/core": "catalog:",
     "h3": "catalog:",

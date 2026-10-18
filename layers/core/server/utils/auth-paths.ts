@@ -4,6 +4,14 @@ const PUBLIC_API_PATHS = new Set([
   '/api/auth/state'
 ])
 
+/**
+ * Prefixes that need no session either. imgproxy fetches the image source
+ * endpoint from inside the project network and has no session cookie; that
+ * route is protected by the HMAC in its query instead, see
+ * layers/image/server/api/image-source.
+ */
+const PUBLIC_API_PREFIXES = ['/api/image-source/']
+
 /** Everything nuxt-auth-utils serves, e.g. `/api/_auth/session`. */
 const AUTH_MODULE_PREFIX = '/api/_auth/'
 
@@ -35,10 +43,11 @@ export function normalizeRequestPath(path: string): string {
  * Whether a request path may be served without a session.
  *
  * Everything outside `/api` passes (pages, assets, `/mcp`, `/_nuxt`, `/sw.js`),
- * as do the login routes and the nuxt-auth-utils routes under `/api/_auth/`.
- * The `api` prefix matches case-insensitively so a `/API/...` variant is still
- * protected; the route names themselves stay case-sensitive, so only the exact
- * `/api/auth/login` is public and `/api/authx` is not.
+ * as do the login routes, the nuxt-auth-utils routes under `/api/_auth/` and
+ * the HMAC-protected image source endpoint. The `api` prefix matches
+ * case-insensitively so a `/API/...` variant is still protected; the route
+ * names themselves stay case-sensitive, so only the exact `/api/auth/login` is
+ * public and `/api/authx` is not.
  */
 export function isPublicApiPath(path: string): boolean {
   const pathname = normalizeRequestPath(path)
@@ -48,5 +57,7 @@ export function isPublicApiPath(path: string): boolean {
     return true
   }
 
-  return PUBLIC_API_PATHS.has(pathname) || pathname.startsWith(AUTH_MODULE_PREFIX)
+  return PUBLIC_API_PATHS.has(pathname)
+    || PUBLIC_API_PREFIXES.some(prefix => pathname.startsWith(prefix))
+    || pathname.startsWith(AUTH_MODULE_PREFIX)
 }

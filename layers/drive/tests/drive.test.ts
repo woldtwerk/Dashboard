@@ -96,13 +96,14 @@ describe('entryIcon and kind', () => {
 })
 
 describe('thumbnailAllowed', () => {
-  it('allows small images', () => {
+  it('allows images up to the source limit', () => {
     expect(thumbnailAllowed({ type: 'file', name: 'a.png', mediaType: 'image/png', size: 1024 })).toBe(true)
     expect(thumbnailAllowed({ type: 'file', name: 'a.png', mediaType: 'image/png', size: 3 * 1024 * 1024 })).toBe(true)
+    expect(thumbnailAllowed({ type: 'file', name: 'a.png', mediaType: 'image/png', size: 50 * 1024 * 1024 })).toBe(true)
   })
 
-  it('rejects large images, unknown sizes, non-images and folders', () => {
-    expect(thumbnailAllowed({ type: 'file', name: 'a.png', mediaType: 'image/png', size: 4 * 1024 * 1024 })).toBe(false)
+  it('rejects images above 50 MB, unknown sizes, non-images and folders', () => {
+    expect(thumbnailAllowed({ type: 'file', name: 'a.png', mediaType: 'image/png', size: 51 * 1024 * 1024 })).toBe(false)
     expect(thumbnailAllowed({ type: 'file', name: 'a.png', mediaType: 'image/png' })).toBe(false)
     expect(thumbnailAllowed({ type: 'file', name: 'a.pdf', mediaType: 'application/pdf', size: 10 })).toBe(false)
     expect(thumbnailAllowed({ type: 'folder', name: 'Docs', size: 0 })).toBe(false)

@@ -1,25 +1,37 @@
 <script setup lang="ts">
 import { useIntersectionObserver } from '@vueuse/core'
 import type { DriveEntry } from '#layers/drive/shared/types/drive'
-import { downloadUrl, entryIcon, entryVersion, thumbnailAllowed } from '../../utils/drive'
+import { imageSrcset, imageUrl } from '#layers/image/app/utils/image-url'
+import { entryIcon, entryVersion, thumbnailAllowed, THUMBNAIL_TILE_WIDTH } from '../../utils/drive'
 import type { ThumbnailSlot } from '../../utils/thumbnail-queue'
 import { useThumbnailQueue } from '../../composables/useThumbnailQueue'
+import { driveImageId } from '../../../shared/drive-image'
 
 const props = defineProps<{
   entry: DriveEntry
   service: string
+  /** Width of the 1x derivative; the 2x candidate doubles it. */
+  width?: number
 }>()
 
-// The tile is only watched once it is on screen, and the thumbnail is queued so
-// at most a couple load at a time — the provider serializes CLI calls.
+// The tile is only watched once it is on screen, and the derivative is queued
+// so at most a couple load at a time — the provider serializes CLI calls.
 const root = ref<HTMLElement>()
-const src = ref<string>()
+const loaded = ref(false)
 const queue = useThumbnailQueue()
 
 const allowed = computed(() => thumbnailAllowed(props.entry))
-const url = computed(() => downloadUrl(props.service, [props.entry.path], {
-  inline: true,
-  version: entryVersion(props.entry)
+const id = computed(() => driveImageId(props.service, props.entry.path))
+const width = computed(() => props.width ?? THUMBNAIL_TILE_WIDTH)
+const src = computed(() => imageUrl('drive', id.value, {
+  width: width.value,
+  fit: 'fill',
+  v: entryVersion(props.entry)
+}))
+const srcset = computed(() => imageSrcset('drive', id.value, {
+  width: width.value,
+  fit: 'fill',
+  v: entryVersion(props.entry)
 }))
 
 const isIntersecting = ref(false)
@@ -32,7 +44,7 @@ let release: (() => void) | undefined
 let cancelled = false
 
 function start() {
-  if (src.value || slot) {
+  if (loaded.value || slot) {
     return
   }
   cancelled = false
@@ -43,14 +55,14 @@ function start() {
       done()
       return
     }
-    src.value = url.value
+    loaded.value = true
   })
 }
 
 // Leaving the viewport before the load starts drops the request; once bytes are
 // on their way they are kept, so scrolling back does not fetch them again.
 function stop() {
-  if (src.value) {
+  if (loaded.value) {
     return
   }
   cancelled = true
@@ -79,8 +91,9 @@ onUnmounted(stop)
 <template>
   <div ref="root" class="size-full">
     <img
-      v-if="src"
+      v-if="loaded"
       :src="src"
+      :srcset="srcset"
       :alt="entry.name"
       loading="lazy"
       decoding="async"
