@@ -40,6 +40,16 @@ describe('isPublicApiPath', () => {
     expect(isPublicApiPath('/api/auth/state/anything')).toBe(false)
   })
 
+  it('leaves only the image source endpoint public, not the derivative endpoint', () => {
+    expect(isPublicApiPath('/api/image-source/drive/svc/my-files/a.png')).toBe(true)
+    expect(isPublicApiPath('/api/image-source/drive/svc/my-files/a.png?v=1-2&sig=x')).toBe(true)
+
+    expect(isPublicApiPath('/api/image-source')).toBe(false)
+    expect(isPublicApiPath('/api/image-sourcex/drive/svc/a.png')).toBe(false)
+    expect(isPublicApiPath('/api/img/drive/svc/my-files/a.png')).toBe(false)
+    expect(isPublicApiPath('/api/image-source/../services')).toBe(false)
+  })
+
   it('ignores a query string and a trailing slash', () => {
     expect(isPublicApiPath('/api/auth/login?redirect=/services')).toBe(true)
     expect(isPublicApiPath('/api/auth/login#form')).toBe(true)

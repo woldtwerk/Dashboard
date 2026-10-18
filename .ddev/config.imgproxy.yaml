@@ -1,0 +1,13 @@
+# imgproxy environment for the web container.
+#
+# The app reads derivatives from the caching proxy, never from imgproxy itself:
+# `imgproxy-cache` is the only container of the pair the app addresses, and it
+# keeps the rendered bytes. The browser never uses either host directly — it
+# asks /api/img, which is behind the login and streams from the cache.
+web_environment:
+  - NUXT_IMGPROXY_URL=http://imgproxy-cache
+  # The origin imgproxy fetches originals from. Inside the project network the
+  # app is `web`, and Nuxt listens on 3000 there (config.yaml: container_port
+  # 3000; the dev server is started with --host 0.0.0.0), so the source route is
+  # reachable at web:3000. This is also what IMGPROXY_ALLOWED_SOURCES names.
+  - NUXT_IMAGE_SOURCE_URL=http://web:3000

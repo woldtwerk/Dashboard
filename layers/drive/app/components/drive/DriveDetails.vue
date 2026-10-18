@@ -1,7 +1,10 @@
 <script setup lang="ts">
+import { breakpointsTailwind } from '@vueuse/core'
 import type { DriveEntry } from '#layers/drive/shared/types/drive'
+import { imageSrcset, imageUrl } from '#layers/image/app/utils/image-url'
 import { downloadUrl, entryKindLabel, entryVersion, formatDate, formatSize, previewKind } from '../../utils/drive'
 import { driveRequest } from '../../utils/drive-request'
+import { driveImageId } from '../../../shared/drive-image'
 
 const open = defineModel<boolean>('open', { required: true })
 
@@ -15,8 +18,31 @@ const emit = defineEmits<{
   share: []
 }>()
 
+// The slideover fills the screen on phones and is a 28rem panel from `md` up,
+// so the browser picks a derivative from that range — never a fixed breakpoint.
+const { md } = breakpointsTailwind
+const PREVIEW_WIDTHS = [384, 768, 1024, 1536]
+const previewSizes = `(min-width: ${md}px) 28rem, 100vw`
+
 const kind = computed(() => props.entry ? previewKind(props.entry) : undefined)
 const previewUrl = computed(() => props.entry ? downloadUrl(props.service, [props.entry.path], { inline: true, version: entryVersion(props.entry) }) : '')
+// Images are rendered by imgproxy at the panel's size instead of at the
+// original's; PDF, video, audio and text keep streaming the file itself.
+const imagePreviewUrl = computed(() => props.entry
+  ? imageUrl('drive', driveImageId(props.service, props.entry.path), {
+      width: 1024,
+      fit: 'fit',
+      v: entryVersion(props.entry)
+    })
+  : '')
+const imagePreviewSrcset = computed(() => props.entry
+  ? imageSrcset('drive', driveImageId(props.service, props.entry.path), {
+      width: 1024,
+      fit: 'fit',
+      v: entryVersion(props.entry),
+      widths: PREVIEW_WIDTHS
+    })
+  : '')
 const text = ref<string>()
 
 watch(() => props.entry?.path, async () => {
@@ -53,7 +79,9 @@ const rows = computed(() => {
         <div class="flex h-56 items-center justify-center overflow-hidden rounded-lg border border-default bg-elevated text-muted">
           <img
             v-if="kind === 'image'"
-            :src="previewUrl"
+            :src="imagePreviewUrl"
+            :srcset="imagePreviewSrcset"
+            :sizes="previewSizes"
             :alt="entry.name"
             class="max-h-full max-w-full object-contain"
           >

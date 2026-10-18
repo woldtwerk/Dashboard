@@ -1,0 +1,14 @@
+{
+  "name": "@allmight/image",
+  "private": true,
+  "type": "module",
+  "description": "Image derivatives through imgproxy: request normalization, URL signing, a source registry and the proxying API. imgproxy (MIT, ghcr.io/imgproxy/imgproxy) and its nginx cache (BSD-2) run as unmodified container images.",
+  "main": "./nuxt.config.ts",
+  "dependencies": {
+    "@allmight/core": "workspace:*",
+    "h3": "catalog:"
+  },
+  "peerDependencies": {
+    "nuxt": "catalog:"
+  }
+}

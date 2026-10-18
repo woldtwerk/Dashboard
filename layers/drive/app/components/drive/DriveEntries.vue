@@ -3,7 +3,7 @@ import type { DropdownMenuItem } from '@nuxt/ui'
 import type { ComponentPublicInstance } from 'vue'
 import type { DriveEntry, DriveView } from '#layers/drive/shared/types/drive'
 import type { SelectionMode } from '../../utils/drive'
-import { formatDate, formatSize } from '../../utils/drive'
+import { formatDate, formatSize, THUMBNAIL_ICON_WIDTH, THUMBNAIL_TILE_WIDTH } from '../../utils/drive'
 
 const props = defineProps<{
   entries: DriveEntry[]
@@ -128,7 +128,7 @@ function onRootDrop(event: DragEvent) {
           </div>
 
           <div class="mt-4 flex size-14 items-center justify-center overflow-hidden rounded-lg bg-elevated text-muted">
-            <DriveEntryIcon :entry="entry" :service="service" />
+            <DriveEntryIcon :entry="entry" :service="service" :width="THUMBNAIL_TILE_WIDTH" />
           </div>
 
           <div class="w-full min-w-0">
@@ -189,7 +189,7 @@ function onRootDrop(event: DragEvent) {
 
           <div class="flex min-w-0 items-center gap-3">
             <div class="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-md bg-elevated text-muted">
-              <DriveEntryIcon :entry="entry" :service="service" />
+              <DriveEntryIcon :entry="entry" :service="service" :width="THUMBNAIL_ICON_WIDTH" />
             </div>
             <input
               v-if="renamePath === entry.path"

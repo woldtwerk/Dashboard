@@ -1,0 +1,58 @@
+# Caching reverse proxy in front of imgproxy.
+#
+# imgproxy has no cache of its own: every request re-decodes the original and
+# re-encodes the derivative, which is the expensive part. This is the only thing
+# in front of it, so a hit here is what keeps that from happening twice.
+#
+# nginx rather than Caddy: a byte budget for the cache is what Caddy has no
+# module for. `max_size` below is stock nginx, and its cache manager evicts
+# least recently used entries on its own.
+#
+# Unlike the Drupal deployment this is modelled on, the cache is not routed: the
+# browser talks to the app's `/api/img` endpoint, which is behind the login, and
+# the app fetches from this container inside the project network. imgproxy is
+# reachable only through the cache, so nothing can bypass it.
+#
+# The `${IMGPROXY_*}` placeholders are substituted by the entrypoint of the nginx
+# image. Only variables starting with IMGPROXY_ are touched
+# (NGINX_ENVSUBST_FILTER), so nginx's own `$upstream_cache_status` and friends
+# survive.
+proxy_cache_path /var/cache/imgproxy
+                 levels=1:2
+                 keys_zone=imgproxy:${IMGPROXY_CACHE_KEYS_ZONE}
+                 max_size=${IMGPROXY_CACHE_SIZE}
+                 inactive=${IMGPROXY_CACHE_INACTIVE}
+                 use_temp_path=off;
+
+# Named default.conf.template on purpose: the entrypoint renders it to
+# conf.d/default.conf and so replaces the server block the image ships.
+server {
+    listen ${IMGPROXY_CACHE_PORT} default_server;
+    server_name _;
+
+    # Derivative URLs are immutable — a different crop is a different path — so
+    # nothing here ever needs to be purged.
+    location / {
+        proxy_pass http://${IMGPROXY_UPSTREAM};
+
+        proxy_cache imgproxy;
+        # imgproxy sends its own Cache-Control (a year), which nginx honours;
+        # these only cover a response that carries none.
+        proxy_cache_valid 200 30d;
+        proxy_cache_valid 404 1m;
+
+        # imgproxy answers with AVIF or WebP depending on the Accept header of
+        # the request and says so with `Vary: Accept`, which nginx honours: one
+        # entry per variant, so a client that cannot read AVIF is never handed
+        # one from the cache.
+        proxy_set_header Accept $http_accept;
+
+        # One render per key while it is cold: the other waiters get the stored
+        # copy instead of each starting their own resize.
+        proxy_cache_lock on;
+        proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+        proxy_cache_background_update on;
+
+        add_header X-Cache-Status $upstream_cache_status always;
+    }
+}
