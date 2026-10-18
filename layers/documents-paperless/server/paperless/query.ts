@@ -3,6 +3,40 @@ import { DEFAULT_SORT } from '../../../documents/shared/documents-query'
 
 const STRING_TYPES: DocumentsCustomFieldType[] = ['string', 'url', 'monetary', 'longtext']
 
+/**
+ * Whoosh already treats the query as syntax when it carries one of these:
+ * a double quote, a wildcard, a `field:` prefix, parentheses, or a boolean
+ * operator as a whole word. Such a query is meant literally as written.
+ */
+const WHOOSH_SYNTAX = /["*?()]|\b(?:AND|OR|NOT)\b|\w+:/
+
+/** Characters Whoosh reads as syntax; dropped from plain terms. */
+const WHOOSH_SPECIAL = /[\^~[\]{}:\\/!+]/g
+
+/**
+ * The Paperless full-text query for a plain user search.
+ *
+ * Paperless' Whoosh index matches whole words, so `zeugnis` misses
+ * `Zwischenzeugnis`. A query already written in Whoosh syntax is passed
+ * through unchanged; otherwise every term of three or more characters becomes
+ * `(term OR *term*)`, which keeps the exact word's ranking and highlights
+ * while still matching it as part of a longer word. Shorter terms are left
+ * alone. Syntax characters are stripped from plain terms so user text cannot
+ * produce a parser error.
+ */
+export function toPaperlessFullText(text: string): string {
+  if (WHOOSH_SYNTAX.test(text)) {
+    return text
+  }
+
+  return text
+    .split(/\s+/)
+    .map(term => term.replace(WHOOSH_SPECIAL, '').replace(/^[-+]+/, ''))
+    .filter(Boolean)
+    .map(term => (term.length >= 3 ? `(${term} OR *${term}*)` : term))
+    .join(' AND ')
+}
+
 function customFieldValue(type: DocumentsCustomFieldType, raw: string): string | number | boolean {
   if (type === 'boolean') {
     return raw === 'true' || raw === '1'
@@ -47,7 +81,7 @@ export function toPaperlessParams(query: DocumentsQuery, customField?: Documents
   }
 
   if (query.text) {
-    params.query = query.text
+    params.query = toPaperlessFullText(query.text)
   }
   if (query.moreLikeId) {
     params.more_like_id = String(query.moreLikeId)
