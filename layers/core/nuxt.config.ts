@@ -5,12 +5,24 @@ import { fileURLToPath } from 'node:url'
 export default defineNuxtConfig({
   modules: [
     '@nuxt/ui',
-    '@vueuse/nuxt'
+    '@vueuse/nuxt',
+    'nuxt-auth-utils'
   ],
 
   css: [fileURLToPath(new URL('./app/assets/css/main.css', import.meta.url))],
 
   runtimeConfig: {
+    // Sealed session cookie; its password comes from NUXT_SESSION_PASSWORD.
+    // maxAge/httpOnly/sameSite are what the login expects, the module already
+    // defaults to httpOnly + secure + sameSite=lax.
+    session: {
+      maxAge: 60 * 60 * 24 * 30,
+      cookie: {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: true
+      }
+    },
     database: {
       // NUXT_DATABASE_PATH — SQLite file, relative to the working directory
       path: '.data/allmight.sqlite'

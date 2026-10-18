@@ -3,7 +3,7 @@ import { refDebounced, useDebounceFn } from '@vueuse/core'
 import type { DropdownMenuItem } from '@nuxt/ui'
 import type { DriveEntry, DriveInvitation, DriveOrder, DriveSort, DriveView } from '#layers/drive/shared/types/drive'
 import type { DriveSelectionAction } from '../utils/selection-action'
-import { isWithinPath, joinPath, parentPath } from '#layers/drive/shared/drive-path'
+import { breadcrumbs, isWithinPath, joinPath, parentPath } from '#layers/drive/shared/drive-path'
 import { DRIVE_SECTIONS, downloadUrl, filterEntries, sectionByKey, sectionOf, sortEntries } from '../utils/drive'
 import { driveRequest } from '../utils/drive-request'
 
@@ -45,9 +45,33 @@ watch(() => queryString('q'), (value) => {
   }
 })
 
+const nuxtApp = useNuxtApp()
+const contentsKey = computed(() => `drive:${service.value}:${path.value}`)
+
+// A visited or prefetched folder is read straight from the payload, so it shows
+// at once and still revalidates in the background. A manual refresh always
+// fetches, so the refresh button is not answered by the cache.
 const { data: entries, status, error, refresh } = await useFetch<DriveEntry[]>('/api/drive/contents', {
   query: computed(() => ({ service: service.value, path: path.value })),
-  default: () => []
+  key: contentsKey,
+  default: () => [],
+  getCachedData(key, app, ctx) {
+    if (ctx.cause === 'refresh:manual') {
+      return undefined
+    }
+    return app.payload.data[key] ?? app.static.data[key]
+  }
+})
+
+// Only a first, dataless load may show a spinner; a revalidation keeps the list
+const loading = computed(() => status.value === 'pending' && !entries.value.length)
+
+// A cached listing is shown at once, which makes Nuxt skip the request; refresh
+// it in the background anyway, so a folder changed elsewhere is not stale.
+watch(contentsKey, () => {
+  if (import.meta.client && nuxtApp.payload.data[contentsKey.value] !== undefined) {
+    refresh()
+  }
 })
 
 const visible = computed(() => sortEntries(filterEntries(entries.value, debouncedSearch.value), sort.value, order.value))
@@ -64,25 +88,34 @@ useDomainEvents({ domains: ['drive'] }, (event) => {
 
 // --- Prefetch -------------------------------------------------------------
 
-const prefetched = new Map<string, DriveEntry[]>()
+// A hover or a press on a folder tile loads its listing into the Nuxt payload,
+// so opening it shows the cached answer immediately.
+const prefetched = new Set<string>()
 
-function prefetch(entry: DriveEntry) {
-  if (!import.meta.client || entry.type !== 'folder') {
+function prefetchPath(target: string) {
+  if (!import.meta.client) {
     return
   }
-  const key = `${service.value}:${entry.path}`
-  if (prefetched.has(key)) {
+  const key = `drive:${service.value}:${target}`
+  if (nuxtApp.payload.data[key] !== undefined || prefetched.has(key)) {
     return
   }
-  driveRequest<DriveEntry[]>('/api/drive/contents', { query: { service: service.value, path: entry.path } })
-    .then((list) => { prefetched.set(key, list) })
+  prefetched.add(key)
+  driveRequest<DriveEntry[]>('/api/drive/contents', { query: { service: service.value, path: target } })
+    .then((list) => { nuxtApp.payload.data[key] = list })
     .catch(() => {})
 }
 
+function prefetch(entry: DriveEntry) {
+  if (entry.type === 'folder') {
+    prefetchPath(entry.path)
+  }
+}
+
+// The breadcrumb ancestors of the shown folder are the likeliest next step, e.g. "up"
 watch([service, path], () => {
-  const cached = prefetched.get(`${service.value}:${path.value}`)
-  if (cached) {
-    entries.value = cached
+  for (const crumb of breadcrumbs(parentPath(path.value))) {
+    prefetchPath(crumb.path)
   }
 }, { immediate: true })
 
@@ -668,7 +701,7 @@ useEventListener('keydown', (event: KeyboardEvent) => {
       :selected="selection.selected.value"
       :view="view"
       :service="service"
-      :loading="status === 'pending'"
+      :loading="loading"
       :menu-items="menuItems"
       @open="open"
       @select="(entry, mode) => selection.select(entry.path, mode, visiblePaths)"

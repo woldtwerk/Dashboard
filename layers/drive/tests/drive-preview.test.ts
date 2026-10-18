@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { previewContentType } from '../shared/drive-preview'
+import { matchesEtag, previewContentType } from '../shared/drive-preview'
 
 describe('previewContentType', () => {
   it('render PDFs inline', () => {
@@ -41,5 +41,20 @@ describe('previewContentType', () => {
   it('ignores content type parameters', () => {
     expect(previewContentType('text/plain; charset=utf-8', 'x')).toBe('text/plain; charset=utf-8')
     expect(previewContentType('application/pdf; foo=bar', 'x')).toBe('application/pdf')
+  })
+})
+
+describe('matchesEtag', () => {
+  it('matches an exact or weak ETag and a list', () => {
+    expect(matchesEtag('"42"', '"42"')).toBe(true)
+    expect(matchesEtag('W/"42"', '"42"')).toBe(true)
+    expect(matchesEtag('"1", "42"', '"42"')).toBe(true)
+    expect(matchesEtag('*', '"42"')).toBe(true)
+  })
+
+  it('does not match a different or missing ETag', () => {
+    expect(matchesEtag('"43"', '"42"')).toBe(false)
+    expect(matchesEtag(undefined, '"42"')).toBe(false)
+    expect(matchesEtag('', '"42"')).toBe(false)
   })
 })
