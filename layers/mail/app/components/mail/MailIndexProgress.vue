@@ -19,10 +19,10 @@ const progress = computed(() => indexProgress({
   <div v-if="!status.complete" class="space-y-1 border-b border-default px-4 py-2 sm:px-6">
     <p class="flex items-baseline gap-1.5 text-xs text-muted">
       <span class="truncate">
-        <span v-if="name" class="font-medium text-highlighted">{{ name }} · </span>Indexing mail · {{ progress.label }} ({{ progress.percent }} %)
+        <span v-if="name" class="font-medium text-highlighted">{{ name }} · </span>Indexing mail · {{ progress.label }}<template v-if="!progress.indeterminate"> ({{ progress.percent }} %)</template>
       </span>
       <span v-if="status.mailbox" class="shrink-0 truncate text-dimmed">· {{ status.mailbox }}</span>
     </p>
-    <UProgress :model-value="progress.percent" size="xs" />
+    <UProgress :model-value="progress.indeterminate ? null : progress.percent" animation="carousel" size="xs" />
   </div>
 </template>

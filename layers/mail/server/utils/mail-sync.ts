@@ -12,6 +12,8 @@ import type { MailSearchIndex } from './mail-search-index'
 const LOCK_TTL_MS = 5 * 60_000
 const STALE_MS = 2 * 60_000
 const FETCH_BATCH = 25
+/** How long the status waits for a missing total before answering without one */
+const TOTAL_LOOKUP_TIMEOUT_MS = 5_000
 /** SQLite limits bound parameters per statement */
 const SQL_CHUNK = 500
 /** Virtual folders that only repeat messages of other folders */
@@ -60,11 +62,16 @@ interface MailSyncProgress {
 const progressKey = (service: string) => `mail-sync-progress:${service}`
 
 /** Progress is best effort: a storage failure must never fail a sync */
-async function writeSyncProgress(service: string, progress: MailSyncProgress): Promise<void> {
+async function writeSyncProgress(
+  service: string,
+  progress: MailSyncProgress,
+  onError?: (error: unknown) => void
+): Promise<void> {
   try {
     await dashboardStorage().setItem(progressKey(service), progress)
-  } catch {
+  } catch (error) {
     // Without the progress the status falls back to what the database holds
+    onError?.(error)
   }
 }
 
@@ -106,6 +113,18 @@ export async function syncMailService(service: string): Promise<boolean> {
   let ok = false
   let progress: MailSyncProgress | undefined
 
+  // One warning per run: a broken storage is reported, not repeated for every batch
+  let progressWriteFailed = false
+  async function writeProgress(next: MailSyncProgress): Promise<void> {
+    await writeSyncProgress(service, next, (error) => {
+      if (progressWriteFailed) {
+        return
+      }
+      progressWriteFailed = true
+      logger.warn('Could not store sync progress', { error: errorMessage(error) })
+    })
+  }
+
   try {
     const result = await withLock(lockName(service), LOCK_TTL_MS, async ({ renew }) => {
       ran = true
@@ -119,7 +138,7 @@ export async function syncMailService(service: string): Promise<boolean> {
 
         // The folders' message counts give the status a total to measure against
         progress = { total: mailboxes.reduce((sum, mailbox) => sum + mailbox.total, 0), startedAt: startedAt.toISOString() }
-        await writeSyncProgress(service, progress)
+        await writeProgress(progress)
 
         // Folders the server no longer offers, and the ones that became
         // virtual (Bridge's "All Mail"/"Starred"): drop their indexed rows
@@ -132,7 +151,7 @@ export async function syncMailService(service: string): Promise<boolean> {
 
         for (const mailbox of mailboxes) {
           progress.mailbox = mailbox.path
-          await writeSyncProgress(service, progress)
+          await writeProgress(progress)
 
           changed += await syncMailbox({
             service,
@@ -165,7 +184,7 @@ export async function syncMailService(service: string): Promise<boolean> {
       if (progress) {
         // The run is over: keep the total for the next status, drop the folder
         progress = { total: progress.total, startedAt: progress.startedAt }
-        await writeSyncProgress(service, progress)
+        await writeProgress(progress)
       }
     }
   }
@@ -312,6 +331,55 @@ export async function isMailboxIndexed(service: string, mailboxes?: string | str
     : rows.length > 0 && rows.every(row => row.complete)
 }
 
+/**
+ * Resolves a promise, or rejects when it takes longer than `timeoutMs`.
+ * The task keeps running; only the wait is given up.
+ */
+async function withTimeout<T>(task: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      task,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs} ms`)), timeoutMs)
+      })
+    ])
+  } finally {
+    if (timer) {
+      clearTimeout(timer)
+    }
+  }
+}
+
+/** Sum of the messages the provider reports for the folders the sync indexes */
+export async function loadIndexTotal(service: string): Promise<number> {
+  const provider = await useMailProvider(service)
+  const mailboxes = syncMailboxes(await provider.listMailboxes())
+  return mailboxes.reduce((sum, mailbox) => sum + mailbox.total, 0)
+}
+
+/**
+ * The total the index status reports. A stored total wins; without one the
+ * loader is asked, and a failure or a slow provider leaves the total unknown
+ * rather than holding the status. The caller stores the result, so the provider
+ * is not asked again for the next status.
+ */
+export async function resolveIndexTotal(
+  stored: number | null | undefined,
+  load: () => Promise<number>,
+  timeoutMs: number = TOTAL_LOOKUP_TIMEOUT_MS
+): Promise<number | null> {
+  if (stored !== null && stored !== undefined) {
+    return stored
+  }
+
+  try {
+    return await withTimeout(load(), timeoutMs)
+  } catch {
+    return null
+  }
+}
+
 export async function getMailIndexStatus(service: string): Promise<MailIndexStatus> {
   const db = await useDb()
   const [messages, indexed, mailboxes, syncing, progress] = await Promise.all([
@@ -326,11 +394,22 @@ export async function getMailIndexStatus(service: string): Promise<MailIndexStat
   ])
   const syncedAt = mailboxes.map(row => row.syncedAt?.getTime() ?? 0).reduce((a, b) => Math.max(a, b), 0)
 
+  // A running sync that started before progress was stored leaves no total; ask
+  // the provider once and keep the answer for the next status
+  const total = await resolveIndexTotal(progress?.total, () => loadIndexTotal(service))
+  if (total !== null && total !== progress?.total) {
+    await writeSyncProgress(service, {
+      total,
+      mailbox: progress?.mailbox,
+      startedAt: progress?.startedAt ?? new Date().toISOString()
+    })
+  }
+
   return {
     service,
     messages: messages?.count ?? 0,
     indexed: indexed?.count ?? 0,
-    total: progress?.total ?? null,
+    total,
     complete: mailboxes.length > 0 && mailboxes.every(row => row.complete),
     syncing,
     mailbox: syncing ? progress?.mailbox : undefined,
