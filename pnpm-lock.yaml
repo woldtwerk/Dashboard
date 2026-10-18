@@ -209,6 +209,9 @@ catalogs:
     ai:
       specifier: 7.0.127
       version: 7.0.127
+    consola:
+      specifier: 3.4.2
+      version: 3.4.2
     date-fns:
       specifier: ^4.4.0
       version: 4.4.0
@@ -419,6 +422,9 @@ importers:
       '@vueuse/nuxt':
         specifier: 'catalog:'
         version: 15.0.0(@nuxt/schema@4.6.1)(confbox@0.3.1)(dotenv@17.4.2)(giget@3.3.1)(jiti@2.7.0)(magic-string@1.4.3)(mlly@1.8.2)(nuxt@4.6.1(77eba58fd1fbc6c7fc8df3be8a606621))(oxc-parser@0.140.0)(rolldown@1.2.12)(unplugin@3.4.0(esbuild@0.28.0)(rolldown@1.2.12)(rollup@4.60.4)(vite@8.3.2(@types/node@26.6.5)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.47.1)(tsx@4.23.15)(yaml@2.9.0)))(vue@3.5.43(typescript@6.0.3))
+      consola:
+        specifier: 'catalog:'
+        version: 3.4.2
       drizzle-orm:
         specifier: 'catalog:'
         version: 0.45.4

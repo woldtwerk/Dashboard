@@ -39,8 +39,8 @@ export interface DriveProvider {
   setInvitation(uid: string, accept: boolean): Promise<void>
 }
 
-/** Creates a provider from the settings of one service instance */
-export type DriveProviderFactory = (values: SetupValues) => DriveProvider
+/** Creates a provider from the settings of one service instance, named for logs where known */
+export type DriveProviderFactory = (values: SetupValues, serviceId?: string) => DriveProvider
 
 const providers = new Map<string, DriveProviderFactory>()
 
@@ -56,5 +56,5 @@ export async function useDriveProvider(serviceId: string): Promise<DriveProvider
     throw createError({ status: 503, statusText: `Drive provider "${service.connector}" is not available` })
   }
 
-  return factory(service.values)
+  return factory(service.values, serviceId)
 }

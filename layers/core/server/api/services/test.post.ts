@@ -11,7 +11,7 @@ export default defineEventHandler(async (event) => {
   const service = body.service ? await getService(body.service) : undefined
   const values = await resolveSetupValues(connector, body.values, service)
 
-  await connector.test?.(values)
+  await connector.test?.(values, { serviceId: body.service })
 
   return { ok: true }
 })

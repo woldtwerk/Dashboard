@@ -56,8 +56,12 @@ import type {
 /** The API lists are small enough to fetch in one big page for filter dropdowns. */
 const TAXONOMY_PAGE_SIZE = 1000
 
-export function createPaperlessProvider(values: SetupValues): DocumentsProvider {
-  const client: PaperlessClient = createPaperlessClient({ url: String(values.url ?? ''), token: String(values.token ?? '') })
+export function createPaperlessProvider(values: SetupValues, serviceId?: string): DocumentsProvider {
+  const client: PaperlessClient = createPaperlessClient({
+    url: String(values.url ?? ''),
+    token: String(values.token ?? ''),
+    serviceId
+  })
 
   const getCustomField = (id: number) => client.request<PaperlessCustomFieldDto>(`/api/custom_fields/${id}/`).then(toCustomField)
 

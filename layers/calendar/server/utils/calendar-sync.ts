@@ -1,4 +1,4 @@
-import { and, eq, gt, inArray, isNull, lt, or } from 'drizzle-orm'
+import { and, count, eq, gt, inArray, isNull, lt, or } from 'drizzle-orm'
 import type { SqliteRemoteDatabase } from 'drizzle-orm/sqlite-proxy'
 import type { Calendar, CalendarEvent, CalendarSyncStatus } from '../../shared/types/calendar'
 import { calendarCacheSchema } from '../db/cache'
@@ -161,12 +161,20 @@ async function ensureCacheVersion(service: string): Promise<void> {
 }
 
 /** Stores the calendar list, dropping objects of calendars gone from the server. */
-async function syncCollections(service: string, calendars: Calendar[]): Promise<Map<string, string | null>> {
+async function syncCollections(service: string, calendars: Calendar[]): Promise<{ ctags: Map<string, string | null>, removed: number }> {
   const db = await cacheDb()
   const known = await db.select({ url: calendarCollections.url, ctag: calendarCollections.ctag })
     .from(calendarCollections).where(eq(calendarCollections.service, service))
   const remoteUrls = new Set(calendars.map(calendar => calendar.url))
   const gone = known.filter(row => !remoteUrls.has(row.url)).map(row => row.url)
+
+  let removed = 0
+  if (gone.length) {
+    const row = await db.select({ count: count() }).from(calendarObjects)
+      .where(and(eq(calendarObjects.service, service), inArray(calendarObjects.calendarUrl, gone)))
+      .get()
+    removed = row?.count ?? 0
+  }
 
   await write(async (tx) => {
     for (const urls of chunk(gone, SQL_CHUNK)) {
@@ -193,11 +201,11 @@ async function syncCollections(service: string, calendars: Calendar[]): Promise<
     }
   })
 
-  return new Map(known.map(row => [row.url, row.ctag]))
+  return { ctags: new Map(known.map(row => [row.url, row.ctag])), removed }
 }
 
-/** Diffs and refreshes the objects of one calendar. */
-async function syncObjects(service: string, calendar: Calendar, provider: CalendarProvider): Promise<void> {
+/** Diffs and refreshes the objects of one calendar; returns the objects upserted or removed. */
+async function syncObjects(service: string, calendar: Calendar, provider: CalendarProvider): Promise<number> {
   const db = await cacheDb()
   const where = and(eq(calendarObjects.service, service), eq(calendarObjects.calendarUrl, calendar.url))
   const [remote, cached] = await Promise.all([
@@ -255,6 +263,8 @@ async function syncObjects(service: string, calendar: Calendar, provider: Calend
   if (diff.removed.length || changed.length) {
     await publishDomainEvent({ domain: 'calendar', service, type: 'changed', resource: calendar.url })
   }
+
+  return diff.removed.length + changed.length
 }
 
 /**
@@ -263,38 +273,59 @@ async function syncObjects(service: string, calendar: Calendar, provider: Calend
  * @returns false when another worker is already syncing
  */
 export async function syncCalendarService(service: string): Promise<boolean> {
-  const result = await withLock(lockName(service), LOCK_TTL_MS, async ({ renew }) => {
-    try {
-      // A cache stored before the bounds were fixed has to be refetched
-      await ensureCacheVersion(service)
-      const provider = await useCalendarProvider(service)
-      const calendars = await provider.listCalendars()
-      const storedCtags = await syncCollections(service, calendars)
+  const startedAt = new Date()
+  const logger = useServiceLogger('calendar', service)
+  let changed = 0
+  let ran = false
+  let ok = false
 
-      for (const calendar of calendars) {
-        if (!await renew()) {
-          throw new Error(`Lost sync lock for service ${service}`)
+  try {
+    const result = await withLock(lockName(service), LOCK_TTL_MS, async ({ renew }) => {
+      ran = true
+      logger.info('Sync started')
+
+      try {
+        // A cache stored before the bounds were fixed has to be refetched
+        await ensureCacheVersion(service)
+        const provider = await useCalendarProvider(service)
+        const calendars = await provider.listCalendars()
+        const stored = await syncCollections(service, calendars)
+        changed += stored.removed
+
+        for (const calendar of calendars) {
+          if (!await renew()) {
+            logger.warn('Sync lock lost', { calendar: calendar.url })
+            throw new Error(`Lost sync lock for service ${service}`)
+          }
+
+          // Without a ctag there is no cheap way to know: diff every time
+          if (calendar.ctag && stored.ctags.get(calendar.url) === calendar.ctag) {
+            continue
+          }
+
+          changed += await syncObjects(service, calendar, provider)
         }
 
-        // Without a ctag there is no cheap way to know: diff every time
-        if (calendar.ctag && storedCtags.get(calendar.url) === calendar.ctag) {
-          continue
-        }
-
-        await syncObjects(service, calendar, provider)
+        await markSynced(service)
+        await publishDomainEvent({ domain: 'calendar', service, type: 'synced' })
+        ok = true
+        return true
+      } catch (error) {
+        await markFailed(service, error).catch(markError => logger.error('Could not record the sync error', { error: errorMessage(markError) }))
+        await publishDomainEvent({ domain: 'calendar', service, type: 'sync-failed' })
+        logger.error('Sync failed', { error: errorMessage(error) })
+        throw error
       }
+    })
 
-      await markSynced(service)
-      await publishDomainEvent({ domain: 'calendar', service, type: 'synced' })
-      return true
-    } catch (error) {
-      await markFailed(service, error).catch(markError => console.error(`[calendar] Could not record the sync error of ${service}:`, markError))
-      await publishDomainEvent({ domain: 'calendar', service, type: 'sync-failed' })
-      throw error
+    return result ?? false
+  } finally {
+    if (ran) {
+      const durationMs = Date.now() - startedAt.getTime()
+      logger.info('Sync finished', { durationMs, changed })
+      await recordSyncRun({ domain: 'calendar', service, startedAt: startedAt.toISOString(), durationMs, ok, changed })
     }
-  })
-
-  return result ?? false
+  }
 }
 
 /** Starts a background sync when the cache of the service is stale; never waits for it */
@@ -309,7 +340,7 @@ export async function requestCalendarSync(service: string): Promise<void> {
 
   if (!row?.syncedAt || row.version !== CALENDAR_CACHE_VERSION || Date.now() - row.syncedAt.getTime() > STALE_MS) {
     syncCalendarService(service).catch((error) => {
-      console.error(`[calendar] Sync of ${service} failed:`, error)
+      useServiceLogger('calendar', service).error('Background sync failed', { error: errorMessage(error) })
     })
   }
 }

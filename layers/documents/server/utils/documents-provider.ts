@@ -110,8 +110,8 @@ export interface DocumentsProvider {
   removeSavedView(id: number): Promise<void>
 }
 
-/** Creates a provider from the settings of one service instance */
-export type DocumentsProviderFactory = (values: SetupValues) => DocumentsProvider
+/** Creates a provider from the settings of one service instance, named for logs where known */
+export type DocumentsProviderFactory = (values: SetupValues, serviceId?: string) => DocumentsProvider
 
 const providers = new Map<string, DocumentsProviderFactory>()
 
@@ -127,5 +127,5 @@ export async function useDocumentsProvider(serviceId: string): Promise<Documents
     throw createError({ status: 503, statusText: `Documents provider "${service.connector}" is not available` })
   }
 
-  return factory(service.values)
+  return factory(service.values, serviceId)
 }
