@@ -26,6 +26,7 @@ export const protonConnector: Connector = {
         { name: 'user', label: 'IMAP username', type: 'text', required: true },
         { name: 'host', label: 'IMAP host', type: 'text', required: true },
         { name: 'port', label: 'IMAP port', type: 'number', required: true, min: 1, max: 65535 },
+        { name: 'smtpPort', label: 'SMTP port', type: 'number', min: 1, max: 65535 },
         { name: 'password', label: 'IMAP password', type: 'password', secret: true },
         { name: 'tlsCert', label: 'Certificate', type: 'file', required: true }
       ]

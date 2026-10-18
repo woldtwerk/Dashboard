@@ -72,7 +72,44 @@ ensure_pair() {
   fi
 }
 
+# Web Push VAPID key pair. The public key goes to the browser, the private one signs the
+# messages; they belong together, so they are only created while both are missing.
+# Both are base64url without padding, as the Push API expects.
+vapid() {
+  local public private
+  public="$(get "$WEB" NUXT_VAPID_PUBLIC_KEY)"
+  private="$(get "$WEB" NUXT_VAPID_PRIVATE_KEY)"
+
+  if [[ -n "$public" && -n "$private" ]]; then
+    return
+  fi
+  if [[ -n "$public" || -n "$private" ]]; then
+    echo "ensure-secrets: WARNING NUXT_VAPID_PUBLIC_KEY and NUXT_VAPID_PRIVATE_KEY must be created together; left unchanged" >&2
+    return
+  fi
+
+  local key
+  key="$(mktemp)"
+  trap 'rm -f "$key"' RETURN
+
+  openssl ecparam -name prime256v1 -genkey -noout -out "$key"
+  # The private key is the 32-byte scalar behind the DER header; the public key is the
+  # 65-byte uncompressed point at the end of the SubjectPublicKeyInfo
+  private="$(openssl ec -in "$key" -outform DER 2>/dev/null | tail -c +8 | head -c 32 | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+  public="$(openssl ec -in "$key" -pubout -outform DER 2>/dev/null | tail -c 65 | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+
+  rm -f "$key"
+  trap - RETURN
+
+  set_value "$WEB" NUXT_VAPID_PRIVATE_KEY "$private"
+  set_value "$WEB" NUXT_VAPID_PUBLIC_KEY "$public"
+}
+
 ensure "$WEB" NUXT_APP_SECRET
+# nuxt-auth-utils seals the session cookie with this; it requires at least 32 characters
+ensure "$WEB" NUXT_SESSION_PASSWORD
+vapid
+ensure_default "$WEB" NUXT_VAPID_SUBJECT "mailto:admin@allmight.localhost"
 ensure_pair "$MEILI" MEILI_MASTER_KEY "$WEB" NUXT_MEILISEARCH_API_KEY
 ensure_pair "$BRIDGE" BRIDGE_CONTROL_TOKEN "$WEB" NUXT_PROTON_BRIDGE_TOKEN
 ensure_pair "$CARBONATE" CARBONATE_CONTROL_TOKEN "$WEB" NUXT_CARBONATE_TOKEN
