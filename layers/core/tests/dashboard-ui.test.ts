@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { ActivityDay, DashboardMetric } from '../shared/types/dashboard'
+import type { DashboardMetric } from '../shared/types/dashboard'
 import {
-  fillActivityDays,
   formatBytes,
   formatCount,
   formatMetric,
@@ -60,43 +59,6 @@ describe('serviceHealthMeta', () => {
   it('marks syncing as spinning', () => {
     expect(serviceHealthMeta('syncing').spinning).toBe(true)
     expect(serviceHealthMeta('ok').spinning).toBe(false)
-  })
-})
-
-describe('fillActivityDays', () => {
-  const today = new Date('2026-10-18T15:30:00Z')
-  const day = (date: string, domain: string, patch: Partial<ActivityDay> = {}): ActivityDay => ({
-    date,
-    domain,
-    warnings: 0,
-    errors: 0,
-    syncRuns: 0,
-    medianSyncMs: null,
-    ...patch
-  })
-
-  it('fills every day of the range for every domain', () => {
-    const days = [
-      day('2026-10-18', 'mail', { warnings: 2, syncRuns: 1, medianSyncMs: 4000 }),
-      day('2026-10-16', 'calendar', { errors: 1 })
-    ]
-
-    expect(fillActivityDays(days, 3, today, ['mail', 'calendar'])).toEqual([
-      day('2026-10-16', 'mail'),
-      day('2026-10-16', 'calendar', { errors: 1 }),
-      day('2026-10-17', 'mail'),
-      day('2026-10-17', 'calendar'),
-      day('2026-10-18', 'mail', { warnings: 2, syncRuns: 1, medianSyncMs: 4000 }),
-      day('2026-10-18', 'calendar')
-    ])
-  })
-
-  it('drops days outside the range and handles an empty input', () => {
-    expect(fillActivityDays([day('2026-10-01', 'mail', { warnings: 9 })], 2, today, ['mail'])).toEqual([
-      day('2026-10-17', 'mail'),
-      day('2026-10-18', 'mail')
-    ])
-    expect(fillActivityDays([], 7, today, [])).toEqual([])
   })
 })
 

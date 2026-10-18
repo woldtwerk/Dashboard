@@ -2,10 +2,10 @@
 import { addDays, format, parseISO, startOfDay } from 'date-fns'
 import { useDebounceFn } from '@vueuse/core'
 import type { TableColumn } from '@nuxt/ui'
-import type { ActivityDay, DashboardMetric, DashboardSeries, ServiceStatus } from '#layers/core/shared/types/dashboard'
+import type { DashboardMetric, DashboardSeries, ServiceStatus } from '#layers/core/shared/types/dashboard'
 import type { LogEntry } from '#layers/core/shared/types/logs'
 import type { CalendarEvent } from '#layers/calendar/shared/types/calendar'
-import type { BarChartPoint, LineChartSeries, StackedChartRow, StackedChartSeries, SyncDurationRow } from '../utils/chart'
+import type { BarChartPoint } from '../utils/chart'
 
 useSeoMeta({ title: 'Home' })
 
@@ -58,32 +58,6 @@ const { data: documentsSeries, pending: documentsPending, refresh: refreshDocume
 const mailPoints = computed<BarChartPoint[]>(() => (mailSeries.value?.points ?? []).map(point => ({ date: point.date, value: point.value })))
 const documentsPoints = computed<BarChartPoint[]>(() => (documentsSeries.value?.points ?? []).map(point => ({ date: point.date, value: point.value })))
 
-// --- Activity (sync duration, warnings/errors) ---
-
-const { data: activity, refresh: refreshActivity } = useFetch<ActivityDay[]>('/api/logs/activity' as string, {
-  key: 'dashboard-activity',
-  query: computed(() => ({ days: days.value })),
-  lazy: true,
-  default: () => []
-})
-
-const activityDays = computed(() => {
-  const domains = activityDomains(activity.value)
-  return fillActivityDays(activity.value, days.value, now.value, domains)
-})
-
-const sync = computed(() => syncDurationRows(activityDays.value))
-const syncSeries = computed<LineChartSeries[]>(() => sync.value.domains
-  .map(domain => ({ key: domain, label: domainLabel(domain), color: domainColor(domain) })))
-const syncHasData = computed(() => sync.value.rows.some(row => Object.values(row.values).some(value => value != null)))
-
-const warningRows = computed(() => warningErrorRows(activityDays.value))
-const warningSeries: StackedChartSeries[] = [
-  { key: 'warnings', label: 'Warnings', color: statusColor('warning'), icon: 'i-lucide-triangle-alert' },
-  { key: 'errors', label: 'Errors', color: statusColor('critical'), icon: 'i-lucide-circle-alert' }
-]
-const warningsHaveData = computed(() => warningRows.value.some(row => (row.values.warnings ?? 0) > 0 || (row.values.errors ?? 0) > 0))
-
 // --- Recent logs ---
 
 const { data: recentLogs, pending: logsPending } = useFetch<LogEntry[]>('/api/logs' as string, {
@@ -134,47 +108,14 @@ const documentsColumns: TableColumn<Record<string, unknown>>[] = [
 ]
 const documentsRows = computed(() => seriesTableRows(documentsSeries.value).map(point => ({ date: dayLabel(point.date), value: formatCount(point.value) })))
 
-const syncColumns = computed<TableColumn<Record<string, unknown>>[]>(() => [
-  { accessorKey: 'date', header: 'Date' },
-  ...sync.value.domains.map(domain => ({ accessorKey: domain, header: domainLabel(domain) }))
-])
-const syncRows = computed(() => sync.value.rows.map(row => ({
-  date: dayLabel(row.date),
-  ...Object.fromEntries(sync.value.domains.map(domain => [domain, row.values[domain] == null ? '—' : `${row.values[domain]} s`]))
-})))
-
-const warningColumns: TableColumn<Record<string, unknown>>[] = [
-  { accessorKey: 'date', header: 'Date' },
-  { accessorKey: 'warnings', header: 'Warnings' },
-  { accessorKey: 'errors', header: 'Errors' }
-]
-const warningTableRows = computed(() => warningRows.value.map(row => ({
-  date: dayLabel(row.date),
-  warnings: row.values.warnings ?? 0,
-  errors: row.values.errors ?? 0
-})))
-
 // --- Tooltips ---
 
 const mailTooltip = (point: BarChartPoint) => `${longDayLabel(point.date)}: ${formatCount(point.value)}`
-
-function syncTooltip(row: SyncDurationRow): string {
-  const lines = syncSeries.value.map((series) => {
-    const value = row.values[series.key]
-    return `${series.label}: ${value == null ? '—' : `${value} s`}`
-  })
-  return [`<strong>${longDayLabel(row.date)}</strong>`, ...lines].join('<br>')
-}
-
-function warningTooltip(row: StackedChartRow): string {
-  return `${longDayLabel(row.date)}<br>Warnings: ${row.values.warnings ?? 0}<br>Errors: ${row.values.errors ?? 0}`
-}
 
 // --- Live updates ---
 
 const refreshFast = useDebounceFn(() => {
   refreshServices()
-  refreshActivity()
   refreshMail()
 }, 1000)
 const refreshSlow = useDebounceFn(() => {
@@ -191,7 +132,6 @@ useDomainEvents({}, (event) => {
 }, {
   onReconnect: () => {
     refreshServices()
-    refreshActivity()
     refreshMetrics()
   }
 })
@@ -287,49 +227,6 @@ useDomainEvents({}, (event) => {
                 :tick-every="1"
                 :format-tick="dayLabel"
                 :format-tooltip="mailTooltip"
-              />
-              <template #fallback>
-                <USkeleton class="h-60 w-full" />
-              </template>
-            </ClientOnly>
-          </DashboardChartCard>
-
-          <DashboardChartCard
-            title="Sync duration"
-            :empty="!syncHasData"
-            :columns="syncColumns"
-            :rows="syncRows"
-          >
-            <ClientOnly>
-              <DashboardLineChart
-                :rows="sync.rows"
-                :series="syncSeries"
-                label="Median sync duration per domain in seconds"
-                :tick-every="2"
-                :format-tick="dayLabel"
-                :format-tooltip="syncTooltip"
-              />
-              <template #fallback>
-                <USkeleton class="h-60 w-full" />
-              </template>
-            </ClientOnly>
-          </DashboardChartCard>
-
-          <DashboardChartCard
-            title="Warnings and errors"
-            :empty="!warningsHaveData"
-            :columns="warningColumns"
-            :rows="warningTableRows"
-          >
-            <ClientOnly>
-              <DashboardStackedBarChart
-                :rows="warningRows"
-                :series="warningSeries"
-                label="Warnings and errors per day"
-                integer-y
-                :tick-every="2"
-                :format-tick="dayLabel"
-                :format-tooltip="warningTooltip"
               />
               <template #fallback>
                 <USkeleton class="h-60 w-full" />
