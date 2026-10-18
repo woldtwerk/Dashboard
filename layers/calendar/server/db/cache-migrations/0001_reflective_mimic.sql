@@ -1,0 +1,1 @@
+ALTER TABLE `calendar_sync` ADD `version` integer DEFAULT 0 NOT NULL;

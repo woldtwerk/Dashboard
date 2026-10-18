@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { TZDate } from '@date-fns/tz'
 import type { CalendarEvent } from '../shared/types/calendar'
-import { HOUR_HEIGHT, initialScrollHour, layoutDay, monthCell } from '../app/utils/calendar-layout'
+import { HOUR_HEIGHT, allDayLaneEvents, allDayLaneLabel, initialScrollHour, layoutDay, monthCell } from '../app/utils/calendar-layout'
 
 const TZ = 'Europe/Berlin'
 // October is UTC+2 in Berlin
@@ -64,6 +64,42 @@ describe('layoutDay', () => {
     expect(layoutDay([
       event('2026-10-16T00:00:00.000Z', '2026-10-17T00:00:00.000Z', true)
     ], day(16), TZ)).toEqual([])
+  })
+
+  it('leaves a timed event of a day or more out of the grid', () => {
+    expect(layoutDay([
+      event('2026-10-16T07:00:00.000Z', '2026-10-17T07:00:00.000Z')
+    ], day(16), TZ)).toEqual([])
+  })
+
+  it('keeps an event just under a day on the grid', () => {
+    expect(layoutDay([
+      event('2026-10-16T07:00:00.000Z', '2026-10-17T06:00:00.000Z')
+    ], day(16), TZ)).toHaveLength(1)
+  })
+})
+
+describe('allDayLaneEvents', () => {
+  const allDay = event('2026-10-16T00:00:00.000Z', '2026-10-17T00:00:00.000Z', true)
+  const longTimed = event('2026-10-16T00:30:00.000Z', '2026-10-17T01:00:00.000Z')
+  const shortTimed = event('2026-10-16T07:00:00.000Z', '2026-10-16T08:00:00.000Z')
+
+  it('shows all-day events and timed ones of a day or more', () => {
+    const lane = allDayLaneEvents([allDay, longTimed, shortTimed], day(16), TZ)
+    expect(lane.map(item => item.uid)).toEqual([allDay.uid, longTimed.uid])
+  })
+
+  it('leaves out a long timed event on a day it does not reach', () => {
+    expect(allDayLaneEvents([longTimed], day(18), TZ)).toEqual([])
+  })
+
+  it('labels a long timed event with its start time on its first day only', () => {
+    expect(allDayLaneLabel(longTimed, day(16), TZ)).toBe('02:30 x')
+    expect(allDayLaneLabel(longTimed, day(17), TZ)).toBe('x')
+  })
+
+  it('labels an all-day event without a time', () => {
+    expect(allDayLaneLabel(allDay, day(16), TZ)).toBe('x')
   })
 })
 

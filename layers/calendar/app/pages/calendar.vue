@@ -133,7 +133,7 @@ const positionedEvents = (day: Date) => positionedByDay.value.get(dateKey(day, t
 const allDayByDay = computed(() => {
   const byDay = new Map<string, CalendarEvent[]>()
   for (const day of columnDays.value) {
-    byDay.set(dateKey(day, timeZone.value), eventsForDay(visibleEvents.value, day, timeZone.value).filter(event => event.allDay))
+    byDay.set(dateKey(day, timeZone.value), allDayLaneEvents(visibleEvents.value, day, timeZone.value))
   }
   return byDay
 })
@@ -639,7 +639,7 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
               @click.stop="openEvent(event)"
             >
               <span class="size-2 shrink-0 rounded-full" :style="{ backgroundColor: colorOf(event.calendar) || 'currentColor' }" />
-              <span class="truncate">{{ event.title }}</span>
+              <span class="truncate">{{ allDayLaneLabel(event, day, timeZone) }}</span>
             </button>
           </div>
         </div>
