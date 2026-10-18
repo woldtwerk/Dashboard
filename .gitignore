@@ -26,3 +26,6 @@ logs
 # Test builds (NUXT_BUILD_DIR / NUXT_OUTPUT_DIR)
 .nuxt-*
 .output-*
+
+# Git worktrees of parallel coding agents
+.worktrees/

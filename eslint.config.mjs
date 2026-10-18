@@ -6,8 +6,8 @@ import { MatcherType, SelectorKind } from 'eslint-plugin-better-tailwindcss/api/
 
 export default withNuxt(
   {
-    // DDEV config and the container home (incl. Composer vendor files)
-    ignores: ['.ddev/**']
+    // DDEV config, the container home (incl. Composer vendor files) and agent worktrees
+    ignores: ['.ddev/**', '.worktrees/**']
   },
   {
     rules: {

@@ -12,9 +12,21 @@ export default defineNuxtConfig({
   // Test builds use their own directories, so they don't disturb a running dev server
   buildDir: process.env.NUXT_BUILD_DIR || undefined,
 
+  // Worktrees of parallel coding agents are separate apps with their own dev server
+  ignore: ['.worktrees/**'],
+
   compatibilityDate: '2026-06-30',
   nitro: {
     output: process.env.NUXT_OUTPUT_DIR ? { dir: process.env.NUXT_OUTPUT_DIR } : undefined
+  },
+
+  // Their file changes must not restart this dev server
+  vite: {
+    server: {
+      watch: {
+        ignored: ['**/.worktrees/**']
+      }
+    }
   },
 
   eslint: {

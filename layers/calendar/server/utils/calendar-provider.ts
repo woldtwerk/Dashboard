@@ -64,13 +64,15 @@ function toText(value: unknown): string | undefined {
   return undefined
 }
 
-function toCalendar(collection: DAVCalendar): Calendar {
+function toCalendar(collection: DAVCalendar, service: string): Calendar {
   return {
     url: collection.url,
     name: toText(collection.displayName) ?? collection.url.split('/').filter(Boolean).at(-1) ?? 'Calendar',
     color: collection.calendarColor,
     description: toText(collection.description),
-    components: collection.components
+    components: collection.components,
+    hidden: false,
+    service
   }
 }
 
@@ -87,7 +89,7 @@ function objectName(uid: string): string {
   return `${uid.replace(/[^A-Za-z0-9._@-]/g, '_')}.ics`
 }
 
-export function createCalDavProvider(values: SetupValues): CalendarProvider {
+export function createCalDavProvider(values: SetupValues, service = ''): CalendarProvider {
   const settings = toDavSettings(values)
 
   // One discovery and one collection listing per provider, which the API
@@ -144,7 +146,7 @@ export function createCalDavProvider(values: SetupValues): CalendarProvider {
 
       return calendars
         .filter(collection => !collection.components || collection.components.includes('VEVENT'))
-        .map(toCalendar)
+        .map(collection => toCalendar(collection, service))
     },
 
     async listEvents(calendarUrl, window) {
@@ -238,5 +240,5 @@ export async function testCalDavConnection(values: SetupValues): Promise<void> {
 export async function useCalendarProvider(serviceId: string): Promise<CalendarProvider> {
   const service = await getService(serviceId, 'calendar')
 
-  return createCalDavProvider(service.values)
+  return createCalDavProvider(service.values, serviceId)
 }

@@ -7,8 +7,10 @@ export interface Calendar {
   description?: string
   /** Supported iCalendar components, e.g. VEVENT, VTODO */
   components?: string[]
-  /** Service that owns the calendar; set when results span services */
-  service?: string
+  /** Hidden in the calendar view; persisted server side */
+  hidden: boolean
+  /** Service that owns the calendar */
+  service: string
   serviceName?: string
   icon?: string
 }
@@ -69,4 +71,15 @@ export interface CalendarList {
 export interface CalendarSelection {
   service: string
   calendar: string
+}
+
+/** Background sync state of one calendar service */
+export interface CalendarSyncStatus {
+  service: string
+  /** A sync is running on some worker */
+  syncing: boolean
+  /** ISO time of the last completed sync; null before the first one */
+  syncedAt: string | null
+  /** Last sync error, if the most recent run failed */
+  error?: string
 }
