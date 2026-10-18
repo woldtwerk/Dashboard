@@ -19,6 +19,7 @@ const items = computed<SelectItem[][]>(() => buildModelChoices(props.services))
   <USelectMenu
     v-model="model"
     :items="items"
+    :filter-fields="['label', 'description']"
     :loading="loading"
     :disabled="disabled"
     value-key="value"

@@ -3,6 +3,8 @@ import type { AiModelInfo, AiModelSelection, AiServiceModels } from './types/ai'
 /** A model option; its select value is the `serviceId:modelId` pair stored in the URL. */
 export interface AiModelOption {
   label: string
+  /** The model id, shown below the label and searchable */
+  description: string
   value: string
   serviceId: string
   modelId: string
@@ -59,6 +61,7 @@ export function buildModelChoices(services: AiServiceModels[]): AiModelSelectIte
     .map((service) => {
       const options: AiModelOption[] = service.models.map(model => ({
         label: model.label,
+        description: model.id,
         value: `${service.service.id}:${model.id}`,
         serviceId: service.service.id,
         modelId: model.id

@@ -3,6 +3,9 @@ packages:
 
 # Single source of versions; packages reference them as "catalog:"
 catalog:
+  '@ai-sdk/anthropic': 4.0.82
+  '@ai-sdk/google': 4.0.99
+  '@ai-sdk/openai': 4.0.96
   '@ai-sdk/openai-compatible': 3.0.62
   '@ai-sdk/vue': 4.0.127
   '@nuxt/kit': ^4.6.1

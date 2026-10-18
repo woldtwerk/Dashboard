@@ -5,6 +5,9 @@
   "description": "AI connectors for OpenAI-compatible APIs: OpenCode (Go/Zen) and any other endpoint, e.g. Ollama",
   "main": "./nuxt.config.ts",
   "dependencies": {
+    "@ai-sdk/anthropic": "catalog:",
+    "@ai-sdk/google": "catalog:",
+    "@ai-sdk/openai": "catalog:",
     "@ai-sdk/openai-compatible": "catalog:",
     "@allmight/ai": "workspace:*",
     "@allmight/core": "workspace:*",

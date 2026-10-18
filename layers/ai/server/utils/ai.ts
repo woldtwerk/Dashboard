@@ -18,7 +18,7 @@ export interface AiModelOptions {
 }
 
 /** Creates a model from the settings of one AI service */
-export type AiProviderFactory = (values: SetupValues, options: AiModelOptions) => AiModel
+export type AiProviderFactory = (values: SetupValues, options: AiModelOptions) => AiModel | Promise<AiModel>
 
 export interface AiProvider {
   create: AiProviderFactory
@@ -36,12 +36,12 @@ export function getAiProvider(connector: string): AiProvider | undefined {
   return providers.get(connector)
 }
 
-export function createAiModel(connector: string, values: SetupValues, options: AiModelOptions = {}): AiModel {
+export async function createAiModel(connector: string, values: SetupValues, options: AiModelOptions = {}): Promise<AiModel> {
   const provider = providers.get(connector)
   if (!provider) {
     throw createError({ status: 503, statusText: `AI provider "${connector}" is not available` })
   }
-  return provider.create(values, options)
+  return await provider.create(values, options)
 }
 
 /** Whether a string contains ASCII control characters */
@@ -63,7 +63,7 @@ interface CachedModels {
 }
 
 // Redis when mounted (shared by all cluster workers), else the default Nitro storage
-function modelsStorage() {
+export function modelsStorage() {
   const storage = useStorage()
   return storage.getMounts().some(mount => mount.base === 'redis') ? useStorage('redis') : storage
 }
@@ -71,7 +71,7 @@ function modelsStorage() {
 // Keyed by service and a hash of its base URL, so neither the API key nor the URL lands in the cache
 function modelsCacheKey(service: { id: string, values: SetupValues }): string {
   const hash = createHash('sha256').update(String(service.values.baseUrl ?? '')).digest('hex').slice(0, 16)
-  return `ai:models:${service.id}:${hash}`
+  return `ai:models:v2:${service.id}:${hash}`
 }
 
 async function readCachedModels(service: { id: string, values: SetupValues }): Promise<AiModelInfo[] | undefined> {
@@ -178,5 +178,5 @@ export async function useAiModel(options: UseAiModelOptions = {}): Promise<AiMod
     values = { ...values, model: parsed.data }
   }
 
-  return createAiModel(service.connector, values, modelOptions)
+  return await createAiModel(service.connector, values, modelOptions)
 }

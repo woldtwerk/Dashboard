@@ -68,7 +68,7 @@ export const openCodeConnector: Connector = {
     }]
   },
 
-  test: values => testModel(createOpenCodeModel(values, { session: 'allmight-setup-test' }))
+  test: async values => testModel(await createOpenCodeModel(values, { session: 'allmight-setup-test' }))
 }
 
 export const openAICompatibleConnector: Connector = {

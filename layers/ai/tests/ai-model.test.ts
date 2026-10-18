@@ -85,20 +85,32 @@ describe('buildModelChoices', () => {
     expect(buildModelChoices(services)).toEqual([
       [
         { type: 'label', label: 'Work' },
-        { label: 'glm-5.3', value: 'svc-a:glm-5.3', serviceId: 'svc-a', modelId: 'glm-5.3' },
-        { label: 'kimi-k3', value: 'svc-a:kimi-k3', serviceId: 'svc-a', modelId: 'kimi-k3' }
+        { label: 'glm-5.3', description: 'glm-5.3', value: 'svc-a:glm-5.3', serviceId: 'svc-a', modelId: 'glm-5.3' },
+        { label: 'kimi-k3', description: 'kimi-k3', value: 'svc-a:kimi-k3', serviceId: 'svc-a', modelId: 'kimi-k3' }
       ],
       [
         { type: 'label', label: 'Local' },
-        { label: 'qwen3:8b', value: 'svc-b:qwen3:8b', serviceId: 'svc-b', modelId: 'qwen3:8b' }
+        { label: 'qwen3:8b', description: 'qwen3:8b', value: 'svc-b:qwen3:8b', serviceId: 'svc-b', modelId: 'qwen3:8b' }
       ]
     ])
   })
 
+  it('keeps a catalog name as the label and the model id as the description', () => {
+    const named: AiServiceModels[] = [{
+      service: { id: 'svc-a', name: 'OpenCode' },
+      defaultModel: 'deepseek-v4.1-flash',
+      models: [{ id: 'deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash' }]
+    }]
+
+    expect(buildModelChoices(named)).toEqual([[
+      { label: 'DeepSeek V4.1 Flash', description: 'deepseek-v4.1-flash', value: 'svc-a:deepseek-v4.1-flash', serviceId: 'svc-a', modelId: 'deepseek-v4.1-flash' }
+    ]])
+  })
+
   it('omits the group label for a single service', () => {
     expect(buildModelChoices([services[0]!])).toEqual([[
-      { label: 'glm-5.3', value: 'svc-a:glm-5.3', serviceId: 'svc-a', modelId: 'glm-5.3' },
-      { label: 'kimi-k3', value: 'svc-a:kimi-k3', serviceId: 'svc-a', modelId: 'kimi-k3' }
+      { label: 'glm-5.3', description: 'glm-5.3', value: 'svc-a:glm-5.3', serviceId: 'svc-a', modelId: 'glm-5.3' },
+      { label: 'kimi-k3', description: 'kimi-k3', value: 'svc-a:kimi-k3', serviceId: 'svc-a', modelId: 'kimi-k3' }
     ]])
   })
 
