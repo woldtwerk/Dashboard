@@ -137,4 +137,28 @@ describe('createPaperlessProvider', () => {
     expect(ping.url).toContain('page_size=1')
     expect(ping.url).toContain('fields=id')
   })
+
+  it('lists documents added after a timestamp for the sweep', async () => {
+    const calls = setupFetch()
+    const provider = createPaperlessProvider({ url: 'http://paperless:8000', token: 'secret' })
+
+    const documents = await provider.listAdded('2026-10-18T08:00:00.000Z', 50)
+
+    expect(documents[0]!.title).toBe('Rechnung 2026')
+    const sweep = calls.find(call => call.url.includes('added__gt='))!
+    expect(sweep.url).toContain('ordering=-added')
+    expect(sweep.url).toContain('page_size=50')
+    expect(decodeURIComponent(sweep.url)).toContain('added__gt=2026-10-18T08:00:00.000Z')
+  })
+
+  it('lists the newest documents without a since timestamp', async () => {
+    const calls = setupFetch()
+    const provider = createPaperlessProvider({ url: 'http://paperless:8000', token: 'secret' })
+
+    await provider.listAdded(null, 10)
+
+    const sweep = calls.find(call => call.url.includes('page_size=10'))!
+    expect(sweep.url).toContain('ordering=-added')
+    expect(sweep.url).not.toContain('added__gt=')
+  })
 })

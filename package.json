@@ -11,7 +11,7 @@
     "lint": "eslint .",
     "typecheck": "nuxt typecheck",
     "test": "vitest run",
-    "db:generate": "drizzle-kit generate && drizzle-kit generate --config drizzle.calendar.config.ts && drizzle-kit generate --config drizzle.logs.config.ts"
+    "db:generate": "drizzle-kit generate && drizzle-kit generate --config drizzle.calendar.config.ts && drizzle-kit generate --config drizzle.logs.config.ts && drizzle-kit generate --config drizzle.automation.config.ts"
   },
   "dependencies": {
     "@iconify-json/lucide": "catalog:",

@@ -1,0 +1,30 @@
+# Laya decision server for local, rule-based AI decisions (mail sort/label/flag,
+# document tag/correspondent/type). Nothing leaves the machine: the model runs here
+# and the weights live on the `laya-models` volume.
+#
+# API key: LAYA_API_KEY in .ddev/.env.laya, the same value as NUXT_LAYA_API_KEY in
+# .ddev/.env.web (both gitignored, paired by ensure-secrets.sh).
+services:
+  laya:
+    container_name: ddev-${DDEV_SITENAME}-laya
+    build: ./laya
+    image: ddev-${DDEV_SITENAME}-laya
+    hostname: laya
+    labels:
+      com.ddev.site-name: ${DDEV_SITENAME}
+      com.ddev.approot: $DDEV_APPROOT
+    restart: "no"
+    # Only reachable inside the project network; no host port is published.
+    expose:
+      - 8000
+    environment:
+      - LAYA_API_KEY=${LAYA_API_KEY:-}
+    volumes:
+      # Model weights and the Hugging Face cache; survives container rebuilds.
+      - "laya-models:/home/laya/.cache/huggingface"
+    x-ddev:
+      describe-info: |
+        Local Laya decision server over the Jev /v1/systemone protocol on laya:8000
+
+volumes:
+  laya-models:

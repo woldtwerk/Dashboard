@@ -1,0 +1,247 @@
+import { createError } from 'nuxt/server'
+import { entityKey, parseEntityKey } from '../../../core/shared/entities'
+import type { MailAddress, MailMessage } from '../../../mail/shared/types/mail'
+import { EMPTY_DOCUMENTS_FILTERS } from '../../../documents/shared/types/documents'
+import type { DocumentsDocument } from '../../../documents/shared/types/documents'
+import type { AutomationDomain, AutomationItem } from '../../shared/types/automation'
+import { buildDocumentState, buildMailState } from '../../shared/automation'
+
+/** The mailbox automation watches for new mail */
+export const AUTOMATION_INBOX = 'INBOX'
+
+/** `Name <address>` lines, the form a condition and a decision read */
+export function formatAddresses(addresses: MailAddress[]): string {
+  return addresses
+    .map(address => address.name ? `${address.name} <${address.address ?? ''}>` : address.address ?? '')
+    .filter(Boolean)
+    .join(', ')
+}
+
+function mailItem(service: string, mailbox: string, message: MailMessage): AutomationItem {
+  const from = formatAddresses(message.from)
+
+  return {
+    domain: 'mail',
+    service,
+    key: `${mailbox}|${message.uid}|${message.messageId ?? ''}`,
+    mailbox,
+    uid: message.uid,
+    messageId: message.messageId,
+    unread: message.unread,
+    flagged: message.flagged,
+    fields: { from, subject: message.subject, text: message.text ?? '' },
+    state: buildMailState(from, message.subject, message.text ?? ''),
+    title: message.subject || '(no subject)'
+  }
+}
+
+function documentItem(service: string, document: DocumentsDocument, correspondentName?: string): AutomationItem {
+  return {
+    domain: 'documents',
+    service,
+    key: String(document.id),
+    documentId: document.id,
+    fields: {
+      title: document.title,
+      correspondent: correspondentName,
+      text: document.content ?? ''
+    },
+    state: buildDocumentState(document.title, document.content ?? ''),
+    title: document.title
+  }
+}
+
+/** The entity key of an item, e.g. `mail:svc:INBOX/1` or `document:svc:42` */
+export function itemRef(item: AutomationItem): string {
+  if (item.domain === 'mail') {
+    return entityKey({ type: 'mail', service: item.service, id: `${item.mailbox ?? AUTOMATION_INBOX}/${item.uid ?? 0}` })
+  }
+  return entityKey({ type: 'document', service: item.service, id: item.key })
+}
+
+/**
+ * New mail to evaluate: the newest messages of a mailbox, with their bodies. Each
+ * item carries the fields the conditions test and the text the engine reads.
+ */
+export async function loadMailItems(service: string, limit: number, mailbox = AUTOMATION_INBOX): Promise<AutomationItem[]> {
+  const provider = await useMailProvider(service)
+  const summaries = await provider.listMessages(mailbox, { limit })
+  const items: AutomationItem[] = []
+
+  for (const summary of summaries) {
+    const message = await provider.getMessage(mailbox, summary.uid)
+    if (message) {
+      items.push(mailItem(service, mailbox, message))
+    }
+  }
+
+  return items
+}
+
+/** Documents sitting in the archive's inbox, newest first */
+export async function loadDocumentItems(service: string, limit: number): Promise<AutomationItem[]> {
+  const provider = await useDocumentsProvider(service)
+  const page = await provider.list({
+    page: 1,
+    pageSize: limit,
+    sort: 'added',
+    order: 'desc',
+    filters: { ...structuredClone(EMPTY_DOCUMENTS_FILTERS), inbox: true }
+  })
+
+  const correspondents = new Map((await provider.listCorrespondents()).map(entry => [entry.id, entry.name]))
+  return page.results.map(document => documentItem(
+    service,
+    document,
+    document.correspondent !== null ? correspondents.get(document.correspondent) : undefined
+  ))
+}
+
+/** The item loader the engine uses: the trigger's default source */
+export function loadItems(domain: AutomationDomain, service: string, limit: number): Promise<AutomationItem[]> {
+  return domain === 'mail' ? loadMailItems(service, limit) : loadDocumentItems(service, limit)
+}
+
+/**
+ * The items a preview's "Last 50" shows: for mail the newest of the inbox, served
+ * by the search index when one is mounted so it stays cheap; for documents the
+ * newest of the archive.
+ */
+export async function loadRecentItems(domain: AutomationDomain, service: string, limit: number): Promise<AutomationItem[]> {
+  if (domain === 'documents') {
+    const provider = await useDocumentsProvider(service)
+    const page = await provider.list({
+      page: 1,
+      pageSize: limit,
+      sort: 'added',
+      order: 'desc',
+      filters: structuredClone(EMPTY_DOCUMENTS_FILTERS)
+    })
+    const correspondents = new Map((await provider.listCorrespondents()).map(entry => [entry.id, entry.name]))
+    return page.results.map(document => documentItem(
+      service,
+      document,
+      document.correspondent !== null ? correspondents.get(document.correspondent) : undefined
+    ))
+  }
+
+  const index = useMailSearchIndex()
+  if (!index) {
+    return await loadMailItems(service, limit)
+  }
+
+  const provider = await useMailProvider(service)
+  const summaries = await index.search({ services: [service], mailbox: AUTOMATION_INBOX, search: {}, limit })
+  const uids = summaries.filter(summary => summary.service === service).map(summary => summary.uid)
+  if (!uids.length) {
+    return []
+  }
+
+  const messages = await provider.getMessages(AUTOMATION_INBOX, uids)
+  return messages.map(message => mailItem(service, AUTOMATION_INBOX, message))
+}
+
+/** One item addressed by an entity key, for the preview's "Pick an item" */export async function loadItemByRef(ref: string): Promise<AutomationItem> {
+  const parsed = parseEntityKey(ref)
+  const service = parsed?.service
+  if (!parsed || !service) {
+    throw createError({ status: 400, statusText: 'Invalid item reference' })
+  }
+
+  if (parsed.type === 'mail') {
+    const at = parsed.id.lastIndexOf('/')
+    const mailbox = at < 0 ? AUTOMATION_INBOX : parsed.id.slice(0, at)
+    const uid = Number(parsed.id.slice(at + 1))
+    if (!Number.isInteger(uid) || uid <= 0) {
+      throw createError({ status: 400, statusText: 'Invalid mail reference' })
+    }
+    const message = await (await useMailProvider(service)).getMessage(mailbox, uid)
+    if (!message) {
+      throw createError({ status: 404, statusText: 'Mail not found' })
+    }
+    return mailItem(service, mailbox, message)
+  }
+
+  if (parsed.type === 'document') {
+    const id = Number(parsed.id)
+    if (!Number.isInteger(id) || id <= 0) {
+      throw createError({ status: 400, statusText: 'Invalid document reference' })
+    }
+    const provider = await useDocumentsProvider(service)
+    const document = await provider.get(id)
+    const correspondents = await provider.listCorrespondents()
+    const name = document.correspondent !== null
+      ? correspondents.find(entry => entry.id === document.correspondent)?.name
+      : undefined
+    return documentItem(service, document, name)
+  }
+
+  throw createError({ status: 400, statusText: 'The item reference is not a mail or document' })
+}
+
+// --- Safety-net sweep -----------------------------------------------------
+
+export interface SweepItems {
+  items: AutomationItem[]
+  /** The newest timestamp among the listed items, or the old cursor when there was none */
+  cursor: string | null
+}
+
+/** The newest of a set of ISO timestamps, or null when none parses */
+export function maxTimestamp(values: string[]): string | null {
+  let newest: number | null = null
+  let value: string | null = null
+
+  for (const candidate of values) {
+    const ms = Date.parse(candidate)
+    if (Number.isFinite(ms) && (newest === null || ms > newest)) {
+      newest = ms
+      value = candidate
+    }
+  }
+
+  return value
+}
+
+/** Documents added after the cursor, newest first, for the sweep */
+export async function loadDocumentsSince(service: string, since: string | null, limit: number): Promise<SweepItems> {
+  const provider = await useDocumentsProvider(service)
+  const documents = await provider.listAdded(since, limit)
+  const correspondents = new Map((await provider.listCorrespondents()).map(entry => [entry.id, entry.name]))
+
+  return {
+    items: documents.map(document => documentItem(
+      service,
+      document,
+      document.correspondent !== null ? correspondents.get(document.correspondent) : undefined
+    )),
+    cursor: maxTimestamp(documents.map(document => document.added)) ?? since
+  }
+}
+
+/** Inbox mail newer than the cursor, for the sweep */
+export async function loadMailSince(service: string, since: string | null, limit: number): Promise<SweepItems> {
+  const provider = await useMailProvider(service)
+  const index = useMailSearchIndex()
+
+  // The index answers from its own newest-first listing when one is mounted; the
+  // provider listing is the fallback, so the sweep still runs without an index.
+  const summaries = index
+    ? await index.search({ services: [service], mailbox: AUTOMATION_INBOX, search: {}, limit })
+    : await provider.listMessages(AUTOMATION_INBOX, { limit })
+
+  const sinceMs = since ? Date.parse(since) : Number.NaN
+  const uids: number[] = []
+  for (const summary of summaries) {
+    const date = Date.parse(summary.date)
+    if (!Number.isFinite(sinceMs) || date > sinceMs) {
+      uids.push(summary.uid)
+    }
+  }
+
+  const messages = uids.length ? await provider.getMessages(AUTOMATION_INBOX, uids) : []
+  return {
+    items: messages.map(message => mailItem(service, AUTOMATION_INBOX, message)),
+    cursor: maxTimestamp(summaries.map(summary => summary.date)) ?? since
+  }
+}

@@ -88,6 +88,18 @@ export function createPaperlessProvider(values: SetupValues, serviceId?: string)
       return toDocument(await client.request<PaperlessDocumentDto>(`/api/documents/${id}/`))
     },
 
+    async listAdded(since, limit) {
+      const page = await client.request<PaperlessPageDto<PaperlessDocumentDto>>('/api/documents/', {
+        query: {
+          ordering: '-added',
+          page_size: limit,
+          // A full timestamp, not a day: the sweep's cursor must not skip same-day additions
+          ...(since ? { added__gt: since } : {})
+        }
+      })
+      return page.results.map(toDocument)
+    },
+
     async update(id, patch: DocumentsDocumentPatch) {
       return toDocument(await client.request<PaperlessDocumentDto>(`/api/documents/${id}/`, { method: 'PATCH', json: toDocumentPatch(patch) }))
     },

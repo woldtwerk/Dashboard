@@ -216,6 +216,15 @@ export function createProtonMailProvider(values: SetupValues): MailProvider {
       })
     },
 
+    addLabel(mailbox, uid, label) {
+      return withProtonMailbox(settings, mailbox, async (client) => {
+        // Proton labels are IMAP folders under `Labels/`; copying keeps the mail in
+        // its real folder, so the label only adds a second place it is filed under.
+        const result = await client.messageCopy(String(uid), `Labels/${label}`, { uid: true })
+        return { uid: result ? result.uidMap?.get(uid) : undefined }
+      })
+    },
+
     send(mail, from) {
       return sendProtonMail(settings, mail, from)
     }

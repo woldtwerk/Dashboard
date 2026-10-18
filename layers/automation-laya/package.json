@@ -1,0 +1,15 @@
+{
+  "name": "@allmight/automation-laya",
+  "private": true,
+  "type": "module",
+  "description": "Local Laya decision engine for the automation layer",
+  "main": "./nuxt.config.ts",
+  "dependencies": {
+    "@allmight/automation": "workspace:*",
+    "@allmight/core": "workspace:*",
+    "zod": "catalog:"
+  },
+  "peerDependencies": {
+    "nuxt": "catalog:"
+  }
+}

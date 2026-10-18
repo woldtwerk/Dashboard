@@ -19,6 +19,13 @@ export interface MailProvider {
   moveMessage(mailbox: string, uid: number, target: string): Promise<{ uid?: number }>
   /** Marks one message `\Deleted` and expunges it, without touching the others */
   deleteMessage(mailbox: string, uid: number): Promise<void>
+  /**
+   * Files a copy of one message under one label. Proton keeps labels as IMAP
+   * folders under `Labels/`, which repeat mail stored in a real folder, so this is
+   * a copy (the original stays) rather than a move. The result carries the copy's
+   * UID where the server reports one; the label folder must already exist.
+   */
+  addLabel(mailbox: string, uid: number, label: string): Promise<{ uid?: number }>
 
   // --- Sending ---
   /**

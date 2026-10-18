@@ -1,0 +1,39 @@
+import { AUTOMATION_INBOX } from '../utils/automation-items'
+import type { AutomationDomain } from '../../shared/types/automation'
+
+/**
+ * Automation listens to the domain event stream: new mail arriving in the inbox and
+ * new documents in the archive's inbox are evaluated by the rules. The work runs
+ * under a per-service lock, so several cluster workers never evaluate the same item
+ * twice; a failure is logged and never fails the sync that produced the event.
+ */
+export default defineNitroPlugin(() => {
+  registerNotificationCategory({
+    id: 'automation',
+    domain: 'automation',
+    label: 'Automation',
+    description: 'A rule suggests an action for new mail or a new document.',
+    defaultStyle: 'in-app'
+  })
+
+  useDomainEventBus().subscribe((event) => {
+    if (event.type !== 'changed') {
+      return
+    }
+
+    if (event.domain === 'mail') {
+      // Only the inbox feeds mail rules; a flag change elsewhere is not new mail
+      if (event.resource !== AUTOMATION_INBOX) {
+        return
+      }
+    } else if (event.domain !== 'documents') {
+      return
+    }
+
+    runAutomation(event.domain as AutomationDomain, event.service).catch((error) => {
+      useServiceLogger('automation', event.service).error('Automation run failed', {
+        error: error instanceof Error ? error.message : String(error)
+      })
+    })
+  })
+})

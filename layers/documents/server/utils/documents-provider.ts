@@ -54,6 +54,13 @@ export interface DocumentsProvider {
   update(id: number, patch: DocumentsDocumentPatch): Promise<DocumentsDocument>
   remove(id: number): Promise<void>
 
+  /**
+   * Documents added after an ISO timestamp, newest first; `null` returns the newest
+   * documents. The scheduler's safety-net sweep uses it to recover documents that
+   * arrived without a domain event (`added__gt` on Paperless).
+   */
+  listAdded(since: string | null, limit: number): Promise<DocumentsDocument[]>
+
   /** Number of documents currently in the inbox */
   countInbox(): Promise<number>
   /** Number of documents added in [since, until), dates as YYYY-MM-DD */

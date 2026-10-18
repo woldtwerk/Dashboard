@@ -1,0 +1,23 @@
+{
+  "name": "@allmight/automation",
+  "private": true,
+  "type": "module",
+  "description": "Rule-based automation for mail and documents with local AI decisions",
+  "main": "./nuxt.config.ts",
+  "dependencies": {
+    "@allmight/core": "workspace:*",
+    "@allmight/documents": "workspace:*",
+    "@allmight/mail": "workspace:*",
+    "@nuxt/ui": "catalog:",
+    "@vue-flow/background": "catalog:",
+    "@vue-flow/controls": "catalog:",
+    "@vue-flow/core": "catalog:",
+    "@vue-flow/minimap": "catalog:",
+    "@vueuse/core": "catalog:",
+    "drizzle-orm": "catalog:",
+    "zod": "catalog:"
+  },
+  "peerDependencies": {
+    "nuxt": "catalog:"
+  }
+}

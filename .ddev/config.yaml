@@ -24,6 +24,9 @@ web_environment:
   - NUXT_PROTON_DRIVE_URL=http://proton-drive:8080
   # Paperless-ngx archive: secrets in .ddev/.env.paperless, injected into the paperless service
   - NUXT_PAPERLESS_URL=http://paperless:8000
+  # Local Laya decision server: key in .ddev/.env.web (NUXT_LAYA_API_KEY) and
+  # .ddev/.env.laya (LAYA_API_KEY), both gitignored
+  - NUXT_LAYA_URL=http://laya:8000
 # Nuxt is started by hand: ddev exec pnpm dev --host 0.0.0.0
 web_extra_exposed_ports:
   - name: nuxt
