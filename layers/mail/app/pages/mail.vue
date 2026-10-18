@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { breakpointsTailwind, refDebounced, useDebounceFn, useDocumentVisibility, useIntervalFn } from '@vueuse/core'
 import type { LocationQuery } from 'vue-router'
+import type { DropdownMenuItem } from '@nuxt/ui'
 import type { MailConversation, MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
 import { buildReply, emptyOutgoingMail, type OutgoingMail } from '#layers/mail/shared/mail-compose'
 import { trashTarget } from '#layers/mail/shared/mail-delete'
@@ -290,23 +291,29 @@ watch([anyIndexing, documentVisible], ([pending, visibility]) => {
   }
 }, { immediate: true })
 
-// Conversations view; the toggle only shows while a search index is configured
+// Conversations view; the option only shows while a search index is configured
 const view = computed(() => mailViewFromQuery(route.query))
 const conversationKey = computed(() => mailConversationFromQuery(route.query))
 const showThreads = computed(() => indexAvailable.value && view.value === 'threads')
 
-const viewItems = [{
-  label: 'Mails',
-  value: 'mails'
-}, {
-  label: 'Conversations',
-  value: 'threads'
-}]
-
-const selectedView = computed({
-  get: () => view.value,
-  set: value => updateQuery(mailViewToQuery(value === 'threads' ? 'threads' : 'mails'))
+// The checkbox mirrors `?view=threads`; turning it off drops the parameter
+const conversationsView = computed({
+  get: () => view.value === 'threads',
+  set: (value: boolean) => updateQuery(mailViewToQuery(value ? 'threads' : 'mails'))
 })
+
+// "View options" menu of the search toolbar; the checkbox mirrors `?view=threads`
+// and keeps the menu open, so the active view can be read off the button itself
+const viewItems = computed<DropdownMenuItem[][]>(() => [[{
+  label: 'Conversations',
+  icon: 'i-lucide-messages-square',
+  type: 'checkbox',
+  checked: conversationsView.value,
+  onUpdateChecked: (checked: boolean) => {
+    conversationsView.value = checked
+  },
+  onSelect: (event: Event) => event.preventDefault()
+}]])
 
 // The account's own address, so a conversation can align own mails to the right
 const { data: serviceSetup } = await useFetch<SetupState>(() => `/api/services/${service.value}`, { lazy: true })
@@ -433,10 +440,6 @@ function closeConversation() {
 
 function prefetchConversation(key: string) {
   $fetch(`/api/mail/conversations/${encodeURIComponent(key)}`, { query: { service: service.value } }).catch(() => {})
-}
-
-function openConversationMail(mail: MailSummary) {
-  updateQuery(mailSelectionToQuery({ uid: mail.uid, mailbox: mail.mailbox }, mailbox.value))
 }
 
 function onConversationSeen() {
@@ -923,13 +926,6 @@ const isMobile = breakpoints.smaller('lg')
 
     <UDashboardToolbar class="justify-start">
       <UTabs
-        v-if="indexAvailable"
-        v-model="selectedView"
-        :items="viewItems"
-        :content="false"
-        size="xs"
-      />
-      <UTabs
         v-model="selectedTab"
         :items="tabItems"
         :content="false"
@@ -1051,6 +1047,18 @@ const isMobile = breakpoints.smaller('lg')
         </template>
       </UPopover>
 
+      <UDropdownMenu v-if="indexAvailable" :items="viewItems">
+        <UTooltip text="View options">
+          <UButton
+            icon="i-lucide-sliders-horizontal"
+            :color="conversationsView ? 'primary' : 'neutral'"
+            :variant="conversationsView ? 'soft' : 'ghost'"
+            size="sm"
+            aria-label="View options"
+          />
+        </UTooltip>
+      </UDropdownMenu>
+
       <UTooltip text="Refresh">
         <UButton
           icon="i-lucide-refresh-cw"
@@ -1160,8 +1168,20 @@ const isMobile = breakpoints.smaller('lg')
     </template>
   </UDashboardPanel>
 
+  <MailConversation
+    v-if="showThreads && conversationKey && !isMobile"
+    :key="conversationKey"
+    :conversation-key="conversationKey"
+    :service="service"
+    :own-address="ownAddress"
+    :sent-mailboxes="sentMailboxes"
+    @seen="onConversationSeen"
+    @close="closeConversation"
+    @compose="(mode, mail) => openCompose(mode, mail)"
+    @delete="deleteMail($event)"
+  />
   <MailView
-    v-if="selectedMail && !isMobile"
+    v-else-if="selectedMail && !isMobile"
     :key="selectedMail.uid"
     :mail="selectedMail"
     :service="service"
@@ -1171,17 +1191,6 @@ const isMobile = breakpoints.smaller('lg')
     @delete="selectedMail && deleteMail(selectedMail)"
     @compose="openCompose($event, selectedMail ?? undefined)"
     @prefetch="prefetchCompose"
-  />
-  <MailConversation
-    v-else-if="showThreads && conversationKey && !isMobile"
-    :key="conversationKey"
-    :conversation-key="conversationKey"
-    :service="service"
-    :own-address="ownAddress"
-    :sent-mailboxes="sentMailboxes"
-    @open="openConversationMail"
-    @seen="onConversationSeen"
-    @close="closeConversation"
   />
   <div v-else class="hidden lg:flex flex-1 items-center justify-center">
     <UIcon name="i-lucide-inbox" class="size-32 text-dimmed" />
@@ -1197,9 +1206,10 @@ const isMobile = breakpoints.smaller('lg')
           :service="service"
           :own-address="ownAddress"
           :sent-mailboxes="sentMailboxes"
-          @open="openConversationMail"
           @seen="onConversationSeen"
           @close="closeConversation"
+          @compose="(mode, mail) => openCompose(mode, mail)"
+          @delete="deleteMail($event)"
         />
         <MailView
           v-else-if="selectedMail"

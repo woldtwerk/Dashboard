@@ -3,6 +3,7 @@ import { useDebounceFn } from '@vueuse/core'
 import type { MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
 import { buildReply } from '#layers/mail/shared/mail-compose'
 import { isOwnMail, isStreamKey, streamLabel, stripSubjectPrefix, type OwnMailContext } from '#layers/mail/shared/mail-thread'
+import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
 
 const props = defineProps<{
   conversationKey: string
@@ -14,9 +15,10 @@ const props = defineProps<{
 }>()
 
 const emits = defineEmits<{
-  open: [mail: MailSummary]
   seen: []
   close: []
+  compose: [mode: MailComposeMode, mail: MailSummary]
+  delete: [mail: MailSummary]
 }>()
 
 const toast = useToast()
@@ -27,7 +29,7 @@ const { data: mails, status, error, refresh } = await useFetch<MailSummary[]>(()
   lazy: true
 })
 
-// A stream is a mailing list or bulk sender: its mails are cards, not bubbles
+// A stream is a mailing list or bulk sender; both kinds now read as one accordion
 const isStream = computed(() => isStreamKey(props.conversationKey))
 
 const title = computed(() => {
@@ -41,6 +43,8 @@ const title = computed(() => {
 })
 
 const ownContext = computed<OwnMailContext>(() => ({ ownAddress: props.ownAddress, sentMailboxes: props.sentMailboxes }))
+
+const streamRef = ref<{ expandAll: () => void, collapseAll: () => void, expandNewest: () => void } | null>(null)
 
 const scroller = ref<HTMLElement | null>(null)
 
@@ -94,13 +98,38 @@ watch(mails, async () => {
 
 const replyText = ref('')
 const sending = ref(false)
-/** The text of the reply that is on its way, shown as an own bubble until the mail arrives */
-const pending = ref<string | null>(null)
+/** The reply that is on its way, shown as its own accordion item until the mail arrives */
+const pendingReply = ref<{ text: string, subject: string } | null>(null)
+/** A UID the mail server will never hand out, for the item shown while sending */
+const PENDING_UID = -1
 
 const ownAddresses = computed(() => props.ownAddress ? [props.ownAddress] : [])
 
 // The reply answers the newest mail that is not the account's own
 const latestIncoming = computed(() => [...(mails.value ?? [])].reverse().find(mail => !isOwnMail(mail, ownContext.value)))
+
+const pendingMail = computed<MailSummary | null>(() => {
+  const draft = pendingReply.value
+  if (!draft) {
+    return null
+  }
+
+  return {
+    uid: PENDING_UID,
+    service: props.service,
+    mailbox: latestIncoming.value?.mailbox ?? '',
+    subject: draft.subject,
+    from: props.ownAddress ? [{ address: props.ownAddress }] : [],
+    date: new Date().toISOString(),
+    unread: false,
+    flagged: false,
+    snippet: 'sending…'
+  }
+})
+
+const pendingItem = computed(() => pendingReply.value && pendingMail.value
+  ? { mail: pendingMail.value, text: pendingReply.value.text }
+  : null)
 
 // One full-message request per mail; the summary does not carry Message-ID or text
 const messageCache = new Map<string, Promise<MailMessage>>()
@@ -125,10 +154,11 @@ async function sendReply() {
   }
 
   sending.value = true
-  pending.value = text
 
   try {
     const draft = buildReply(await mailMessage(target), ownAddresses.value, 'reply')
+    pendingReply.value = { text, subject: draft.subject }
+
     await $fetch('/api/mail/send', {
       method: 'POST',
       query: { service: props.service },
@@ -142,10 +172,13 @@ async function sendReply() {
 
     replyText.value = ''
     await refresh()
-    pending.value = null
+    pendingReply.value = null
+    await nextTick()
+    // The real copy of the sent mail takes the optimistic item's place
+    streamRef.value?.expandNewest()
     toast.add({ title: 'Mail sent', color: 'success', icon: 'i-lucide-send' })
   } catch (error) {
-    pending.value = null
+    pendingReply.value = null
     toast.add({ title: 'Could not send mail', description: mailErrorMessage(error), color: 'error', icon: 'i-lucide-circle-alert' })
   } finally {
     sending.value = false
@@ -174,6 +207,27 @@ useDomainEvents({ domains: ['mail'] }, (event) => {
           @click="emits('close')"
         />
       </template>
+
+      <template #right>
+        <UTooltip text="Expand all">
+          <UButton
+            icon="i-lucide-chevrons-down"
+            color="neutral"
+            variant="ghost"
+            aria-label="Expand all"
+            @click="streamRef?.expandAll()"
+          />
+        </UTooltip>
+        <UTooltip text="Collapse all">
+          <UButton
+            icon="i-lucide-chevrons-up"
+            color="neutral"
+            variant="ghost"
+            aria-label="Collapse all"
+            @click="streamRef?.collapseAll()"
+          />
+        </UTooltip>
+      </template>
     </UDashboardNavbar>
 
     <div ref="scroller" class="flex-1 min-h-0 overflow-y-auto">
@@ -189,30 +243,16 @@ useDomainEvents({ domains: ['mail'] }, (event) => {
         :description="error.statusMessage || error.message"
         class="m-4"
       />
-      <div v-else class="flex flex-col gap-4 p-4 sm:p-6">
+      <div v-else class="p-4 sm:p-6">
         <MailStreamList
-          v-if="isStream"
+          ref="streamRef"
           :mails="mails"
-          @open="emits('open', $event)"
+          :service="service"
+          :own="ownContext"
+          :pending="pendingItem"
+          @compose="(mode, mail) => emits('compose', mode, mail)"
+          @delete="mail => emits('delete', mail)"
         />
-
-        <template v-else>
-          <MailConversationMessage
-            v-for="mail in mails"
-            :key="mailKey(mail)"
-            :mail="mail"
-            :service="service"
-            :own="isOwnMail(mail, ownContext)"
-            @open="emits('open', mail)"
-          />
-
-          <article v-if="pending" class="flex flex-col items-end gap-1">
-            <span class="px-1 text-xs text-muted">me · sending…</span>
-            <div class="max-w-[85%] whitespace-pre-wrap rounded-lg bg-primary/10 px-3 py-2 text-sm">
-              {{ pending }}
-            </div>
-          </article>
-        </template>
       </div>
     </div>
 

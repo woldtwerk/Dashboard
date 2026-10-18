@@ -141,55 +141,55 @@ function openPerson(address?: string) {
       </template>
     </UDashboardNavbar>
 
-    <div class="flex flex-col sm:flex-row justify-between gap-1 p-4 sm:px-6 border-b border-default">
-      <div class="flex items-start gap-4 sm:my-1.5 min-w-0">
-        <UAvatar :alt="formatMailAddress(mail.from[0])" size="3xl" />
+    <div class="flex-1 min-h-0 overflow-y-auto">
+      <div class="flex flex-col sm:flex-row justify-between gap-1 p-4 sm:px-6 border-b border-default">
+        <div class="flex items-start gap-4 sm:my-1.5 min-w-0">
+          <UAvatar :alt="formatMailAddress(mail.from[0])" size="3xl" />
 
-        <div class="min-w-0 space-y-1">
-          <div class="flex flex-wrap items-center gap-1">
-            <button
-              v-for="address in mail.from"
-              :key="address.address"
-              type="button"
-              class="rounded-full bg-elevated px-2 py-0.5 text-sm font-semibold text-highlighted transition-colors hover:bg-accented"
-              @click="openPerson(address.address)"
-            >
-              {{ formatMailAddress(address) }}
-            </button>
-          </div>
-          <div v-if="recipients.length" class="flex flex-wrap items-center gap-1 text-sm text-muted">
-            <span>To:</span>
-            <button
-              v-for="address in recipients"
-              :key="address.address"
-              type="button"
-              class="rounded-full bg-elevated px-2 py-0.5 text-xs transition-colors hover:bg-accented"
-              @click="openPerson(address.address)"
-            >
-              {{ formatMailAddress(address) }}
-            </button>
-          </div>
-          <div v-if="copies.length" class="flex flex-wrap items-center gap-1 text-sm text-muted">
-            <span>Cc:</span>
-            <button
-              v-for="address in copies"
-              :key="address.address"
-              type="button"
-              class="rounded-full bg-elevated px-2 py-0.5 text-xs transition-colors hover:bg-accented"
-              @click="openPerson(address.address)"
-            >
-              {{ formatMailAddress(address) }}
-            </button>
+          <div class="min-w-0 space-y-1">
+            <div class="flex flex-wrap items-center gap-1">
+              <button
+                v-for="address in mail.from"
+                :key="address.address"
+                type="button"
+                class="rounded-full bg-elevated px-2 py-0.5 text-sm font-semibold text-highlighted transition-colors hover:bg-accented"
+                @click="openPerson(address.address)"
+              >
+                {{ formatMailAddress(address) }}
+              </button>
+            </div>
+            <div v-if="recipients.length" class="flex flex-wrap items-center gap-1 text-sm text-muted">
+              <span>To:</span>
+              <button
+                v-for="address in recipients"
+                :key="address.address"
+                type="button"
+                class="rounded-full bg-elevated px-2 py-0.5 text-xs transition-colors hover:bg-accented"
+                @click="openPerson(address.address)"
+              >
+                {{ formatMailAddress(address) }}
+              </button>
+            </div>
+            <div v-if="copies.length" class="flex flex-wrap items-center gap-1 text-sm text-muted">
+              <span>Cc:</span>
+              <button
+                v-for="address in copies"
+                :key="address.address"
+                type="button"
+                class="rounded-full bg-elevated px-2 py-0.5 text-xs transition-colors hover:bg-accented"
+                @click="openPerson(address.address)"
+              >
+                {{ formatMailAddress(address) }}
+              </button>
+            </div>
           </div>
         </div>
+
+        <p class="max-sm:pl-16 text-muted text-sm sm:mt-2 shrink-0">
+          {{ format(new Date(mail.date), 'dd MMM yyyy HH:mm') }}
+        </p>
       </div>
 
-      <p class="max-sm:pl-16 text-muted text-sm sm:mt-2 shrink-0">
-        {{ format(new Date(mail.date), 'dd MMM yyyy HH:mm') }}
-      </p>
-    </div>
-
-    <div class="flex-1 min-h-0 overflow-y-auto">
       <div v-if="status === 'pending'" class="flex items-center justify-center p-8">
         <UIcon name="i-lucide-loader-circle" class="size-6 animate-spin text-dimmed" />
       </div>
@@ -202,7 +202,7 @@ function openPerson(address?: string) {
         :description="error.statusMessage || error.message"
         class="m-4"
       />
-      <div v-else-if="message" class="flex size-full flex-col">
+      <div v-else-if="message">
         <UAlert
           v-if="hasRemoteImages && !allowRemoteImages"
           color="neutral"
@@ -217,7 +217,6 @@ function openPerson(address?: string) {
           :html="message.html"
           :text="message.text"
           :allow-remote-images="allowRemoteImages"
-          class="flex-1"
         />
       </div>
     </div>
