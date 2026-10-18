@@ -12,6 +12,7 @@ interface Subscription {
 const subscriptions = new Set<Subscription>()
 let source: EventSource | undefined
 let watchingVisibility = false
+let sessionChecked = false
 
 function dispatch(event: DomainEvent) {
   for (const subscription of [...subscriptions]) {
@@ -24,6 +25,31 @@ function dispatch(event: DomainEvent) {
 function notifyReconnect() {
   for (const subscription of [...subscriptions]) {
     subscription.onReconnect?.()
+  }
+}
+
+/**
+ * A session that expires while the tab stays open makes `/api/events` answer 401,
+ * which `EventSource` keeps retrying. Rather than retrying forever, check the
+ * session once per error burst and leave for the login page; the auth middleware
+ * would otherwise redirect the tab on its next navigation anyway. The full-page
+ * navigation keeps this out of any Vue instance.
+ */
+async function leaveIfSignedOut() {
+  if (sessionChecked) {
+    return
+  }
+  sessionChecked = true
+
+  try {
+    const session = await $fetch('/api/_auth/session', { headers: { accept: 'application/json' } })
+    if (!session?.user) {
+      closeSource()
+      window.location.assign('/login')
+    }
+  } catch {
+    // Offline or a network blip: allow the next error to check again
+    sessionChecked = false
   }
 }
 
@@ -46,8 +72,14 @@ function openSource() {
       // Malformed payloads are dropped; the server only sends valid events
     }
   })
-  current.addEventListener('error', () => lifecycle.markErrored())
-  current.addEventListener('open', () => lifecycle.markOpen())
+  current.addEventListener('error', () => {
+    lifecycle.markErrored()
+    void leaveIfSignedOut()
+  })
+  current.addEventListener('open', () => {
+    sessionChecked = false
+    lifecycle.markOpen()
+  })
 
   if (!watchingVisibility) {
     document.addEventListener('visibilitychange', onVisibilityChange)

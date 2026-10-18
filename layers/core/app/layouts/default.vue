@@ -131,6 +131,7 @@ function rename(key: string, label: string) {
             />
           </UTooltip>
           <ThemeMenu :collapsed="collapsed" class="flex-1 min-w-0" />
+          <UserMenu :collapsed="collapsed" />
         </template>
       </template>
     </UDashboardSidebar>
