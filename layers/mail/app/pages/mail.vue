@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { breakpointsTailwind, refDebounced, useDebounceFn, useDocumentVisibility, useIntervalFn } from '@vueuse/core'
 import type { LocationQuery } from 'vue-router'
+import type { DropdownMenuItem } from '@nuxt/ui'
 import type { MailConversation, MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
 import { buildReply, emptyOutgoingMail, type OutgoingMail } from '#layers/mail/shared/mail-compose'
 import { trashTarget } from '#layers/mail/shared/mail-delete'
@@ -290,16 +291,29 @@ watch([anyIndexing, documentVisible], ([pending, visibility]) => {
   }
 }, { immediate: true })
 
-// Conversations view; the toggle only shows while a search index is configured
+// Conversations view; the option only shows while a search index is configured
 const view = computed(() => mailViewFromQuery(route.query))
 const conversationKey = computed(() => mailConversationFromQuery(route.query))
 const showThreads = computed(() => indexAvailable.value && view.value === 'threads')
 
-// The switch mirrors `?view=threads`; turning it off drops the parameter
+// The checkbox mirrors `?view=threads`; turning it off drops the parameter
 const conversationsView = computed({
   get: () => view.value === 'threads',
   set: (value: boolean) => updateQuery(mailViewToQuery(value ? 'threads' : 'mails'))
 })
+
+// "View options" menu of the search toolbar; the checkbox mirrors `?view=threads`
+// and keeps the menu open, so the active view can be read off the button itself
+const viewItems = computed<DropdownMenuItem[][]>(() => [[{
+  label: 'Conversations',
+  icon: 'i-lucide-messages-square',
+  type: 'checkbox',
+  checked: conversationsView.value,
+  onUpdateChecked: (checked: boolean) => {
+    conversationsView.value = checked
+  },
+  onSelect: (event: Event) => event.preventDefault()
+}]])
 
 // The account's own address, so a conversation can align own mails to the right
 const { data: serviceSetup } = await useFetch<SetupState>(() => `/api/services/${service.value}`, { lazy: true })
@@ -911,12 +925,6 @@ const isMobile = breakpoints.smaller('lg')
     </UDashboardNavbar>
 
     <UDashboardToolbar class="justify-start">
-      <USwitch
-        v-if="indexAvailable"
-        v-model="conversationsView"
-        label="Conversations"
-        size="sm"
-      />
       <UTabs
         v-model="selectedTab"
         :items="tabItems"
@@ -1038,6 +1046,18 @@ const isMobile = breakpoints.smaller('lg')
           </div>
         </template>
       </UPopover>
+
+      <UDropdownMenu v-if="indexAvailable" :items="viewItems">
+        <UTooltip text="View options">
+          <UButton
+            icon="i-lucide-sliders-horizontal"
+            :color="conversationsView ? 'primary' : 'neutral'"
+            :variant="conversationsView ? 'soft' : 'ghost'"
+            size="sm"
+            aria-label="View options"
+          />
+        </UTooltip>
+      </UDropdownMenu>
 
       <UTooltip text="Refresh">
         <UButton
