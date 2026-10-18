@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { useDebounceFn, useIntervalFn, useNow } from '@vueuse/core'
-import { addDays, format, isSameMonth, startOfDay } from 'date-fns'
+import { useDebounceFn, useInfiniteScroll, useIntersectionObserver, useIntervalFn, useNow } from '@vueuse/core'
+import { addDays, addMonths, format, startOfDay, startOfMonth } from 'date-fns'
 import type { Calendar, CalendarEvent, CalendarEventInput, CalendarList, CalendarSyncStatus, EventScope } from '#layers/calendar/shared/types/calendar'
 
 useSeoMeta({ title: 'Calendar' })
@@ -38,30 +38,92 @@ const view = computed(() => viewState.value.view)
 const anchor = computed(() => viewState.value.date)
 const window = computed(() => viewWindow(view.value, anchor.value, timeZone.value))
 
+// The month view scrolls through weeks continuously, so its grid comes from a
+// loaded range rather than from the anchor date
+const monthRange = ref(initialWeeks(anchor.value, timeZone.value))
+const monthWeeks = computed(() => weeksOf(monthRange.value, timeZone.value))
+
+const monthKey = (date: Date) => `${date.getFullYear()}-${date.getMonth()}`
+const monthDateKey = (month: Date) => `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}-01`
+const weekKey = (week: Date[]) => week[0] ? dateKey(week[0], timeZone.value) : ''
+
+/** The first week whose majority month is `month`; the header names that one */
+function firstWeekKeyOfMonth(month: Date): string {
+  const weeks = monthWeeks.value
+  const index = weeks.findIndex((_, position) => monthKey(monthAtTop(weeks, position)) === monthKey(month))
+  return weekKey(weeks[index >= 0 ? index : 0] ?? [])
+}
+
+const firstVisibleWeekKey = ref(firstWeekKeyOfMonth(startOfMonth(zoned(anchor.value, timeZone.value))))
+const firstVisibleWeek = computed(() => {
+  const index = monthWeeks.value.findIndex(week => weekKey(week) === firstVisibleWeekKey.value)
+  return index === -1 ? 0 : index
+})
+const currentMonth = computed(() => monthAtTop(monthWeeks.value, firstVisibleWeek.value))
+
 const currentView = computed({
   get: () => view.value,
   set: value => updateQuery({ view: value === 'month' ? null : value })
 })
 
 function go(direction: number) {
+  if (view.value === 'month') {
+    void revealMonth(startOfMonth(addMonths(currentMonth.value, direction)), true)
+    return
+  }
   updateQuery({ date: dateKey(shiftDate(view.value, anchor.value, direction, timeZone.value), timeZone.value) })
 }
 
 function goToday() {
+  if (view.value === 'month') {
+    void revealMonth(startOfMonth(zoned(new Date(), timeZone.value)), true)
+    return
+  }
   updateQuery({ date: dateKey(new Date(), timeZone.value) })
 }
+
+// The shared fetch follows the anchor for week, day and agenda. The month view
+// loads its own weeks, so its window must not follow the `?date=` writes that
+// scrolling makes.
+const dataWindow = ref(view.value === 'month' ? monthRange.value : window.value)
 
 // The events key is the window, so a window hovered over can be prefetched into
 // the same payload cache the fetch reads from
 const eventsKey = (start: Date, end: Date) => `calendar-events:${toIso(start)}:${toIso(end)}`
 
-const { data: events, refresh: refreshEvents } = await useFetch<CalendarEvent[]>('/api/calendar/events', {
-  key: () => eventsKey(window.value.start, window.value.end),
-  query: computed(() => ({ start: toIso(window.value.start), end: toIso(window.value.end) })),
+const { data: fetchedEvents, refresh: refreshFetchedEvents } = await useFetch<CalendarEvent[]>('/api/calendar/events', {
+  key: () => eventsKey(dataWindow.value.start, dataWindow.value.end),
+  query: computed(() => ({ start: toIso(dataWindow.value.start), end: toIso(dataWindow.value.end) })),
   // A hovered window is served from the payload cache; a manual refresh
   // bypasses `getCachedData` and still hits the network
   getCachedData: key => nuxtApp.payload.data[key],
   default: () => []
+})
+
+watch([view, anchor, timeZone], () => {
+  if (view.value !== 'month') {
+    dataWindow.value = viewWindow(view.value, anchor.value, timeZone.value)
+  }
+})
+
+// Month chunks merge into a map, so weeks loaded earlier stay while the grid
+// grows in either direction
+const monthEvents = ref<Map<string, CalendarEvent>>(
+  view.value === 'month'
+    ? new Map(fetchedEvents.value.map(event => [eventKey(event), event] as const))
+    : new Map()
+)
+const monthReady = ref(view.value === 'month')
+
+const events = computed<CalendarEvent[]>({
+  get: () => view.value === 'month' ? [...monthEvents.value.values()] : fetchedEvents.value,
+  set: (value) => {
+    if (view.value === 'month') {
+      monthEvents.value = new Map(value.map(event => [eventKey(event), event] as const))
+    } else {
+      fetchedEvents.value = value
+    }
+  }
 })
 
 const visibleUrls = computed(() => new Set(visibleCalendars.value.map(calendar => calendar.url)))
@@ -101,7 +163,6 @@ useDomainEvents({ domains: ['calendar'] }, (event) => {
 // --- Views ---
 
 const now = useNow({ scheduler: update => useIntervalFn(update, 60_000) })
-const weeks = computed(() => monthGrid(anchor.value, timeZone.value))
 const columnDays = computed(() => {
   const days = view.value === 'day' ? 1 : 7
   return Array.from({ length: days }, (_, index) => addDays(window.value.start, index))
@@ -119,7 +180,7 @@ const agendaDays = computed(() => {
 
 const monthCells = computed(() => {
   const cells = new Map<string, { visible: CalendarEvent[], overflow: CalendarEvent[] }>()
-  for (const week of weeks.value) {
+  for (const week of monthWeeks.value) {
     for (const day of week) {
       cells.set(dateKey(day, timeZone.value), monthCell(visibleEvents.value, day, timeZone.value))
     }
@@ -178,6 +239,9 @@ function onColumnClick(pointer: MouseEvent, day: Date) {
 // Prefetch a window's events into the payload cache, so switching the view is
 // instant
 async function prefetchWindow(direction: number) {
+  if (view.value === 'month') {
+    return
+  }
   const target = shiftDate(view.value, anchor.value, direction, timeZone.value)
   const next = viewWindow(view.value, target, timeZone.value)
   const key = eventsKey(next.start, next.end)
@@ -208,36 +272,306 @@ function scrollToInitialHour() {
   })
 }
 
-// The month opens on the week holding today, so a tall month does not start
-// scrolled away from it; another month opens at its first week
+// --- Month loading and scrolling ---
+
 const monthEl = ref<HTMLElement>()
+const monthLoading = ref(false)
+const monthCanLoadPast = ref(true)
+const monthCanLoadFuture = ref(true)
+const monthPositioned = ref(false)
+const suppressMonthDate = ref(false)
+let suppressMonthDateTimer: ReturnType<typeof setTimeout> | undefined
 
-function scrollToCurrentWeek() {
-  nextTick(() => {
-    const container = monthEl.value
-    if (!container) {
-      return
-    }
-
-    const today = zoned(now.value, timeZone.value)
-    const index = isSameMonth(today, zoned(anchor.value, timeZone.value))
-      ? weeks.value.findIndex(week => week.some(day => isToday(day)))
-      : -1
-    const row = index > 0 ? container.querySelector<HTMLElement>(`[data-week="${index}"]`) : undefined
-    const header = container.querySelector<HTMLElement>('[data-month-header]')
-
-    container.scrollTop = row
-      ? Math.max(0, row.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - (header?.offsetHeight ?? 0))
-      : 0
+async function fetchMonthEvents(start: Date, end: Date, replace = false) {
+  const fetched = await $fetch<CalendarEvent[]>('/api/calendar/events', {
+    query: { start: toIso(start), end: toIso(end) }
   })
+
+  if (replace) {
+    monthEvents.value = new Map(fetched.map(event => [eventKey(event), event] as const))
+    return
+  }
+
+  const next = new Map(monthEvents.value)
+  for (const event of fetched) {
+    next.set(eventKey(event), event)
+  }
+  monthEvents.value = next
 }
 
-onMounted(scrollToInitialHour)
-onMounted(scrollToCurrentWeek)
-watch([view, () => toIso(window.value.start), timeZone], () => {
-  scrollToInitialHour()
-  scrollToCurrentWeek()
+async function loadMonthRange() {
+  monthLoading.value = true
+  try {
+    await fetchMonthEvents(monthRange.value.start, monthRange.value.end, true)
+    monthReady.value = true
+  } finally {
+    monthLoading.value = false
+  }
+}
+
+async function refreshMonthEvents() {
+  const range = monthRange.value
+  await fetchMonthEvents(range.start, range.end, true)
+}
+
+async function refreshEvents() {
+  try {
+    if (view.value === 'month') {
+      await refreshMonthEvents()
+    } else {
+      await refreshFetchedEvents()
+    }
+  } catch {
+    // A failed refresh leaves the data already on screen in place
+  }
+}
+
+/** Load the eight weeks a direction adds, keeping the visual position on 'past' */
+async function loadMoreMonth(direction: 'past' | 'future'): Promise<boolean> {
+  if (view.value !== 'month' || monthLoading.value) {
+    return false
+  }
+
+  const previous = monthRange.value
+  const { range, done } = extendWeeks(previous, direction, 8, zoned(now.value, timeZone.value))
+  const changed = range.start.getTime() !== previous.start.getTime() || range.end.getTime() !== previous.end.getTime()
+
+  if (!changed) {
+    if (direction === 'past') {
+      monthCanLoadPast.value = false
+    } else {
+      monthCanLoadFuture.value = false
+    }
+    return false
+  }
+
+  const start = direction === 'past' ? range.start : previous.end
+  const end = direction === 'past' ? previous.start : range.end
+  const scrollHeight = monthEl.value?.scrollHeight ?? 0
+
+  monthLoading.value = true
+  try {
+    await fetchMonthEvents(start, end)
+  } catch {
+    return false
+  } finally {
+    monthLoading.value = false
+  }
+
+  monthRange.value = range
+  await nextTick()
+
+  if (direction === 'past' && monthEl.value) {
+    monthEl.value.scrollTop += monthEl.value.scrollHeight - scrollHeight
+  }
+
+  if (done) {
+    if (direction === 'past') {
+      monthCanLoadPast.value = false
+    } else {
+      monthCanLoadFuture.value = false
+    }
+  }
+
+  return true
+}
+
+function resetMonthRange() {
+  monthRange.value = initialWeeks(anchor.value, timeZone.value)
+  monthEvents.value = new Map()
+  monthReady.value = false
+  monthCanLoadPast.value = true
+  monthCanLoadFuture.value = true
+  monthPositioned.value = false
+  firstVisibleWeekKey.value = firstWeekKeyOfMonth(startOfMonth(zoned(anchor.value, timeZone.value)))
+}
+
+async function enterMonth() {
+  resetMonthRange()
+  try {
+    await loadMonthRange()
+  } catch {
+    return
+  }
+  await nextTick()
+  collectWeekRows()
+  scrollToMonth(startOfMonth(zoned(anchor.value, timeZone.value)), 'auto')
+  monthPositioned.value = true
+}
+
+/** Grow the loaded range until it holds `month` */
+async function ensureMonthInRange(month: Date) {
+  const start = startOfMonth(month).getTime()
+  const end = addMonths(startOfMonth(month), 1).getTime()
+
+  for (let guard = 0; guard < 16; guard++) {
+    if (start < monthRange.value.start.getTime()) {
+      if (!(await loadMoreMonth('past'))) {
+        break
+      }
+    } else if (end > monthRange.value.end.getTime()) {
+      if (!(await loadMoreMonth('future'))) {
+        break
+      }
+    } else {
+      break
+    }
+  }
+}
+
+/** Scroll a month to the top, extending the range first when it is not loaded */
+async function revealMonth(month: Date, smooth: boolean) {
+  if (view.value !== 'month') {
+    return
+  }
+
+  const target = startOfMonth(month)
+  suppressMonthDate.value = true
+  clearTimeout(suppressMonthDateTimer)
+  updateQuery({ date: monthDateKey(target) })
+
+  await ensureMonthInRange(target)
+  await nextTick()
+  scrollToMonth(target, smooth ? 'smooth' : 'auto')
+
+  suppressMonthDateTimer = setTimeout(() => {
+    suppressMonthDate.value = false
+  }, smooth ? 1000 : 0)
+}
+
+const weekRatios = new Map<string, number>()
+const weekRows = shallowRef<HTMLElement[]>([])
+const monthHeaderHeight = ref(0)
+
+function collectWeekRows() {
+  weekRatios.clear()
+  const container = monthEl.value
+  monthHeaderHeight.value = container?.querySelector<HTMLElement>('[data-month-header]')?.offsetHeight ?? 0
+  weekRows.value = container ? [...container.querySelectorAll<HTMLElement>('[data-week-start]')] : []
+}
+
+// The header names the month most days of the first fully visible week belong
+// to; partial weeks at the edges only take over when no whole week fits
+const updateDateFromScroll = useDebounceFn(() => {
+  if (view.value !== 'month' || suppressMonthDate.value) {
+    return
+  }
+  const date = monthDateKey(startOfMonth(currentMonth.value))
+  if (route.query.date === date) {
+    return
+  }
+  updateQuery({ date })
+}, 300)
+
+useIntersectionObserver(weekRows, (entries) => {
+  for (const entry of entries) {
+    const key = (entry.target as HTMLElement).dataset.weekStart
+    if (!key) {
+      continue
+    }
+    if (entry.isIntersecting) {
+      weekRatios.set(key, entry.intersectionRatio)
+    } else {
+      weekRatios.delete(key)
+    }
+  }
+
+  const fullyVisible = [...weekRatios].filter(([, ratio]) => ratio >= 0.99).map(([key]) => key)
+  const first = (fullyVisible.length ? fullyVisible : [...weekRatios.keys()]).sort()[0]
+  if (!first || first === firstVisibleWeekKey.value) {
+    return
+  }
+  firstVisibleWeekKey.value = first
+  updateDateFromScroll()
+}, {
+  root: monthEl,
+  rootMargin: computed(() => `-${monthHeaderHeight.value}px 0px 0px 0px`),
+  threshold: 1
 })
+
+function scrollToMonth(month: Date, behavior: ScrollBehavior) {
+  const container = monthEl.value
+  if (!container) {
+    return
+  }
+
+  const weeks = monthWeeks.value
+  const key = monthKey(month)
+  let index = weeks.findIndex((_, position) => monthKey(monthAtTop(weeks, position)) === key)
+  if (index === -1) {
+    index = weeks.findIndex(week => week.some(day => monthKey(day) === key))
+  }
+
+  const week = weeks[index]
+  const row = week ? container.querySelector<HTMLElement>(`[data-week="${index}"]`) : undefined
+  if (!week || !row) {
+    return
+  }
+
+  firstVisibleWeekKey.value = weekKey(week)
+  const top = row.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - monthHeaderHeight.value
+  container.scrollTo({ top: Math.max(0, top), behavior })
+}
+
+function canLoadMonth(direction: 'past' | 'future'): boolean {
+  return view.value === 'month'
+    && monthReady.value
+    && monthPositioned.value
+    && !monthLoading.value
+    && (direction === 'past' ? monthCanLoadPast.value : monthCanLoadFuture.value)
+}
+
+useInfiniteScroll(monthEl, async () => {
+  await loadMoreMonth('past')
+}, {
+  direction: 'top',
+  distance: 400,
+  canLoadMore: () => canLoadMonth('past')
+})
+
+useInfiniteScroll(monthEl, async () => {
+  await loadMoreMonth('future')
+}, {
+  direction: 'bottom',
+  distance: 400,
+  canLoadMore: () => canLoadMonth('future')
+})
+
+onMounted(() => {
+  scrollToInitialHour()
+  if (view.value === 'month') {
+    nextTick(() => {
+      collectWeekRows()
+      scrollToMonth(startOfMonth(zoned(anchor.value, timeZone.value)), 'auto')
+      monthPositioned.value = true
+    })
+  }
+})
+
+watch([view, () => toIso(window.value.start), timeZone], () => {
+  if (view.value !== 'month') {
+    scrollToInitialHour()
+  }
+})
+
+watch(view, async (next, previous) => {
+  if (next === 'month' && previous !== 'month') {
+    await enterMonth()
+  }
+})
+
+watch(timeZone, async () => {
+  if (view.value === 'month') {
+    await enterMonth()
+  }
+})
+
+watch(monthWeeks, async () => {
+  await nextTick()
+  collectWeekRows()
+}, { flush: 'post' })
+
+onUnmounted(() => clearTimeout(suppressMonthDateTimer))
 
 // --- Calendars ---
 
@@ -586,29 +920,32 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
     <!-- Month -->
     <div v-else-if="view === 'month'" class="flex min-h-0 flex-1 flex-col">
       <div ref="monthEl" class="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
-        <div
-          data-month-header
-          class="sticky top-0 z-10 grid grid-cols-7 border-b border-default bg-default text-center text-xs font-medium text-muted"
-        >
-          <div v-for="label in WEEKDAYS" :key="label" class="border-r border-default py-2 last:border-r-0">
-            {{ label }}
+        <div data-month-header class="sticky top-0 z-10 bg-default">
+          <div class="flex items-center border-b border-default px-3 py-1.5">
+            <span class="text-sm font-semibold">{{ format(currentMonth, 'MMMM yyyy') }}</span>
+          </div>
+          <div class="grid grid-cols-7 border-b border-default text-center text-xs font-medium text-muted">
+            <div v-for="label in WEEKDAYS" :key="label" class="border-r border-default py-2 last:border-r-0">
+              {{ label }}
+            </div>
           </div>
         </div>
         <div class="grid grid-cols-7" style="grid-auto-rows: minmax(8rem, auto)">
-          <template v-for="(week, weekIndex) in weeks" :key="weekIndex">
+          <template v-for="(week, weekIndex) in monthWeeks" :key="weekKey(week)">
             <div
-              v-for="day in week"
+              v-for="(day, dayIndex) in week"
               :key="day.toISOString()"
               :data-week="weekIndex"
+              :data-week-start="dayIndex === 0 ? weekKey(week) : undefined"
               class="flex flex-col gap-px border-b border-r border-default p-1.5 last:border-r-0"
-              :class="!isSameMonth(zoned(day, timeZone), zoned(anchor, timeZone)) && 'bg-elevated/30'"
+              :class="isOtherMonth(day, currentMonth) && 'bg-elevated/30 text-dimmed'"
             >
               <button
-                class="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] leading-none hover:bg-elevated"
-                :class="isToday(day) && 'bg-primary text-inverted'"
+                class="inline-flex h-5 shrink-0 items-center justify-center rounded-full px-1 text-[11px] leading-none hover:bg-elevated"
+                :class="[isToday(day) && 'bg-primary text-inverted', isFirstOfMonth(day) && 'font-semibold']"
                 @click="newEventOn(day)"
               >
-                {{ dayNumber(day) }}
+                {{ isFirstOfMonth(day) ? `${dayNumber(day)} ${format(zoned(day, timeZone), 'MMM')}` : dayNumber(day) }}
               </button>
               <button
                 v-for="event in cellFor(day).visible"
