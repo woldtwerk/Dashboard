@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { normalizeEmail } from '../../../core/shared/entities'
 import type { MailAddress, MailMessage, MailSearch } from '../../shared/types/mail'
 
 /** Indexed form of a message; search engine agnostic */
@@ -15,6 +16,10 @@ export interface MailDocument {
   /** Lowercase names, addresses and domains of the senders, for exact filters */
   fromTerms: string[]
   fromList: MailAddress[]
+  toList: MailAddress[]
+  ccList: MailAddress[]
+  /** Normalized addresses of from, to and cc, so one filter finds every participant */
+  participantTerms: string[]
   toText: string
   /** Unix seconds */
   date: number
@@ -63,6 +68,18 @@ export function normalizeSenderTerm(from: string): string {
   return from.trim().toLowerCase().replace(/^@/, '')
 }
 
+/** The normalized addresses of everyone on the mail, deduplicated */
+export function participantTerms(addresses: MailAddress[]): string[] {
+  const terms = new Set<string>()
+
+  for (const { address } of addresses) {
+    const email = normalizeEmail(address)
+    if (email) terms.add(email)
+  }
+
+  return [...terms]
+}
+
 export function toMailDocument(service: string, mailbox: string, message: MailMessage): MailDocument {
   const id = mailDocumentId(service, mailbox, message.uid)
 
@@ -76,6 +93,9 @@ export function toMailDocument(service: string, mailbox: string, message: MailMe
     fromText: message.from.map(formatAddress).join(', '),
     fromTerms: senderTerms(message.from),
     fromList: message.from,
+    toList: message.to,
+    ccList: message.cc,
+    participantTerms: participantTerms([...message.from, ...message.to, ...message.cc]),
     toText: [...message.to, ...message.cc].map(formatAddress).join(', '),
     date: Math.floor(new Date(message.date).getTime() / 1000),
     unread: message.unread,

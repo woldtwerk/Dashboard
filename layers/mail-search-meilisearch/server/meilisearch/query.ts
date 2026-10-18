@@ -1,5 +1,6 @@
 import type { MailIndexQuery } from '../../../mail/server/utils/mail-search-index'
 import { normalizeSenderTerm } from '../../../mail/server/mail-index/document'
+import { normalizeEmail } from '../../../core/shared/entities'
 
 /** Quotes a value for a Meilisearch filter expression */
 export function filterValue(value: string): string {
@@ -45,10 +46,11 @@ export function dayCountQueries(since: string, until: string, services: string[]
 }
 
 /** Meilisearch filter for a mail query; all parts are combined with AND */
-export function buildMailFilter({ services, mailbox, search }: Pick<MailIndexQuery, 'services' | 'mailbox' | 'search'>): string[] {
+export function buildMailFilter({ services, mailbox, participant, search }: Pick<MailIndexQuery, 'services' | 'mailbox' | 'participant' | 'search'>): string[] {
   const filter = [`service IN [${services.map(filterValue).join(', ')}]`]
 
   if (mailbox) filter.push(`mailbox = ${filterValue(mailbox)}`)
+  if (participant) filter.push(`participantTerms = ${filterValue(normalizeEmail(participant) ?? participant.trim().toLowerCase())}`)
   if (search.unread) filter.push('unread = true')
   if (search.flagged) filter.push('flagged = true')
   if (search.hasAttachment) filter.push('hasAttachment = true')

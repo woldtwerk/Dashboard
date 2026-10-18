@@ -47,11 +47,23 @@ describe('toMailDocument', () => {
       messageId: '<abc@stripe.com>',
       fromText: 'Stripe, Inc. <Receipts@Mail.Stripe.com>',
       toText: 'Me <me@proton.me>, team@example.com',
+      toList: message.to,
+      ccList: message.cc,
+      participantTerms: ['receipts@mail.stripe.com', 'me@proton.me', 'team@example.com'],
       date: 1_792_144_800,
       unread: true,
       hasAttachment: true,
       text: 'Amount paid: 12 €'
     })
+  })
+
+  it('deduplicates participant addresses across from, to and cc', () => {
+    const document = toMailDocument('svc', 'INBOX', {
+      ...message,
+      to: [{ address: 'me@proton.me' }, { address: 'Receipts@mail.stripe.com' }]
+    })
+
+    expect(document.participantTerms).toEqual(['receipts@mail.stripe.com', 'me@proton.me', 'team@example.com'])
   })
 
   it('defaults hasAttachment to false without a parsed body', () => {
