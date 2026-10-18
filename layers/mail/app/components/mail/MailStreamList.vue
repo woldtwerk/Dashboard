@@ -1,42 +1,303 @@
 <script setup lang="ts">
 import { format } from 'date-fns'
-import type { MailSummary } from '#layers/mail/shared/types/mail'
-import { stripSubjectPrefix } from '#layers/mail/shared/mail-thread'
-import { highlightToHtml } from '#layers/mail/shared/mail-highlight'
+import type { MailAddress, MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
+import type { OwnMailContext } from '#layers/mail/shared/mail-thread'
+import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
 
 const props = defineProps<{
-  /** The stream's mails, oldest first, as the conversation endpoint returns them */
+  /** The conversation's mails, oldest first as the endpoint returns them */
   mails: MailSummary[]
+  service: string
+  /** The account's own address and sent mailboxes, so own mail reads as "me" */
+  own?: OwnMailContext
+  /** A reply on its way, shown as its own item until the real one arrives */
+  pending?: { mail: MailSummary, text: string } | null
 }>()
 
 const emits = defineEmits<{
-  open: [mail: MailSummary]
+  compose: [mode: MailComposeMode, mail: MailSummary]
+  delete: [mail: MailSummary]
 }>()
 
-// A stream has no reply order to follow, so the newest mail comes first
-const newestFirst = computed(() => [...props.mails].sort((a, b) => b.date.localeCompare(a.date)))
+// The optimistic reply is the newest item while it is on its way
+const allMails = computed(() => props.pending ? [...props.mails, props.pending.mail] : props.mails)
+
+const items = computed(() => accordionItems(allMails.value, props.own))
+
+const byValue = computed(() => new Map(allMails.value.map(mail => [mailKey(mail), mail])))
+
+const latest = computed(() => allMails.value.at(-1))
+
+const mailFor = (value: string) => byValue.value.get(value)
+const isPending = (value: string) => !!props.pending && value === mailKey(props.pending.mail)
+
+// --- Full messages, fetched when an item opens and kept per key ---
+
+const messages = ref<Record<string, MailMessage>>({})
+const loading = ref<Record<string, boolean>>({})
+const failed = ref<Record<string, boolean>>({})
+const remoteAllowed = ref<Set<string>>(new Set())
+// One request per mail, so collapsing and expanding again does not fetch twice
+const requests = new Map<string, Promise<MailMessage>>()
+
+const messageFor = (value: string) => messages.value[value]
+
+function loadMessage(mail: MailSummary) {
+  const value = mailKey(mail)
+  if (messages.value[value] || requests.has(value)) {
+    return
+  }
+
+  loading.value = { ...loading.value, [value]: true }
+  const request = $fetch<MailMessage>(`/api/mail/messages/${mail.uid}`, {
+    query: { service: props.service, mailbox: mail.mailbox }
+  })
+  requests.set(value, request)
+  request.catch(() => requests.delete(value))
+
+  request.then(
+    (message) => {
+      messages.value = { ...messages.value, [value]: message }
+    },
+    () => {
+      failed.value = { ...failed.value, [value]: true }
+    }
+  ).finally(() => {
+    loading.value = { ...loading.value, [value]: false }
+  })
+}
+
+/** Warm the message an expand will need; the header is hovered before it is clicked */
+function prefetch(value: string) {
+  const mail = mailFor(value)
+  if (mail && !isPending(value)) {
+    loadMessage(mail)
+  }
+}
+
+// --- Which items are open ---
+
+const expanded = ref<string[]>([])
+const initialized = ref(false)
+
+watch(items, () => {
+  const values = items.value.map(item => item.value)
+  if (!initialized.value) {
+    // Arriving at a conversation shows its newest mail and leaves the rest folded
+    expanded.value = defaultExpanded(allMails.value)
+    initialized.value = true
+  } else {
+    // A refresh must not leave a mail that is gone open
+    expanded.value = expanded.value.filter(value => values.includes(value))
+  }
+}, { immediate: true })
+
+// The optimistic reply opens at once, so the sender sees what is on its way
+watch(() => props.pending, (pending) => {
+  if (!pending) {
+    return
+  }
+  const value = mailKey(pending.mail)
+  if (!expanded.value.includes(value)) {
+    expanded.value = [...expanded.value, value]
+  }
+}, { immediate: true })
+
+function expandAll() {
+  expanded.value = items.value.map(item => item.value)
+}
+
+function collapseAll() {
+  expanded.value = []
+}
+
+function expandNewest() {
+  const value = latest.value ? mailKey(latest.value) : undefined
+  if (value && !expanded.value.includes(value)) {
+    expanded.value = [...expanded.value, value]
+  }
+}
+
+defineExpose({ expandAll, collapseAll, expandNewest })
+
+watch(expanded, (values) => {
+  for (const value of values) {
+    if (isPending(value)) {
+      continue
+    }
+    const mail = mailFor(value)
+    if (mail) {
+      loadMessage(mail)
+    }
+  }
+}, { immediate: true })
+
+// --- Rendering helpers ---
+
+function mailDate(value: string): string {
+  const mail = mailFor(value)
+  return mail ? format(new Date(mail.date), 'dd MMM yyyy HH:mm') : ''
+}
+
+function addressLine(addresses: MailAddress[] = []): string {
+  return addresses.map(formatMailAddress).join(', ')
+}
+
+function recipientLine(value: string): string {
+  return addressLine(messageFor(value)?.to)
+}
+
+function copyLine(value: string): string {
+  return addressLine(messageFor(value)?.cc)
+}
+
+function hasRemoteImages(value: string): boolean {
+  return /<img[^>]+src\s*=\s*["']?https?:|url\(\s*["']?https?:/i.test(messageFor(value)?.html ?? '')
+}
+
+function allowsRemote(value: string): boolean {
+  return remoteAllowed.value.has(value)
+}
+
+function allowRemote(value: string) {
+  remoteAllowed.value = new Set([...remoteAllowed.value, value])
+}
+
+function composeFor(value: string, mode: MailComposeMode) {
+  const mail = mailFor(value)
+  if (mail) {
+    emits('compose', mode, mail)
+  }
+}
+
+function deleteFor(value: string) {
+  const mail = mailFor(value)
+  if (mail) {
+    emits('delete', mail)
+  }
+}
 </script>
 
 <template>
-  <div class="flex flex-col gap-2">
-    <button
-      v-for="mail in newestFirst"
-      :key="mailKey(mail)"
-      type="button"
-      class="flex flex-col gap-1 rounded-lg border border-default p-3 text-left text-sm transition-colors hover:border-primary hover:bg-primary/5"
-      @click="emits('open', mail)"
-    >
-      <div class="flex items-center justify-between gap-2 text-xs text-muted">
-        <span class="truncate">{{ formatMailAddress(mail.from[0]) }}</span>
-        <span class="shrink-0">{{ format(new Date(mail.date), 'dd MMM yyyy HH:mm') }}</span>
+  <UAccordion
+    v-model="expanded"
+    type="multiple"
+    :items="items"
+    :ui="{
+      root: 'overflow-hidden rounded-lg border border-default',
+      trigger: 'px-4 sm:px-6',
+      label: 'min-w-0 flex-1'
+    }"
+  >
+    <template #default="{ item, open }">
+      <div class="flex min-w-0 flex-1 items-start gap-2" @mouseenter="prefetch(item.value)">
+        <UChip v-if="mailFor(item.value)?.unread" class="mt-1.5 shrink-0" />
+        <div class="min-w-0 flex-1">
+          <div class="flex items-baseline justify-between gap-2">
+            <span class="truncate" :class="item.isOwn ? 'text-muted' : 'text-highlighted'">{{ item.sender }}</span>
+            <span class="shrink-0 text-xs font-normal text-muted">{{ mailDate(item.value) }}</span>
+          </div>
+
+          <p v-if="isPending(item.value)" class="truncate text-xs font-normal text-dimmed">
+            sending…
+          </p>
+          <p v-else-if="!open" class="truncate text-xs font-normal text-dimmed">
+            {{ item.snippet || item.label }}
+          </p>
+        </div>
       </div>
+    </template>
 
-      <p class="truncate" :class="[mail.unread ? 'font-semibold text-highlighted' : 'text-toned']">
-        {{ stripSubjectPrefix(mail.subject) || '(no subject)' }}
-      </p>
+    <template #content="{ item }">
+      <div class="space-y-3 border-t border-default/60 px-4 pb-4 pt-3 sm:px-6">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <p v-if="recipientLine(item.value)" class="min-w-0 truncate text-xs text-muted">
+            To: {{ recipientLine(item.value) }}
+            <template v-if="copyLine(item.value)">
+              · Cc: {{ copyLine(item.value) }}
+            </template>
+          </p>
+          <span v-else class="min-w-0 truncate text-xs text-dimmed">{{ item.label }}</span>
 
-      <!-- eslint-disable-next-line vue/no-v-html -- highlightToHtml escapes the mail content -->
-      <p v-if="mail.snippet" class="line-clamp-2 text-dimmed" v-html="highlightToHtml(mail.snippet)" />
-    </button>
-  </div>
+          <div v-if="!isPending(item.value)" class="flex shrink-0 items-center gap-0.5">
+            <UTooltip text="Reply">
+              <UButton
+                icon="i-lucide-reply"
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                aria-label="Reply"
+                @click="composeFor(item.value, 'reply')"
+              />
+            </UTooltip>
+            <UTooltip text="Reply all">
+              <UButton
+                icon="i-lucide-reply-all"
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                aria-label="Reply all"
+                @click="composeFor(item.value, 'replyAll')"
+              />
+            </UTooltip>
+            <UTooltip text="Forward">
+              <UButton
+                icon="i-lucide-forward"
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                aria-label="Forward"
+                @click="composeFor(item.value, 'forward')"
+              />
+            </UTooltip>
+            <UTooltip text="Delete">
+              <UButton
+                icon="i-lucide-trash-2"
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                aria-label="Delete"
+                @click="deleteFor(item.value)"
+              />
+            </UTooltip>
+          </div>
+        </div>
+
+        <div v-if="isPending(item.value)" class="overflow-y-auto rounded border border-default/60">
+          <MailBody :text="pending?.text" class="min-h-24" />
+        </div>
+
+        <div v-else-if="loading[item.value] && !messageFor(item.value)" class="flex items-center justify-center p-6">
+          <UIcon name="i-lucide-loader-circle" class="size-5 animate-spin text-dimmed" />
+        </div>
+
+        <UAlert
+          v-else-if="failed[item.value]"
+          color="error"
+          variant="subtle"
+          icon="i-lucide-circle-alert"
+          title="Could not load message"
+        />
+
+        <template v-else-if="messageFor(item.value)">
+          <UAlert
+            v-if="hasRemoteImages(item.value) && !allowsRemote(item.value)"
+            color="neutral"
+            variant="subtle"
+            icon="i-lucide-image-off"
+            title="Remote images are blocked to protect your privacy."
+            :actions="[{ label: 'Load images', color: 'neutral', variant: 'outline', onClick: () => allowRemote(item.value) }]"
+            orientation="horizontal"
+          />
+          <div class="h-96 overflow-y-auto rounded border border-default/60">
+            <MailBody
+              :html="messageFor(item.value)?.html"
+              :text="messageFor(item.value)?.text"
+              :allow-remote-images="allowsRemote(item.value)"
+            />
+          </div>
+        </template>
+      </div>
+    </template>
+  </UAccordion>
 </template>

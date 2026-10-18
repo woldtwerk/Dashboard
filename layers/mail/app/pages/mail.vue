@@ -295,17 +295,10 @@ const view = computed(() => mailViewFromQuery(route.query))
 const conversationKey = computed(() => mailConversationFromQuery(route.query))
 const showThreads = computed(() => indexAvailable.value && view.value === 'threads')
 
-const viewItems = [{
-  label: 'Mails',
-  value: 'mails'
-}, {
-  label: 'Conversations',
-  value: 'threads'
-}]
-
-const selectedView = computed({
-  get: () => view.value,
-  set: value => updateQuery(mailViewToQuery(value === 'threads' ? 'threads' : 'mails'))
+// The switch mirrors `?view=threads`; turning it off drops the parameter
+const conversationsView = computed({
+  get: () => view.value === 'threads',
+  set: (value: boolean) => updateQuery(mailViewToQuery(value ? 'threads' : 'mails'))
 })
 
 // The account's own address, so a conversation can align own mails to the right
@@ -433,10 +426,6 @@ function closeConversation() {
 
 function prefetchConversation(key: string) {
   $fetch(`/api/mail/conversations/${encodeURIComponent(key)}`, { query: { service: service.value } }).catch(() => {})
-}
-
-function openConversationMail(mail: MailSummary) {
-  updateQuery(mailSelectionToQuery({ uid: mail.uid, mailbox: mail.mailbox }, mailbox.value))
 }
 
 function onConversationSeen() {
@@ -922,12 +911,11 @@ const isMobile = breakpoints.smaller('lg')
     </UDashboardNavbar>
 
     <UDashboardToolbar class="justify-start">
-      <UTabs
+      <USwitch
         v-if="indexAvailable"
-        v-model="selectedView"
-        :items="viewItems"
-        :content="false"
-        size="xs"
+        v-model="conversationsView"
+        label="Conversations"
+        size="sm"
       />
       <UTabs
         v-model="selectedTab"
@@ -1160,8 +1148,20 @@ const isMobile = breakpoints.smaller('lg')
     </template>
   </UDashboardPanel>
 
+  <MailConversation
+    v-if="showThreads && conversationKey && !isMobile"
+    :key="conversationKey"
+    :conversation-key="conversationKey"
+    :service="service"
+    :own-address="ownAddress"
+    :sent-mailboxes="sentMailboxes"
+    @seen="onConversationSeen"
+    @close="closeConversation"
+    @compose="(mode, mail) => openCompose(mode, mail)"
+    @delete="deleteMail($event)"
+  />
   <MailView
-    v-if="selectedMail && !isMobile"
+    v-else-if="selectedMail && !isMobile"
     :key="selectedMail.uid"
     :mail="selectedMail"
     :service="service"
@@ -1171,17 +1171,6 @@ const isMobile = breakpoints.smaller('lg')
     @delete="selectedMail && deleteMail(selectedMail)"
     @compose="openCompose($event, selectedMail ?? undefined)"
     @prefetch="prefetchCompose"
-  />
-  <MailConversation
-    v-else-if="showThreads && conversationKey && !isMobile"
-    :key="conversationKey"
-    :conversation-key="conversationKey"
-    :service="service"
-    :own-address="ownAddress"
-    :sent-mailboxes="sentMailboxes"
-    @open="openConversationMail"
-    @seen="onConversationSeen"
-    @close="closeConversation"
   />
   <div v-else class="hidden lg:flex flex-1 items-center justify-center">
     <UIcon name="i-lucide-inbox" class="size-32 text-dimmed" />
@@ -1197,9 +1186,10 @@ const isMobile = breakpoints.smaller('lg')
           :service="service"
           :own-address="ownAddress"
           :sent-mailboxes="sentMailboxes"
-          @open="openConversationMail"
           @seen="onConversationSeen"
           @close="closeConversation"
+          @compose="(mode, mail) => openCompose(mode, mail)"
+          @delete="deleteMail($event)"
         />
         <MailView
           v-else-if="selectedMail"
