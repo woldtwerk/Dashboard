@@ -159,15 +159,58 @@ async function applyAssistant() {
   }
 }
 
-const { data: mails, status, error, refresh } = await useFetch('/api/mail/messages', {
+// The URL `?pages=N` restores the loaded depth: the first N pages arrive in one
+// request, later pages are appended one at a time as the list is scrolled.
+const basePages = ref(list.value.pages)
+// The messages API accepts at most 1000 per request (provider requests are capped further)
+const MAIL_REQUEST_MAX = 1000
+const baseLimit = computed(() => Math.min(basePages.value * MAIL_PAGE_SIZE, MAIL_REQUEST_MAX))
+
+const { data: baseMails, status, error, refresh } = await useFetch('/api/mail/messages', {
   query: computed(() => ({
     service: service.value,
     scope: allFolders.value ? 'all' : undefined,
     mailbox: allFolders.value ? undefined : mailbox.value,
-    limit: list.value.pages * MAIL_PAGE_SIZE,
+    limit: baseLimit.value,
     ...mailSearchToApiQuery(criteria.value)
   })),
-  default: () => []
+  default: () => [],
+  // Pages are appended explicitly; a change here must not refetch from the top
+  watch: false
+})
+
+// Everything loaded so far; appended pages keep the newest-first order
+const mails = ref<MailSummary[]>([])
+const pageState = ref({ offset: 0, done: false })
+const loadingMore = ref(false)
+
+watch(baseMails, (value) => {
+  mails.value = value
+  pageState.value = nextPageState({ offset: 0, done: false }, value.length, baseLimit.value)
+
+  // The provider serves fewer than the requested depth; keep the URL honest
+  if (import.meta.client) {
+    const pages = Math.max(1, Math.ceil(value.length / MAIL_PAGE_SIZE))
+    if (pages !== list.value.pages) {
+      updateQuery({ pages: pages > 1 ? String(pages) : null })
+    }
+  }
+}, { immediate: true })
+
+const listRef = ref<{ scrollToTop: () => void } | null>(null)
+
+const listIdentity = computed(() => JSON.stringify({
+  service: service.value,
+  mailbox: mailbox.value,
+  allFolders: allFolders.value,
+  criteria: criteria.value
+}))
+
+// A filter, folder or account change starts a fresh list at page 1 and returns to the top
+watch(listIdentity, () => {
+  basePages.value = 1
+  refresh()
+  listRef.value?.scrollToTop()
 })
 
 // Search index status (null without an index); refreshed when a sync finishes
@@ -201,24 +244,77 @@ const sentMailboxes = computed(() => (folders.value.find(entry => entry.service.
   .filter(item => item.specialUse === '\\Sent')
   .map(item => item.path))
 
+const conversationListRef = ref<{ scrollToTop: () => void } | null>(null)
+
 const conversationParams = computed(() => ({
   service: service.value,
   mailbox: mailbox.value,
-  ...mailSearchToApiQuery(criteria.value),
-  limit: 50
+  ...mailSearchToApiQuery(criteria.value)
 }))
 
-const { data: conversations, status: conversationsStatus, refresh: refreshConversations } = await useAsyncData<MailConversation[]>(
-  'mail-conversations',
-  // A mailbox that is not indexed yet answers 409 and has no conversations
-  () => $fetch<MailConversation[]>('/api/mail/conversations', { query: conversationParams.value }).catch(() => []),
-  { default: () => [], immediate: false }
-)
+// Conversations page over the grouped result, one page at a time (index only)
+const conversations = ref<MailConversation[]>([])
+const conversationsStatus = ref<'idle' | 'pending' | 'success'>('idle')
+const conversationsLoading = ref(false)
+const conversationState = ref({ offset: 0, done: false })
 
-// Fetch once the view is switched, and again whenever the filters change while it is open
+async function fetchConversations(offset: number, limit: number) {
+  return $fetch<MailConversation[]>('/api/mail/conversations', {
+    query: { ...conversationParams.value, limit, offset }
+  })
+}
+
+async function loadConversations(reset = false) {
+  if (!showThreads.value || (!reset && (conversationState.value.done || conversationsLoading.value))) {
+    return
+  }
+
+  const offset = reset ? 0 : conversationState.value.offset
+  conversationsLoading.value = true
+  conversationsStatus.value = 'pending'
+  try {
+    const page = await fetchConversations(offset, MAIL_PAGE_SIZE)
+    conversations.value = reset ? page : mergeConversations(conversations.value, page)
+    conversationState.value = nextPageState({ offset, done: false }, page.length, MAIL_PAGE_SIZE)
+    conversationsStatus.value = 'success'
+  } catch {
+    // A mailbox that is not indexed yet answers 409 and has no conversations
+    if (reset) {
+      conversations.value = []
+      conversationState.value = { offset: 0, done: true }
+    }
+    conversationsStatus.value = 'success'
+  } finally {
+    conversationsLoading.value = false
+  }
+}
+
+/** Reload the depth already loaded, e.g. after unread flags changed */
+async function reloadConversations() {
+  if (!showThreads.value) {
+    return
+  }
+
+  const depth = Math.min(Math.max(MAIL_PAGE_SIZE, conversationState.value.offset), 1000)
+  conversationsLoading.value = true
+  conversationsStatus.value = 'pending'
+  try {
+    const page = await fetchConversations(0, depth)
+    conversations.value = page
+    conversationState.value = nextPageState({ offset: 0, done: false }, page.length, depth)
+    conversationsStatus.value = 'success'
+  } catch {
+    conversationsStatus.value = 'success'
+  } finally {
+    conversationsLoading.value = false
+  }
+}
+
+// Fetch once the view is switched, and again from the start whenever the filters change
 watch([showThreads, conversationParams], () => {
-  if (showThreads.value) {
-    refreshConversations()
+  if (import.meta.client && showThreads.value) {
+    conversationListRef.value?.scrollToTop()
+    loadConversations(true)
   }
 }, { immediate: true })
 
@@ -239,11 +335,17 @@ function openConversationMail(mail: MailSummary) {
 }
 
 function onConversationSeen() {
-  refreshConversations()
+  reloadConversations()
   refreshNuxtData('mail-folders')
 }
 
-const refreshListFromEvents = useDebounceFn(() => refresh(), 300)
+// Reloading keeps the loaded depth: fetch as many pages as the URL says are shown
+function reloadList() {
+  basePages.value = list.value.pages
+  refresh()
+}
+
+const refreshListFromEvents = useDebounceFn(() => reloadList(), 300)
 const refreshFoldersFromEvents = useDebounceFn(() => refreshNuxtData('mail-folders'), 300)
 
 useDomainEvents({ domains: ['mail'] }, (event) => {
@@ -251,7 +353,7 @@ useDomainEvents({ domains: ['mail'] }, (event) => {
   if (plan.list) {
     refreshListFromEvents()
     if (showThreads.value) {
-      refreshConversations()
+      reloadConversations()
     }
   }
   if (plan.folders) {
@@ -281,12 +383,33 @@ const { data: facets } = await useFetch('/api/mail/facets', {
 })
 const fromItems = computed(() => (facets.value?.from ?? []).map(item => item.value))
 
-// Only searches and cross-folder listing come from the index and can page; browsing does not
-const loadedLimit = computed(() => list.value.pages * MAIL_PAGE_SIZE)
-const canLoadMore = computed(() => !!currentIndex.value?.complete && (isFiltered.value || allFolders.value) && (mails.value?.length ?? 0) >= loadedLimit.value)
+// Append the next page; the loaded depth goes back into the URL so a reload restores it
+async function loadMore() {
+  if (loadingMore.value || pageState.value.done || !mails.value.length) {
+    return
+  }
 
-function loadMore() {
-  updateQuery({ pages: String(list.value.pages + 1) })
+  loadingMore.value = true
+  try {
+    const page = await $fetch<MailSummary[]>('/api/mail/messages', {
+      query: {
+        service: service.value,
+        scope: allFolders.value ? 'all' : undefined,
+        mailbox: allFolders.value ? undefined : mailbox.value,
+        limit: MAIL_PAGE_SIZE,
+        offset: pageState.value.offset,
+        ...mailSearchToApiQuery(criteria.value)
+      }
+    })
+    mails.value = mergePage(mails.value, page)
+    pageState.value = nextPageState(pageState.value, page.length, MAIL_PAGE_SIZE)
+    const pages = Math.ceil(mails.value.length / MAIL_PAGE_SIZE)
+    updateQuery({ pages: pages > 1 ? String(pages) : null })
+  } catch {
+    // Keep the page state, so the next scroll retries the same page
+  } finally {
+    loadingMore.value = false
+  }
 }
 
 // The open mail lives in the URL (`?uid=&in=`); `in` names a folder outside the current one
@@ -511,7 +634,7 @@ const isMobile = breakpoints.smaller('lg')
           variant="ghost"
           size="sm"
           :loading="status === 'pending'"
-          @click="refresh()"
+          @click="reloadList()"
         />
       </UTooltip>
       <UTooltip text="Account settings">
@@ -562,11 +685,15 @@ const isMobile = breakpoints.smaller('lg')
       />
       <MailConversationList
         v-else
+        ref="conversationListRef"
         :conversations="conversations"
         :selected-key="conversationKey"
         :own-address="ownAddress"
+        :loading-more="conversationsLoading"
+        :done="conversationState.done"
         @select="openConversation"
         @prefetch="prefetchConversation"
+        @load-more="loadConversations(false)"
       />
     </template>
     <template v-else>
@@ -590,23 +717,15 @@ const isMobile = breakpoints.smaller('lg')
       />
       <MailList
         v-else
+        ref="listRef"
         v-model="selectedMail"
         :mails="mails"
         :show-mailbox="allFolders"
         :mailbox-names="mailboxNames"
-      >
-        <template #more>
-          <div v-if="canLoadMore" class="p-4 text-center">
-            <UButton
-              label="Load more"
-              color="neutral"
-              variant="outline"
-              :loading="status === 'pending'"
-              @click="loadMore"
-            />
-          </div>
-        </template>
-      </MailList>
+        :loading-more="loadingMore"
+        :done="pageState.done"
+        @load-more="loadMore"
+      />
     </template>
   </UDashboardPanel>
 

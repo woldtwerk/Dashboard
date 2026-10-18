@@ -19,6 +19,7 @@ export default defineEventHandler(async (event) => {
     return index.search({ services: [service], mailbox: allFolders ? undefined : mailbox, search: criteria, limit, offset })
   }
 
-  // The provider cannot page or filter by attachment; it serves the first page of the current folder
-  return (await useMailProvider(service)).listMessages(mailbox, { limit: Math.min(limit, MAIL_PROVIDER_MAX_LIMIT), search: criteria })
+  // Plain browsing stays on the provider, which pages by offset; it serves one
+  // provider-sized page per request, since the mail server caps a fetch.
+  return (await useMailProvider(service)).listMessages(mailbox, { limit: Math.min(limit, MAIL_PROVIDER_MAX_LIMIT), offset, search: criteria })
 })

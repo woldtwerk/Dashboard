@@ -3,6 +3,7 @@ import { simpleParser } from 'mailparser'
 import type { SetupValues } from '../../../core/shared/types/setup'
 import type { MailProvider } from '../../../mail/server/utils/mail-provider'
 import type { Mailbox, MailMessage, MailMessageState, MailSearch, MailSummary } from '../../../mail/shared/types/mail'
+import { sequenceRange, uidPage } from './sequence'
 import { toMailAddresses, toMailSummary, toProtonSettings, withProtonBridge, withProtonMailbox } from './bridge'
 
 const MESSAGE_QUERY = { uid: true, flags: true, envelope: true, internalDate: true } as const
@@ -68,7 +69,7 @@ export function createProtonMailProvider(values: SetupValues): MailProvider {
       })
     },
 
-    listMessages(mailbox, { limit, search }) {
+    listMessages(mailbox, { limit, offset = 0, search }) {
       return withProtonMailbox(settings, mailbox, async (client) => {
         const exists = client.mailbox ? client.mailbox.exists : 0
         if (!exists) {
@@ -81,20 +82,24 @@ export function createProtonMailProvider(values: SetupValues): MailProvider {
 
         if (criteria) {
           // Highest UIDs are the newest messages
-          const uids = (await client.search(criteria, { uid: true })) || []
+          const uids = uidPage((await client.search(criteria, { uid: true })) || [], offset, limit)
           if (!uids.length) {
             return []
           }
-          range = uids.sort((a, b) => a - b).slice(-limit).join(',')
+          range = uids.join(',')
           byUid = true
         } else {
           // Newest messages have the highest sequence numbers
-          range = `${Math.max(1, exists - limit + 1)}:*`
+          const page = sequenceRange(exists, offset, limit)
+          if (!page) {
+            return []
+          }
+          range = `${page.start}:${page.end}`
         }
 
         const messages: MailSummary[] = []
 
-        for await (const message of client.fetch(range, { uid: true, flags: true, envelope: true, internalDate: true }, { uid: byUid })) {
+        for await (const message of client.fetch(range, MESSAGE_QUERY, { uid: byUid })) {
           messages.push(toMailSummary(mailbox, message))
         }
 

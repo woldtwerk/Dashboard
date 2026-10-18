@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { MailSummary } from '../shared/types/mail'
-import { isSelectedMail, mailConversationFromQuery, mailConversationToQuery, mailListFromQuery, mailListToQuery, mailSearchFromQuery, mailSearchToApiQuery, mailSearchToQuery, mailSelectionFromQuery, mailSelectionToQuery, mailViewFromQuery, mailViewToQuery } from '../app/utils/mail-query'
+import type { MailConversation, MailSummary } from '../shared/types/mail'
+import { isSelectedMail, mailConversationFromQuery, mailConversationToQuery, mailListFromQuery, mailListToQuery, mailSearchFromQuery, mailSearchToApiQuery, mailSearchToQuery, mailSelectionFromQuery, mailSelectionToQuery, mailViewFromQuery, mailViewToQuery, mergeConversations, mergePage, nextPageState } from '../app/utils/mail-query'
 
 const today = new Date('2026-10-16T12:00:00Z')
 
@@ -116,5 +116,50 @@ describe('mailConversation', () => {
     expect(mailConversationFromQuery({ conversation: 'id:root@example.com' })).toBe('id:root@example.com')
     expect(mailConversationToQuery('subj:a@b.com:hello world')).toEqual({ conversation: 'subj:a@b.com:hello world', uid: null, in: null })
     expect(mailConversationToQuery(null)).toEqual({ conversation: null, uid: null, in: null })
+  })
+})
+
+describe('nextPageState', () => {
+  it('advances the offset by what arrived', () => {
+    expect(nextPageState({ offset: 0, done: false }, 50, 50)).toEqual({ offset: 50, done: false })
+    expect(nextPageState({ offset: 200, done: false }, 50, 50)).toEqual({ offset: 250, done: false })
+  })
+
+  it('is done when the page was short', () => {
+    expect(nextPageState({ offset: 50, done: false }, 30, 50)).toEqual({ offset: 80, done: true })
+    expect(nextPageState({ offset: 0, done: false }, 0, 50)).toEqual({ offset: 0, done: true })
+  })
+})
+
+describe('mergePage', () => {
+  it('appends a page and drops mails already loaded', () => {
+    expect(mergePage([mail(1, 'INBOX'), mail(2, 'INBOX')], [mail(2, 'INBOX'), mail(3, 'INBOX')]).map(item => item.uid))
+      .toEqual([1, 2, 3])
+  })
+
+  it('keeps the mailbox in the key, so equal uids in another folder both stay', () => {
+    expect(mergePage([mail(1, 'INBOX')], [mail(1, 'Sent')]).map(item => item.mailbox))
+      .toEqual(['INBOX', 'Sent'])
+  })
+
+  it('is a no-op for an empty page', () => {
+    const list = [mail(1, 'INBOX')]
+    expect(mergePage(list, [])).toEqual(list)
+  })
+})
+
+describe('mergeConversations', () => {
+  const conversation = (key: string): MailConversation => ({
+    key,
+    subject: key,
+    participants: [],
+    count: 1,
+    unread: false,
+    latest: mail(1, 'INBOX')
+  })
+
+  it('appends groups and drops duplicates by key', () => {
+    expect(mergeConversations([conversation('a'), conversation('b')], [conversation('b'), conversation('c')]).map(group => group.key))
+      .toEqual(['a', 'b', 'c'])
   })
 })

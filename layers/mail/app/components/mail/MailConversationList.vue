@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useInfiniteScroll } from '@vueuse/core'
 import { format, isToday } from 'date-fns'
 import type { MailAddress, MailConversation } from '#layers/mail/shared/types/mail'
 import { conversationParticipantLabel } from '#layers/mail/shared/mail-thread'
@@ -9,19 +10,39 @@ const props = defineProps<{
   selectedKey?: string
   /** The account's own address, shown as "me" */
   ownAddress?: string
+  /** A further page is on its way */
+  loadingMore?: boolean
+  /** The last page was short; there is nothing more to load */
+  done?: boolean
 }>()
 
 const emits = defineEmits<{
   select: [key: string]
   prefetch: [key: string]
+  loadMore: []
 }>()
+
+const scroller = ref<HTMLElement | null>(null)
 
 const participantNames = (participants: MailAddress[]) =>
   participants.map(address => conversationParticipantLabel(address, props.ownAddress)).join(', ')
+
+function scrollToTop() {
+  if (scroller.value) {
+    scroller.value.scrollTop = 0
+  }
+}
+
+defineExpose({ scrollToTop })
+
+useInfiniteScroll(scroller, () => emits('loadMore'), {
+  distance: 400,
+  canLoadMore: () => !props.loadingMore && !props.done
+})
 </script>
 
 <template>
-  <div class="overflow-y-auto divide-y divide-default">
+  <div ref="scroller" class="overflow-y-auto divide-y divide-default">
     <div
       v-for="conversation in conversations"
       :key="conversation.key"
@@ -60,5 +81,12 @@ const participantNames = (participants: MailAddress[]) =>
     </div>
 
     <slot name="more" />
+
+    <div v-if="loadingMore" class="flex items-center justify-center p-4">
+      <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin text-dimmed" />
+    </div>
+    <p v-else-if="done && conversations.length" class="p-4 text-center text-xs text-dimmed">
+      No more conversations
+    </p>
   </div>
 </template>

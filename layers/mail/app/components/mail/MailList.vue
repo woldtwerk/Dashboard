@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useInfiniteScroll } from '@vueuse/core'
 import { format, isToday } from 'date-fns'
 import type { MailSummary } from '#layers/mail/shared/types/mail'
 import { highlightToHtml } from '#layers/mail/shared/mail-highlight'
@@ -9,15 +10,38 @@ const props = defineProps<{
   showMailbox?: boolean
   /** Display names by `service/mailbox`, resolved by the page */
   mailboxNames?: Record<string, string>
+  /** A further page is on its way */
+  loadingMore?: boolean
+  /** The last page was short; there is nothing more to load */
+  done?: boolean
+}>()
+
+const emits = defineEmits<{
+  loadMore: []
 }>()
 
 const mailsRefs = ref<Record<string, Element | null>>({})
+const scroller = ref<HTMLElement | null>(null)
 
 const selectedMail = defineModel<MailSummary | null>()
 
 const selectedKey = computed(() => selectedMail.value ? mailKey(selectedMail.value) : undefined)
 
 const mailboxName = (mail: MailSummary) => props.mailboxNames?.[`${mail.service}/${mail.mailbox}`] ?? mail.mailbox
+
+function scrollToTop() {
+  if (scroller.value) {
+    scroller.value.scrollTop = 0
+  }
+}
+
+defineExpose({ scrollToTop })
+
+// Load the next page shortly before the bottom, unless one is on its way or the list is complete
+useInfiniteScroll(scroller, () => emits('loadMore'), {
+  distance: 400,
+  canLoadMore: () => !props.loadingMore && !props.done
+})
 
 watch(selectedMail, () => {
   if (!selectedKey.value) {
@@ -29,30 +53,34 @@ watch(selectedMail, () => {
   }
 })
 
-defineShortcuts({
-  arrowdown: () => {
-    const index = props.mails.findIndex(mail => mailKey(mail) === selectedKey.value)
+function move(delta: number) {
+  const index = props.mails.findIndex(mail => mailKey(mail) === selectedKey.value)
 
-    if (index === -1) {
-      selectedMail.value = props.mails[0]
-    } else if (index < props.mails.length - 1) {
-      selectedMail.value = props.mails[index + 1]
-    }
-  },
-  arrowup: () => {
-    const index = props.mails.findIndex(mail => mailKey(mail) === selectedKey.value)
-
-    if (index === -1) {
-      selectedMail.value = props.mails[props.mails.length - 1]
-    } else if (index > 0) {
-      selectedMail.value = props.mails[index - 1]
-    }
+  if (index === -1) {
+    selectedMail.value = props.mails[delta > 0 ? 0 : props.mails.length - 1]
+    return
   }
+
+  const next = index + delta
+  if (next < 0) {
+    return
+  }
+  if (next >= props.mails.length) {
+    // Moving past the last item pulls in the next page
+    emits('loadMore')
+    return
+  }
+  selectedMail.value = props.mails[next]
+}
+
+defineShortcuts({
+  arrowdown: () => move(1),
+  arrowup: () => move(-1)
 })
 </script>
 
 <template>
-  <div class="overflow-y-auto divide-y divide-default">
+  <div ref="scroller" class="overflow-y-auto divide-y divide-default">
     <div
       v-for="mail in mails"
       :key="mailKey(mail)"
@@ -91,5 +119,12 @@ defineShortcuts({
     </div>
 
     <slot name="more" />
+
+    <div v-if="loadingMore" class="flex items-center justify-center p-4">
+      <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin text-dimmed" />
+    </div>
+    <p v-else-if="done && mails.length" class="p-4 text-center text-xs text-dimmed">
+      No more mails
+    </p>
   </div>
 </template>

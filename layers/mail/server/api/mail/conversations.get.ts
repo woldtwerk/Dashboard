@@ -6,8 +6,9 @@ import { toMailSearch } from '../../utils/mail-search-query'
 /** How many mails one page of conversations is grouped from; the index pages by mail */
 const CONVERSATION_SOURCE_LIMIT = 500
 
-// Mail grouped into conversations, newest conversation first. Index only: the
-// provider cannot group across folders, so without it the client falls back.
+// Mail grouped into conversations, newest conversation first, paged over the
+// grouped result. Index only: the provider cannot group across folders, so
+// without it the client falls back.
 export default defineEventHandler(async (event): Promise<MailConversation[] | { fallback: true }> => {
   const { service, mailbox, limit, offset, scope, ...search } = await getValidatedQuery(event, messagesQuerySchema)
 
@@ -31,7 +32,7 @@ export default defineEventHandler(async (event): Promise<MailConversation[] | { 
     limit: CONVERSATION_SOURCE_LIMIT
   })
 
-  return groupConversations(mails).slice(0, limit).map(({ key, subject, participants, count, unread, latest }) => ({
+  return groupConversations(mails).slice(offset, offset + limit).map(({ key, subject, participants, count, unread, latest }) => ({
     key,
     subject,
     participants,

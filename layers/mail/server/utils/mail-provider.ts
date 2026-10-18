@@ -5,8 +5,8 @@ import type { Mailbox, MailMessage, MailMessageState, MailSearch, MailSummary } 
 /** Port every mail provider adapter implements. */
 export interface MailProvider {
   listMailboxes(): Promise<Mailbox[]>
-  /** Newest first; `search` narrows the result server-side */
-  listMessages(mailbox: string, options: { limit: number, search?: MailSearch }): Promise<MailSummary[]>
+  /** Newest first; `offset` pages through the result, `search` narrows it server-side */
+  listMessages(mailbox: string, options: { limit: number, offset?: number, search?: MailSearch }): Promise<MailSummary[]>
   getMessage(mailbox: string, uid: number): Promise<MailMessage | null>
   setSeen(mailbox: string, uid: number, seen: boolean): Promise<void>
   setFlagged(mailbox: string, uid: number, flagged: boolean): Promise<void>
