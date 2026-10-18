@@ -87,3 +87,21 @@ export interface CalendarSyncStatus {
   /** Last sync error, if the most recent run failed */
   error?: string
 }
+
+/** One full-text search result of the calendar page and the global search */
+export interface CalendarSearchResult {
+  /** Entity key of the event, e.g. `event:svc:<calendar>|<uid>|<recurrenceId>` */
+  ref: string
+  summary: string
+  /** Summary with highlight markers */
+  summaryHighlight?: string
+  /** Description excerpt with highlight markers */
+  snippet?: string
+  /** DAV collection URL the event lives in */
+  calendar: string
+  /** ISO 8601 of the occurrence the result points at */
+  start: string
+  end: string
+  allDay: boolean
+  location?: string
+}

@@ -1,4 +1,5 @@
 import type { DocumentsCustomField, DocumentsCustomFieldType, DocumentsQuery } from '../../../documents/shared/types/documents'
+import { DEFAULT_SORT } from '../../../documents/shared/documents-query'
 
 const STRING_TYPES: DocumentsCustomFieldType[] = ['string', 'url', 'monetary', 'longtext']
 
@@ -37,8 +38,12 @@ export function customFieldQuery(field: DocumentsCustomField | undefined, value:
 export function toPaperlessParams(query: DocumentsQuery, customField?: DocumentsCustomField): Record<string, string> {
   const params: Record<string, string> = {
     page: String(query.page),
-    page_size: String(query.pageSize),
-    ordering: `${query.order === 'desc' ? '-' : ''}${query.sort}`
+    page_size: String(query.pageSize)
+  }
+
+  // A text query is ranked by relevance; only a sort the user picked overrides it
+  if (!(query.text && query.sort === DEFAULT_SORT)) {
+    params.ordering = `${query.order === 'desc' ? '-' : ''}${query.sort}`
   }
 
   if (query.text) {

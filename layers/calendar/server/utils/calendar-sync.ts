@@ -1,10 +1,11 @@
-import { and, count, eq, gt, inArray, isNull, like, lt, or } from 'drizzle-orm'
+import { and, eq, gt, inArray, isNull, like, lt, or, sql } from 'drizzle-orm'
 import type { SqliteRemoteDatabase } from 'drizzle-orm/sqlite-proxy'
 import type { Calendar, CalendarEvent, CalendarSyncStatus } from '../../shared/types/calendar'
 import { calendarCacheSchema } from '../db/cache'
 import { calendarCollections, calendarObjects, calendarSync } from '../db/cache-schema'
 import { objectBounds } from '../calendar-sync/bounds'
 import { diffObjects } from '../calendar-sync/diff'
+import { deleteSearchRows, deleteSearchRow, deleteSearchService, indexSearchRow } from './calendar-search'
 import { expandEvents, objectParticipants, objectParticipantRoles } from './calendar-ical'
 import type { CalendarProvider, RemoteCalendarObject } from './calendar-provider'
 
@@ -79,6 +80,7 @@ async function upsertRows(service: string, rows: ReturnType<typeof toRows>): Pro
     return
   }
 
+  const timeZone = calendarTimeZone()
   await write(async (tx) => {
     for (const row of rows) {
       await tx.insert(calendarObjects).values(row).onConflictDoUpdate({
@@ -93,6 +95,9 @@ async function upsertRows(service: string, rows: ReturnType<typeof toRows>): Pro
           lastEnd: row.lastEnd
         }
       })
+      // The search index is part of the object's cache entry, so it never
+      // drifts from the data it was built from
+      await indexSearchRow(tx, service, row, timeZone)
     }
   })
 }
@@ -104,13 +109,17 @@ export async function cacheCalendarObject(service: string, calendarUrl: string, 
 
 /** Drops one cached object by href, e.g. after it was deleted remotely. */
 export async function removeCachedObject(service: string, url: string): Promise<void> {
-  await write(tx => tx.delete(calendarObjects).where(and(eq(calendarObjects.service, service), eq(calendarObjects.url, url))))
+  await write(async (tx) => {
+    await tx.delete(calendarObjects).where(and(eq(calendarObjects.service, service), eq(calendarObjects.url, url)))
+    await deleteSearchRow(tx, service, url)
+  })
 }
 
 /** Drops every cached row of a removed service. */
 export async function removeCachedService(service: string): Promise<void> {
   await write(async (tx) => {
     await tx.delete(calendarObjects).where(eq(calendarObjects.service, service))
+    await deleteSearchService(tx, service)
     await tx.delete(calendarCollections).where(eq(calendarCollections.service, service))
     await tx.delete(calendarSync).where(eq(calendarSync.service, service))
   })
@@ -158,6 +167,7 @@ async function ensureCacheVersion(service: string): Promise<void> {
 
   await write(async (tx) => {
     await tx.delete(calendarObjects).where(eq(calendarObjects.service, service))
+    await deleteSearchService(tx, service)
     await tx.update(calendarCollections).set({ ctag: null, syncToken: null }).where(eq(calendarCollections.service, service))
   })
 }
@@ -170,18 +180,22 @@ async function syncCollections(service: string, calendars: Calendar[]): Promise<
   const remoteUrls = new Set(calendars.map(calendar => calendar.url))
   const gone = known.filter(row => !remoteUrls.has(row.url)).map(row => row.url)
 
-  let removed = 0
-  if (gone.length) {
-    const row = await db.select({ count: count() }).from(calendarObjects)
-      .where(and(eq(calendarObjects.service, service), inArray(calendarObjects.calendarUrl, gone)))
-      .get()
-    removed = row?.count ?? 0
-  }
+  // The indexed rows have to go with the objects; the FTS table has no
+  // calendar column, so the URLs are read before the objects are deleted
+  const removedUrls = gone.length
+    ? (await db.select({ url: calendarObjects.url }).from(calendarObjects)
+        .where(and(eq(calendarObjects.service, service), inArray(calendarObjects.calendarUrl, gone))))
+        .map(row => row.url)
+    : []
 
   await write(async (tx) => {
     for (const urls of chunk(gone, SQL_CHUNK)) {
       await tx.delete(calendarObjects).where(and(eq(calendarObjects.service, service), inArray(calendarObjects.calendarUrl, urls)))
       await tx.delete(calendarCollections).where(and(eq(calendarCollections.service, service), inArray(calendarCollections.url, urls)))
+    }
+
+    for (const urls of chunk(removedUrls, SQL_CHUNK)) {
+      await deleteSearchRows(tx, service, urls)
     }
 
     for (const calendar of calendars) {
@@ -203,7 +217,7 @@ async function syncCollections(service: string, calendars: Calendar[]): Promise<
     }
   })
 
-  return { ctags: new Map(known.map(row => [row.url, row.ctag])), removed }
+  return { ctags: new Map(known.map(row => [row.url, row.ctag])), removed: removedUrls.length }
 }
 
 /** Diffs and refreshes the objects of one calendar; returns the objects upserted or removed. */
@@ -233,12 +247,14 @@ async function syncObjects(service: string, calendar: Calendar, provider: Calend
     }
     return object
   })
-  const rows = toRows(service, calendar.url, changed, calendarTimeZone())
+  const timeZone = calendarTimeZone()
+  const rows = toRows(service, calendar.url, changed, timeZone)
   const syncedAt = new Date()
 
   await write(async (tx) => {
     for (const urls of chunk(diff.removed, SQL_CHUNK)) {
       await tx.delete(calendarObjects).where(and(eq(calendarObjects.service, service), eq(calendarObjects.calendarUrl, calendar.url), inArray(calendarObjects.url, urls)))
+      await deleteSearchRows(tx, service, urls)
     }
 
     for (const row of rows) {
@@ -254,6 +270,7 @@ async function syncObjects(service: string, calendar: Calendar, provider: Calend
           lastEnd: row.lastEnd
         }
       })
+      await indexSearchRow(tx, service, row, timeZone)
     }
 
     await tx.update(calendarCollections).set({
@@ -516,4 +533,72 @@ export async function cachedObjectsByUid(service: string, uid: string, db?: Cale
     eq(calendarObjects.service, service),
     eq(calendarObjects.uid, uid)
   ))
+}
+
+// --- Full-text index ------------------------------------------------------
+
+/** Objects one backfill batch indexes before yielding the cache write queue. */
+const SEARCH_BACKFILL_BATCH = 200
+const SEARCH_REBUILD_LOCK = 'calendar-search-rebuild'
+
+function rowCount(rows: [number][] | undefined): number {
+  return rows?.[0]?.[0] ?? 0
+}
+
+/**
+ * Indexes the cached objects of a database that has no search rows yet. Returns
+ * how many objects were indexed, 0 when there was nothing to do.
+ */
+export async function backfillCalendarSearch(
+  db: CalendarCacheDb,
+  writeBatch: <T>(fn: (tx: CacheTransaction) => Promise<T>) => Promise<T>,
+  timeZone = calendarTimeZone()
+): Promise<number> {
+  const [searchRows, objectRows] = await Promise.all([
+    db.values<[number]>(sql`SELECT count(*) FROM calendar_search`),
+    db.values<[number]>(sql`SELECT count(*) FROM calendar_objects`)
+  ])
+
+  // A non-empty index is authoritative; rebuilding it would drop live rows
+  if (rowCount(searchRows) > 0 || rowCount(objectRows) === 0) {
+    return 0
+  }
+
+  let indexed = 0
+
+  for (let offset = 0; ; offset += SEARCH_BACKFILL_BATCH) {
+    const rows = await db.select({ service: calendarObjects.service, url: calendarObjects.url, data: calendarObjects.data })
+      .from(calendarObjects).limit(SEARCH_BACKFILL_BATCH).offset(offset)
+
+    if (!rows.length) {
+      break
+    }
+
+    await writeBatch(async (tx) => {
+      for (const row of rows) {
+        await indexSearchRow(tx, row.service, row, timeZone)
+      }
+    })
+    indexed += rows.length
+
+    if (rows.length < SEARCH_BACKFILL_BATCH) {
+      break
+    }
+  }
+
+  return indexed
+}
+
+/**
+ * Builds the search index on startup when it is missing but objects exist. The
+ * lock keeps the work on a single cluster worker; the other workers read the
+ * index once it is there.
+ */
+export async function rebuildCalendarSearch(): Promise<number> {
+  const result = await withLock(SEARCH_REBUILD_LOCK, LOCK_TTL_MS, async () => {
+    const db = await cacheDb()
+    return backfillCalendarSearch(db, write)
+  })
+
+  return result ?? 0
 }

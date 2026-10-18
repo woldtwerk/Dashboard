@@ -24,6 +24,7 @@ import type {
   DocumentsTask
 } from '../../../documents/shared/types/documents'
 import { filtersToRules, rulesToFilters } from './saved-view-rules'
+import { fromPaperlessHighlights } from './highlight'
 
 // --- DTOs (the shapes the Paperless-ngx API returns) ----------------------
 
@@ -32,6 +33,16 @@ export interface PaperlessNoteDto {
   note: string
   created: string
   user: { id: number, username: string, first_name?: string, last_name?: string }
+}
+
+export interface PaperlessSearchHitDto {
+  /** Relevance score; only present when the request carried a `query` */
+  score?: number
+  rank?: number
+  /** Excerpt HTML with `<span class="match">` around the matches */
+  highlights?: string
+  text?: string
+  document_id?: number
 }
 
 export interface PaperlessDocumentDto {
@@ -54,6 +65,8 @@ export interface PaperlessDocumentDto {
   notes?: PaperlessNoteDto[]
   owner: number | null
   root_document?: number | null
+  /** Relevance metadata Paperless adds to full-text search results */
+  __search_hit__?: PaperlessSearchHitDto
 }
 
 export interface PaperlessTagDto {
@@ -211,7 +224,10 @@ export function toDocument(dto: PaperlessDocumentDto): DocumentsDocument {
     customFields: (dto.custom_fields ?? []).map(toCustomFieldValue),
     notes: dto.notes?.map(toNote),
     owner: dto.owner,
-    rootDocument: dto.root_document
+    rootDocument: dto.root_document,
+    // Full-text results carry the matched excerpt, already marker-tagged
+    snippet: fromPaperlessHighlights(dto.__search_hit__?.highlights),
+    score: dto.__search_hit__?.score
   }
 }
 
