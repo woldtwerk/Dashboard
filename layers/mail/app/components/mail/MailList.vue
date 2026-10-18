@@ -80,44 +80,47 @@ defineShortcuts({
 </script>
 
 <template>
-  <div ref="scroller" class="overflow-y-auto divide-y divide-default">
-    <div
-      v-for="mail in mails"
-      :key="mailKey(mail)"
-      :ref="(el: unknown) => { mailsRefs[mailKey(mail)] = el as Element | null }"
-      :data-mail-key="mailKey(mail)"
-    >
+  <div ref="scroller" class="overflow-y-auto">
+    <TransitionGroup name="mail" tag="div" class="relative">
       <div
-        class="p-4 sm:px-6 text-sm cursor-pointer border-l-2 transition-colors"
-        :class="[
-          mail.unread ? 'text-highlighted' : 'text-toned',
-          selectedMail && selectedKey === mailKey(mail)
-            ? 'border-primary bg-primary/10'
-            : 'border-bg hover:border-primary hover:bg-primary/5'
-        ]"
-        @click="selectedMail = mail"
+        v-for="mail in mails"
+        :key="mailKey(mail)"
+        :ref="(el: unknown) => { mailsRefs[mailKey(mail)] = el as Element | null }"
+        :data-mail-key="mailKey(mail)"
+        class="border-b border-default bg-default"
       >
-        <div class="flex items-center justify-between gap-2" :class="[mail.unread && 'font-semibold']">
-          <div class="flex items-center gap-3 min-w-0">
-            <span class="truncate">{{ formatMailAddress(mail.from[0]) }}</span>
+        <div
+          class="p-4 sm:px-6 text-sm cursor-pointer border-l-2 transition-colors"
+          :class="[
+            mail.unread ? 'text-highlighted' : 'text-toned',
+            selectedMail && selectedKey === mailKey(mail)
+              ? 'border-primary bg-primary/10'
+              : 'border-bg hover:border-primary hover:bg-primary/5'
+          ]"
+          @click="selectedMail = mail"
+        >
+          <div class="flex items-center justify-between gap-2" :class="[mail.unread && 'font-semibold']">
+            <div class="flex items-center gap-3 min-w-0">
+              <span class="truncate">{{ formatMailAddress(mail.from[0]) }}</span>
 
-            <UChip v-if="mail.unread" />
-            <UIcon v-if="mail.flagged" name="i-lucide-star" class="size-3.5 shrink-0 text-warning" />
-          </div>
+              <UChip v-if="mail.unread" />
+              <UIcon v-if="mail.flagged" name="i-lucide-star" class="size-3.5 shrink-0 text-warning" />
+            </div>
 
-          <div class="flex shrink-0 items-center gap-2">
-            <span v-if="showMailbox" class="rounded bg-elevated px-1.5 py-0.5 text-xs font-normal text-dimmed">
-              {{ mailboxName(mail) }}
-            </span>
-            <span>{{ isToday(new Date(mail.date)) ? format(new Date(mail.date), 'HH:mm') : format(new Date(mail.date), 'dd MMM') }}</span>
+            <div class="flex shrink-0 items-center gap-2">
+              <span v-if="showMailbox" class="rounded bg-elevated px-1.5 py-0.5 text-xs font-normal text-dimmed">
+                {{ mailboxName(mail) }}
+              </span>
+              <span>{{ isToday(new Date(mail.date)) ? format(new Date(mail.date), 'HH:mm') : format(new Date(mail.date), 'dd MMM') }}</span>
+            </div>
           </div>
+          <!-- eslint-disable-next-line vue/no-v-html -- highlightToHtml escapes the mail content -->
+          <p class="truncate" :class="[mail.unread && 'font-semibold']" v-html="highlightToHtml(mail.subjectHighlight ?? mail.subject) || '(no subject)'" />
+          <!-- eslint-disable-next-line vue/no-v-html -- highlightToHtml escapes the mail content -->
+          <p v-if="mail.snippet" class="text-dimmed line-clamp-2" v-html="highlightToHtml(mail.snippet)" />
         </div>
-        <!-- eslint-disable-next-line vue/no-v-html -- highlightToHtml escapes the mail content -->
-        <p class="truncate" :class="[mail.unread && 'font-semibold']" v-html="highlightToHtml(mail.subjectHighlight ?? mail.subject) || '(no subject)'" />
-        <!-- eslint-disable-next-line vue/no-v-html -- highlightToHtml escapes the mail content -->
-        <p v-if="mail.snippet" class="text-dimmed line-clamp-2" v-html="highlightToHtml(mail.snippet)" />
       </div>
-    </div>
+    </TransitionGroup>
 
     <slot name="more" />
 
@@ -129,3 +132,36 @@ defineShortcuts({
     </p>
   </div>
 </template>
+
+<style scoped>
+.mail-enter-active {
+  transition: opacity 300ms ease;
+}
+
+.mail-enter-from {
+  opacity: 0;
+}
+
+.mail-leave-active {
+  transition: opacity 300ms ease;
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+
+.mail-leave-to {
+  opacity: 0;
+}
+
+.mail-move {
+  transition: transform 300ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mail-enter-active,
+  .mail-leave-active,
+  .mail-move {
+    transition: none;
+  }
+}
+</style>

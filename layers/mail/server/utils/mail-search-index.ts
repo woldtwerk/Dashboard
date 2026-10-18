@@ -20,10 +20,13 @@ export interface MailIndexQuery {
 /** Everything that narrows the result, without paging; for facet suggestions */
 export type MailFacetQuery = Pick<MailIndexQuery, 'services' | 'mailbox' | 'search'>
 
+/** A flag change merged into an already indexed document; `updateDocuments` merges the fields */
+export type MailFlagUpdate = Pick<MailDocument, 'id'> & Partial<Pick<MailDocument, 'unread' | 'flagged'>>
+
 /** Port for a search engine holding indexed mail (e.g. Meilisearch) */
 export interface MailSearchIndex {
   upsert(documents: MailDocument[]): Promise<void>
-  updateFlags(updates: Pick<MailDocument, 'id' | 'unread' | 'flagged'>[]): Promise<void>
+  updateFlags(updates: MailFlagUpdate[]): Promise<void>
   remove(ids: string[]): Promise<void>
   /** All documents of a service, or of one of its mailboxes */
   removeMailbox(service: string, mailbox?: string): Promise<void>

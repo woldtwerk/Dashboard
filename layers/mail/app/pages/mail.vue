@@ -2,6 +2,7 @@
 import { breakpointsTailwind, refDebounced, useDebounceFn } from '@vueuse/core'
 import type { LocationQuery } from 'vue-router'
 import type { MailConversation, MailSummary } from '#layers/mail/shared/types/mail'
+import type { RetainedConversations, RetainedMails } from '#layers/mail/app/utils/mail-retention'
 import type { SetupState } from '#layers/core/shared/types/setup'
 
 useSeoMeta({ title: 'Mail' })
@@ -202,6 +203,46 @@ watch(baseResult, (value) => {
   }
 }, { immediate: true })
 
+// Mails and conversations the unread filter dropped but that stay visible: while
+// one is open, and for a moment after it was left. Client-only UI state per tab.
+const retained = ref<RetainedMails>(new Map())
+const retainedConversations = ref<RetainedConversations>(new Map())
+const retentionTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+/** The retained mail that is open right now, by `mailKey` */
+let openRetainedKey: string | null = null
+/** The retained conversation that is open right now, by conversation key */
+let openRetainedConversationKey: string | null = null
+
+function scheduleRetentionExpire(key: string) {
+  const pending = retentionTimers.get(key)
+  if (pending) {
+    clearTimeout(pending)
+  }
+  retentionTimers.set(key, setTimeout(() => {
+    retentionTimers.delete(key)
+    expire(retained.value, Date.now())
+    expire(retainedConversations.value, Date.now())
+    // expire() mutates the maps in place; hand the computed a fresh map so it re-runs
+    retained.value = new Map(retained.value)
+    retainedConversations.value = new Map(retainedConversations.value)
+  }, MAIL_RETENTION_MS))
+}
+
+/** Drop everything held; a changed folder, search or filter starts over */
+function clearRetention() {
+  for (const timer of retentionTimers.values()) {
+    clearTimeout(timer)
+  }
+  retentionTimers.clear()
+  retained.value = new Map()
+  retainedConversations.value = new Map()
+  openRetainedKey = null
+  openRetainedConversationKey = null
+}
+
+onBeforeUnmount(clearRetention)
+
 const listRef = ref<{ scrollToTop: () => void } | null>(null)
 
 const listIdentity = computed(() => JSON.stringify({
@@ -214,6 +255,7 @@ const listIdentity = computed(() => JSON.stringify({
 // A filter, folder or account change starts a fresh list at page 1 and returns to the top
 watch(listIdentity, () => {
   basePages.value = 1
+  clearRetention()
   refresh()
   listRef.value?.scrollToTop()
 })
@@ -262,6 +304,37 @@ const conversations = ref<MailConversation[]>([])
 const conversationsStatus = ref<'idle' | 'pending' | 'success'>('idle')
 const conversationsLoading = ref(false)
 const conversationState = ref({ offset: 0, done: false })
+
+// The conversations list with the unread filter's drop-outs kept visible
+const visibleConversationList = computed(() => visibleConversations(conversations.value, retainedConversations.value, criteria.value))
+
+// The open conversation once the loaded list or the retention state can supply it
+const selectedConversationKey = computed(() => {
+  const key = conversationKey.value
+  if (!key) {
+    return undefined
+  }
+  return conversations.value.some(item => item.key === key) || retainedConversations.value.has(key) ? key : undefined
+})
+
+// Keep the open conversation in the list while it is unread-filtered, then let it go
+watch(selectedConversationKey, (key) => {
+  const previous = openRetainedConversationKey
+  if (previous && previous !== key) {
+    release(retainedConversations.value, previous, Date.now())
+    scheduleRetentionExpire(previous)
+    openRetainedConversationKey = null
+  }
+
+  if (key && criteria.value.unread) {
+    const conversation = conversations.value.find(item => item.key === key)
+      ?? retainedConversations.value.get(key)?.conversation
+    if (conversation) {
+      retainConversation(retainedConversations.value, conversation)
+      openRetainedConversationKey = key
+    }
+  }
+}, { immediate: import.meta.client })
 
 async function fetchConversations(offset: number, limit: number) {
   return $fetch<MailConversation[]>('/api/mail/conversations', {
@@ -424,6 +497,9 @@ async function loadMore() {
 const selection = computed(() => mailSelectionFromQuery(route.query, mailbox.value))
 const selectionKey = computed(() => selection.value && `${selection.value.mailbox}:${selection.value.uid}`)
 
+// The list as it should render: fetched mails plus the ones the unread filter dropped
+const visibleList = computed(() => visibleMails(mails.value, retained.value, criteria.value))
+
 // A linked mail may not be in the current list, e.g. outside the loaded pages
 const { data: linkedMail } = await useAsyncData(
   () => `mail-linked:${service.value}:${selectionKey.value ?? ''}`,
@@ -433,7 +509,7 @@ const { data: linkedMail } = await useAsyncData(
 )
 
 const selectedMail = computed<MailSummary | null>({
-  get: () => mails.value.find(mail => isSelectedMail(mail, selection.value)) ?? linkedMail.value ?? null,
+  get: () => visibleList.value.find(mail => isSelectedMail(mail, selection.value)) ?? linkedMail.value ?? null,
   set: mail => updateQuery(mailSelectionToQuery(mail ? { uid: mail.uid, mailbox: mail.mailbox } : null, mailbox.value))
 })
 
@@ -469,9 +545,26 @@ async function setSeen(mail: MailSummary, seen: boolean) {
   }
 }
 
-watch(() => selectedMail.value && mailKey(selectedMail.value), () => {
-  if (selectedMail.value?.unread) {
-    setSeen(selectedMail.value, true)
+watch(() => selectedMail.value && mailKey(selectedMail.value), (key) => {
+  // Leaving the previously open mail: let it go after the delay
+  const previous = openRetainedKey
+  if (previous && previous !== key) {
+    release(retained.value, previous, Date.now())
+    scheduleRetentionExpire(previous)
+    openRetainedKey = null
+  }
+
+  const mail = selectedMail.value
+  const held = key ? retained.value.get(key) : undefined
+
+  // Keep it visible while open; also when a released mail is opened again
+  if (key && criteria.value.unread && mail && (mail.unread || held)) {
+    retain(retained.value, mail)
+    openRetainedKey = key
+  }
+
+  if (mail?.unread) {
+    setSeen(mail, true)
   }
 }, { immediate: import.meta.client })
 
@@ -680,11 +773,11 @@ const isMobile = breakpoints.smaller('lg')
     </div>
 
     <template v-if="showThreads">
-      <div v-if="conversationsStatus === 'pending' && !conversations.length" class="flex items-center justify-center p-8">
+      <div v-if="conversationsStatus === 'pending' && !visibleConversationList.length" class="flex items-center justify-center p-8">
         <UIcon name="i-lucide-loader-circle" class="size-6 animate-spin text-dimmed" />
       </div>
       <UEmpty
-        v-else-if="!conversations.length"
+        v-else-if="!visibleConversationList.length"
         icon="i-lucide-messages-square"
         title="No conversations"
         description="Nothing matches the current filters."
@@ -694,7 +787,7 @@ const isMobile = breakpoints.smaller('lg')
       <MailConversationList
         v-else
         ref="conversationListRef"
-        :conversations="conversations"
+        :conversations="visibleConversationList"
         :selected-key="conversationKey"
         :own-address="ownAddress"
         :loading-more="conversationsLoading"
@@ -716,7 +809,7 @@ const isMobile = breakpoints.smaller('lg')
         class="m-4 w-auto"
       />
       <UEmpty
-        v-else-if="!mails.length && status !== 'pending'"
+        v-else-if="!visibleList.length && status !== 'pending'"
         :icon="isFiltered ? 'i-lucide-search-x' : 'i-lucide-inbox'"
         :title="isFiltered ? 'No matching messages' : 'No messages'"
         :actions="isFiltered ? [{ label: 'Reset filters', color: 'neutral', variant: 'outline', onClick: resetFilters }] : undefined"
@@ -727,7 +820,7 @@ const isMobile = breakpoints.smaller('lg')
         v-else
         ref="listRef"
         v-model="selectedMail"
-        :mails="mails"
+        :mails="visibleList"
         :show-mailbox="allFolders"
         :mailbox-names="mailboxNames"
         :loading-more="loadingMore"
