@@ -1,4 +1,5 @@
 import ICAL from 'ical.js'
+import { normalizeEmail } from '../../../core/shared/entities'
 import type { CalendarEvent, CalendarEventInput } from '../../shared/types/calendar'
 import { icalTimeToDate, tzidOf } from './ical-time'
 
@@ -145,6 +146,54 @@ export function expandEvents(ics: string, source: EventSource, window: EventWind
 
       return results
     })
+}
+
+/** `mailto:` address of an ORGANIZER or ATTENDEE value, without the scheme */
+function mailtoAddress(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+
+  const address = value.trim().replace(/^mailto:/i, '')
+  return normalizeEmail(address)
+}
+
+/** Everyone invited to the object, and the organizer when one is named */
+export interface ObjectParticipants {
+  participants: string[]
+  organizer?: string
+}
+
+/**
+ * Normalized emails of the ORGANIZER and every ATTENDEE of all VEVENTs. The
+ * organizer is part of `participants` as well; overrides can add their own.
+ */
+export function objectParticipantRoles(ics: string): ObjectParticipants {
+  const calendar = parseCalendar(ics)
+  const participants = new Set<string>()
+  let organizer: string | undefined
+
+  for (const component of calendar.getAllSubcomponents('vevent')) {
+    const owner = mailtoAddress(component.getFirstPropertyValue('organizer'))
+    if (owner) {
+      organizer ??= owner
+      participants.add(owner)
+    }
+
+    for (const property of component.getAllProperties('attendee')) {
+      const attendee = mailtoAddress(property.getFirstValue())
+      if (attendee) {
+        participants.add(attendee)
+      }
+    }
+  }
+
+  return { participants: [...participants].sort(), organizer }
+}
+
+/** The email addresses on an iCalendar object, organized or invited */
+export function objectParticipants(ics: string): string[] {
+  return objectParticipantRoles(ics).participants
 }
 
 // --- Editing: patch the existing object instead of rebuilding it, so every

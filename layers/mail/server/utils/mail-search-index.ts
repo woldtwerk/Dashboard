@@ -7,6 +7,8 @@ export interface MailIndexQuery {
   services: string[]
   /** Omit to search all folders */
   mailbox?: string
+  /** Normalized address that has to be on the mail as sender, recipient or in cc */
+  participant?: string
   search: MailSearch
   limit: number
   /** Skip this many best matches; for "load more" */

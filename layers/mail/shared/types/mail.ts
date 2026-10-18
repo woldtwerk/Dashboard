@@ -22,6 +22,9 @@ export interface MailSummary {
   /** Subject with Meilisearch match markers, from the search index */
   subjectHighlight?: string
   from: MailAddress[]
+  /** Recipients; only search-index results carry them, to tell how a person took part */
+  to?: MailAddress[]
+  cc?: MailAddress[]
   date: string
   unread: boolean
   flagged: boolean
