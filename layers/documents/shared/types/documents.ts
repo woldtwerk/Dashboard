@@ -104,6 +104,10 @@ export interface DocumentsDocument {
   owner: number | null
   rootDocument?: number | null
   versions?: DocumentsVersion[]
+  /** Matched excerpt with highlight markers; only on full-text search results */
+  snippet?: string
+  /** Relevance score; only on full-text search results */
+  score?: number
 }
 
 /** Fields an edit of a document may change. */

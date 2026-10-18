@@ -1,6 +1,4 @@
 import { defineEventHandler, getValidatedQuery } from 'nuxt/server'
-import type { Contact } from '../../../shared/types/contacts'
-import { matchContact } from '../../../app/utils/contacts'
 import { contactsQuerySchema } from '../../utils/contacts-schema'
 
 export default defineEventHandler(async (event) => {
@@ -22,13 +20,3 @@ export default defineEventHandler(async (event) => {
 
   return results.flat()
 })
-
-async function listServiceContacts(id: string, addressBook: string | undefined, q: string | undefined): Promise<Contact[]> {
-  const provider = await useContactsProvider(id)
-  const books = addressBook ? [addressBook] : (await provider.listAddressBooks()).map(item => item.url)
-  const lists = await Promise.all(books.map(url => provider.listContacts(url)))
-
-  return lists.flat()
-    .filter(contact => matchContact(contact, q ?? ''))
-    .map(item => ({ ...item, service: id }))
-}

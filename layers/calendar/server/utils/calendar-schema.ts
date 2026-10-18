@@ -19,6 +19,11 @@ export const eventsQuerySchema = z.object({
   end: z.coerce.date()
 })
 
+export const calendarSearchSchema = z.object({
+  q: z.string().trim().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(30)
+})
+
 export const eventBodySchema = z.object({
   service: z.string().min(1),
   calendar: z.string().min(1),
