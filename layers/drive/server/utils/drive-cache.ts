@@ -115,7 +115,7 @@ async function revalidate(
   } catch (error) {
     // A busy or failing refresh keeps the stale listing; only a real failure is worth a log
     if (!isDriveBusy(error)) {
-      console.warn(`[drive] Could not refresh the listing of "${path}":`, error)
+      useServiceLogger('drive', service).warn(`Could not refresh the listing of "${path}"`, { error: String(error) })
     }
   }
 }
@@ -211,7 +211,7 @@ export async function invalidateDriveListings(service: string, paths: string[]):
     try {
       await storage.removeItem(driveListKey(service, path))
     } catch (error) {
-      console.warn(`[drive] Could not invalidate the cached listing of "${path}":`, error)
+      useServiceLogger('drive', service).warn(`Could not invalidate the cached listing of "${path}"`, { error: String(error) })
     }
   }))
 }

@@ -20,6 +20,7 @@ export function mailRefreshFor(event: DomainEvent, current: { service: string, m
       && event.service === current.service
       && (!event.resource || event.resource === current.mailbox),
     folders: event.type === 'changed',
-    indexStatus: event.type === 'synced'
+    // A finished sync and every folder it completes move the index progress
+    indexStatus: event.type === 'synced' || event.type === 'changed'
   }
 }

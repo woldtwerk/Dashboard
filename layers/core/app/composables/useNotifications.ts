@@ -16,6 +16,7 @@ const useNotificationsState = createSharedComposable(() => {
     default: () => ({ notifications: [], unread: 0 })
   })
   const { data: settings } = useSettings<NotificationSettings>('notifications')
+  const { subscribed: pushSubscribed } = usePushSubscription()
 
   const permission = ref<NotificationPermissionState>('default')
   const visible = ref(true)
@@ -33,6 +34,12 @@ const useNotificationsState = createSharedComposable(() => {
   }
 
   function showDesktop(notification: AppNotification) {
+    // Web Push already delivers this one through the service worker. Showing a
+    // window.Notification here as well would announce the same event twice.
+    if (pushSubscribed.value) {
+      return
+    }
+
     const desktop = new window.Notification(notification.title, {
       body: notification.body,
       // The tag makes several open tabs collapse into one OS notification
