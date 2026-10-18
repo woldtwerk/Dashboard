@@ -46,6 +46,15 @@ describe('buildMailFilter', () => {
   it('omits empty conversation keys', () => {
     expect(buildMailFilter({ services: ['a'], conversationKeys: [], search: {} })).toEqual(['service IN ["a"]'])
   })
+
+  it('restricts to an explicit list of mailboxes and escapes them', () => {
+    expect(buildMailFilter({ services: ['a'], mailboxes: ['INBOX', 'Folders/"Work"'], search: {} }))
+      .toEqual(['service IN ["a"]', 'mailbox IN ["INBOX", "Folders/\\"Work\\""]'])
+  })
+
+  it('omits an empty mailbox list', () => {
+    expect(buildMailFilter({ services: ['a'], mailboxes: [], search: {} })).toEqual(['service IN ["a"]'])
+  })
 })
 
 describe('dayCountQueries', () => {
