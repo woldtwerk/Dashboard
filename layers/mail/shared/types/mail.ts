@@ -48,6 +48,8 @@ export interface MailMessage extends MailSummary {
   references?: string[]
   to: MailAddress[]
   cc: MailAddress[]
+  /** Reply-To header; a reply goes here instead of the From address */
+  replyTo?: MailAddress[]
   text?: string
   html?: string
 }

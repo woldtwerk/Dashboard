@@ -46,6 +46,15 @@ export function normalizeSubject(subject: string): string {
   return stripSubjectPrefix(subject).toLowerCase()
 }
 
+/**
+ * Whether a subject already opens with a reply or forward marker, so composing
+ * a reply must not add a second `Re:` in front of it. A list tag such as
+ * `[Security-news]` is not a marker.
+ */
+export function hasReplyPrefix(subject: string): boolean {
+  return REPLY_PREFIX.test(subject.trim())
+}
+
 /** A Message-ID without angle brackets, lower-cased; for matching References */
 export function normalizeMessageId(messageId?: string): string | undefined {
   const value = messageId?.trim().replace(/^</, '').replace(/>$/, '').trim().toLowerCase()

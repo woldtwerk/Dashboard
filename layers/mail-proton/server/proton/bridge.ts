@@ -11,6 +11,8 @@ import type { MailAddress, MailSummary } from '../../../mail/shared/types/mail'
 export interface ProtonSettings {
   host: string
   port: number
+  /** Bridge's SMTP submission port; defaults to 1026 when the setup has none */
+  smtpPort?: number
   user: string
   password: string
   /** PEM encoded certificate exported from Bridge */
@@ -26,10 +28,32 @@ export function toProtonSettings(values: SetupValues): ProtonSettings {
   return {
     host: String(values.host ?? ''),
     port: Number(values.port),
+    smtpPort: values.smtpPort ? Number(values.smtpPort) : undefined,
     user: String(values.user ?? ''),
     password: String(values.password ?? ''),
     tlsCert: values.tlsCert ? String(values.tlsCert) : undefined,
     allowSelfSigned: values.allowSelfSigned === true
+  }
+}
+
+/** The TLS servername to verify; an IP host is left to the certificate's IP SAN */
+export function bridgeServername(host: string): string | undefined {
+  return isIP(host) ? undefined : host
+}
+
+/**
+ * The TLS options both Bridge clients use. The exported certificate is pinned as
+ * the only CA, so it already proves the server holds Bridge's key; a Bridge
+ * reached by another name (its container) may also match 127.0.0.1. Only set
+ * with a certificate: tls.connect rejects an explicit undefined.
+ */
+export function bridgeTlsOptions({ tlsCert, allowSelfSigned }: Pick<ProtonSettings, 'tlsCert' | 'allowSelfSigned'>) {
+  return {
+    ca: tlsCert || undefined,
+    rejectUnauthorized: !allowSelfSigned,
+    ...tlsCert && {
+      checkServerIdentity: (name: string, cert: PeerCertificate) => checkServerIdentity(name, cert) && checkServerIdentity('127.0.0.1', cert)
+    }
   }
 }
 
@@ -48,18 +72,9 @@ function createClient({ host, port, user, password, tlsCert, allowSelfSigned }: 
     secure: false,
     // Never send Bridge credentials in cleartext
     doSTARTTLS: true,
-    servername: isIP(host) ? undefined : host,
+    servername: bridgeServername(host),
     auth: { user, pass: password },
-    tls: {
-      ca: tlsCert || undefined,
-      rejectUnauthorized: !allowSelfSigned,
-      // Bridge's certificate is issued for 127.0.0.1. Pinned as the only CA, it already proves the server
-      // holds Bridge's key, so a Bridge reached by another name (its container) may also match 127.0.0.1.
-      // Only set with a certificate: tls.connect rejects an explicit undefined.
-      ...tlsCert && {
-        checkServerIdentity: (name: string, cert: PeerCertificate) => checkServerIdentity(name, cert) && checkServerIdentity('127.0.0.1', cert)
-      }
-    },
+    tls: bridgeTlsOptions({ tlsCert, allowSelfSigned }),
     logger: false
   })
 }

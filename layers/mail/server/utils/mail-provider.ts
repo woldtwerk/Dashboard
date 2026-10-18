@@ -1,6 +1,7 @@
 import { createError } from 'nuxt/server'
 import type { SetupValues } from '../../../core/shared/types/setup'
-import type { Mailbox, MailMessage, MailMessageState, MailSearch, MailSummary } from '../../shared/types/mail'
+import type { OutgoingMail } from '../../shared/mail-compose'
+import type { MailAddress, Mailbox, MailMessage, MailMessageState, MailSearch, MailSummary } from '../../shared/types/mail'
 
 /** Port every mail provider adapter implements. */
 export interface MailProvider {
@@ -12,6 +13,20 @@ export interface MailProvider {
   setFlagged(mailbox: string, uid: number, flagged: boolean): Promise<void>
   /** Moves one message to another mailbox; the target must already exist */
   moveMessage(mailbox: string, uid: number, target: string): Promise<void>
+
+  // --- Sending ---
+  /**
+   * Sends a mail through the account. Optional: a provider that cannot send
+   * omits it, and the send endpoint answers 501. The provider files the mail in
+   * Sent itself where the server does, so the API does not append it via IMAP.
+   */
+  send?(mail: OutgoingMail, from: MailAddress): Promise<{ messageId: string }>
+  /**
+   * Sets the `\Answered` flag on one message. Optional too: a provider that
+   * keeps the flag itself (Proton Bridge marks a reply as answered on send)
+   * leaves it out, and the send endpoint then skips the flag.
+   */
+  setAnswered?(mailbox: string, uid: number, answered: boolean): Promise<void>
 
   // --- Search index sync ---
   /** All messages of a mailbox with their flags; a new `uidValidity` invalidates all known UIDs */

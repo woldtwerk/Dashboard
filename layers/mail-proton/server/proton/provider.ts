@@ -5,6 +5,7 @@ import type { MailProvider } from '../../../mail/server/utils/mail-provider'
 import type { Mailbox, MailMessage, MailMessageState, MailSearch, MailSummary } from '../../../mail/shared/types/mail'
 import { sequenceRange, uidPage } from './sequence'
 import { toMailAddresses, toMailSummary, toProtonSettings, withProtonBridge, withProtonMailbox } from './bridge'
+import { sendProtonMail } from './mailer'
 
 const MESSAGE_QUERY = { uid: true, flags: true, envelope: true, internalDate: true } as const
 const INDEX_SOURCE_BYTES = 256 * 1024
@@ -19,6 +20,7 @@ async function toMailMessage(mailbox: string, message: FetchMessageObject): Prom
     references: toMessageIds(parsed.references),
     to: toMailAddresses(parsed.to),
     cc: toMailAddresses(parsed.cc),
+    replyTo: toMailAddresses(parsed.replyTo),
     text: parsed.text,
     html: parsed.html || undefined,
     hasAttachment: parsed.attachments.length > 0
@@ -172,6 +174,10 @@ export function createProtonMailProvider(values: SetupValues): MailProvider {
       return withProtonMailbox(settings, mailbox, async (client) => {
         await client.messageMove(String(uid), target, { uid: true })
       })
+    },
+
+    send(mail, from) {
+      return sendProtonMail(settings, mail, from)
     }
   }
 }
