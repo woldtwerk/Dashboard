@@ -113,3 +113,19 @@ export interface MailFolders {
   mailboxes: Mailbox[]
   error?: string
 }
+
+/** Sync state and progress of one service's search index */
+export interface MailIndexStatus {
+  service: string
+  /** Every indexed message, as the status tooltip reports it */
+  messages: number
+  /** Indexed messages of the folders the sync indexes */
+  indexed: number
+  /** Messages the provider reports for those folders; null until a sync listed them */
+  total: number | null
+  complete: boolean
+  syncing: boolean
+  /** Folder the running sync is working on */
+  mailbox?: string
+  syncedAt?: string
+}

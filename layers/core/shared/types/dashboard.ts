@@ -11,6 +11,14 @@
 
 export type ServiceHealth = 'ok' | 'syncing' | 'error' | 'unknown'
 
+/** Optional progress a source reports for an ongoing first-time job, e.g. an index */
+export interface ServiceProgress {
+  /** Whole percent, 0..100 */
+  percent: number
+  /** Short description of what is done, e.g. "19,556 of 25,012" */
+  label: string
+}
+
 export interface ServiceStatus {
   id: string
   name: string
@@ -20,6 +28,7 @@ export interface ServiceStatus {
   /** ISO time of the last completed sync; null if never or not syncing */
   syncedAt: string | null
   error?: string
+  progress?: ServiceProgress
 }
 
 /** A headline number for a stat tile */
