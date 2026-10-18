@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MailConversation, MailSummary } from '../shared/types/mail'
-import { isSelectedMail, mailComposeFromQuery, mailComposeToQuery, mailConversationFromQuery, mailConversationToQuery, mailListFromQuery, mailListToQuery, mailSearchFromQuery, mailSearchToApiQuery, mailSearchToQuery, mailSelectionFromQuery, mailSelectionToQuery, mailViewFromQuery, mailViewToQuery, mergeConversations, mergePage, nextPageState, restoreRequests } from '../app/utils/mail-query'
+import { isSelectedMail, listIdentityFromQuery, mailComposeFromQuery, mailComposeToQuery, mailConversationFromQuery, mailConversationToQuery, mailListFromQuery, mailListToQuery, mailSearchFromQuery, mailSearchToApiQuery, mailSearchToQuery, mailSelectionFromQuery, mailSelectionToQuery, mailViewFromQuery, mailViewParamFromQuery, mailViewToQuery, effectiveListView, mergeConversations, mergePage, nextPageState, restoreRequests } from '../app/utils/mail-query'
 
 const today = new Date('2026-10-16T12:00:00Z')
 
@@ -107,6 +107,56 @@ describe('mailView', () => {
     expect(mailViewFromQuery({ view: 'other' })).toBe('mails')
     expect(mailViewToQuery('threads')).toEqual({ view: 'threads', conversation: null, uid: null, in: null })
     expect(mailViewToQuery('mails')).toEqual({ view: null, conversation: null, uid: null, in: null })
+  })
+
+  it('distinguishes an explicit view from a missing one', () => {
+    expect(mailViewParamFromQuery({})).toBeUndefined()
+    expect(mailViewParamFromQuery({ view: 'mails' })).toBe('mails')
+    expect(mailViewParamFromQuery({ view: 'threads' })).toBe('threads')
+    expect(mailViewParamFromQuery({ view: 'other' })).toBeUndefined()
+  })
+})
+
+describe('effectiveListView', () => {
+  it('falls back to the saved view when the URL has none', () => {
+    expect(effectiveListView(undefined, 'conversations', true)).toBe('conversations')
+    expect(effectiveListView(undefined, 'mails', true)).toBe('mails')
+  })
+
+  it('lets an explicit URL view win for the visit', () => {
+    expect(effectiveListView('mails', 'conversations', true)).toBe('mails')
+    expect(effectiveListView('threads', 'mails', true)).toBe('conversations')
+  })
+
+  it('is always mails without a search index', () => {
+    expect(effectiveListView('threads', 'conversations', false)).toBe('mails')
+    expect(effectiveListView(undefined, 'conversations', false)).toBe('mails')
+  })
+})
+
+describe('listIdentityFromQuery', () => {
+  const base = { service: 'acct', mailbox: 'INBOX', view: 'threads' }
+
+  it('ignores the selection params and the loaded depth', () => {
+    const identity = listIdentityFromQuery(base)
+    expect(listIdentityFromQuery({ ...base, conversation: 'id:root@example.com' })).toBe(identity)
+    expect(listIdentityFromQuery({ ...base, uid: '42', in: 'Archive' })).toBe(identity)
+    expect(listIdentityFromQuery({ ...base, uid: '42', compose: 'reply' })).toBe(identity)
+    expect(listIdentityFromQuery({ ...base, pages: '4' })).toBe(identity)
+  })
+
+  it('changes with any list, view or filter param', () => {
+    const identity = listIdentityFromQuery(base)
+    expect(listIdentityFromQuery({ ...base, q: 'invoice' })).not.toBe(identity)
+    expect(listIdentityFromQuery({ ...base, unread: 'true' })).not.toBe(identity)
+    expect(listIdentityFromQuery({ ...base, flagged: 'true' })).not.toBe(identity)
+    expect(listIdentityFromQuery({ ...base, from: 'bob' })).not.toBe(identity)
+    expect(listIdentityFromQuery({ ...base, attachment: 'true' })).not.toBe(identity)
+    expect(listIdentityFromQuery({ ...base, since: '2026-10-01' })).not.toBe(identity)
+    expect(listIdentityFromQuery({ ...base, scope: 'all' })).not.toBe(identity)
+    expect(listIdentityFromQuery({ ...base, mailbox: 'Sent' })).not.toBe(identity)
+    expect(listIdentityFromQuery({ ...base, service: 'other' })).not.toBe(identity)
+    expect(listIdentityFromQuery({ ...base, view: 'mails' })).not.toBe(identity)
   })
 })
 

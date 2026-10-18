@@ -2,6 +2,7 @@
 import { format } from 'date-fns'
 import type { MailAddress, MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
 import type { OwnMailContext } from '#layers/mail/shared/mail-thread'
+import { isTrustedImageSender } from '#layers/mail/shared/mail-images'
 import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
 
 const props = defineProps<{
@@ -37,6 +38,7 @@ const messages = ref<Record<string, MailMessage>>({})
 const loading = ref<Record<string, boolean>>({})
 const failed = ref<Record<string, boolean>>({})
 const remoteAllowed = ref<Set<string>>(new Set())
+const { trustedImageSenders, trust, untrust } = useTrustedImageSenders()
 // One request per mail, so collapsing and expanding again does not fetch twice
 const requests = new Map<string, Promise<MailMessage>>()
 
@@ -151,16 +153,19 @@ function copyLine(value: string): string {
   return addressLine(messageFor(value)?.cc)
 }
 
-function hasRemoteImages(value: string): boolean {
-  return /<img[^>]+src\s*=\s*["']?https?:|url\(\s*["']?https?:/i.test(messageFor(value)?.html ?? '')
-}
-
 function allowsRemote(value: string): boolean {
   return remoteAllowed.value.has(value)
+    || isTrustedImageSender(messageFor(value)?.from[0]?.address, trustedImageSenders.value)
 }
 
-function allowRemote(value: string) {
-  remoteAllowed.value = new Set([...remoteAllowed.value, value])
+function setRemoteAllowed(value: string, allowed: boolean) {
+  const next = new Set(remoteAllowed.value)
+  if (allowed) {
+    next.add(value)
+  } else {
+    next.delete(value)
+  }
+  remoteAllowed.value = next
 }
 
 function composeFor(value: string, mode: MailComposeMode) {
@@ -280,14 +285,14 @@ function deleteFor(value: string) {
         />
 
         <template v-else-if="messageFor(item.value)">
-          <UAlert
-            v-if="hasRemoteImages(item.value) && !allowsRemote(item.value)"
-            color="neutral"
-            variant="subtle"
-            icon="i-lucide-image-off"
-            title="Remote images are blocked to protect your privacy."
-            :actions="[{ label: 'Load images', color: 'neutral', variant: 'outline', onClick: () => allowRemote(item.value) }]"
-            orientation="horizontal"
+          <MailRemoteImages
+            :html="messageFor(item.value)?.html"
+            :sender="messageFor(item.value)?.from[0]?.address"
+            :trusted="trustedImageSenders"
+            :allow-remote="allowsRemote(item.value)"
+            @update:allow-remote="value => setRemoteAllowed(item.value, value)"
+            @trust="trust"
+            @untrust="untrust"
           />
           <div class="rounded border border-default/60">
             <MailBody

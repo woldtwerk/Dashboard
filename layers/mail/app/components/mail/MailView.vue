@@ -3,6 +3,7 @@ import { format } from 'date-fns'
 import type { MailSummary } from '#layers/mail/shared/types/mail'
 import type { EntityRef } from '#layers/core/shared/types/entities'
 import { normalizeEmail } from '#layers/core/shared/entities'
+import { isTrustedImageSender } from '#layers/mail/shared/mail-images'
 
 const props = defineProps<{
   mail: MailSummary
@@ -41,9 +42,13 @@ const dropdownItems = [[{
   onSelect: () => emits('markUnread')
 }]]
 
-// Remote images (incl. tracking pixels) stay blocked until loaded explicitly for this message
-const hasRemoteImages = computed(() => /<img[^>]+src\s*=\s*["']?https?:|url\(\s*["']?https?:/i.test(message.value?.html ?? ''))
+// Remote images (incl. tracking pixels) stay blocked until loaded explicitly for this
+// message, or automatically for a sender the user trusts in the mail settings
 const allowRemoteImages = ref(false)
+const { trustedImageSenders, trust, untrust } = useTrustedImageSenders()
+const senderAddress = computed(() => normalizeEmail((message.value?.from[0] ?? props.mail.from[0])?.address))
+const senderTrusted = computed(() => isTrustedImageSender(senderAddress.value, trustedImageSenders.value))
+const remoteImagesAllowed = computed(() => allowRemoteImages.value || senderTrusted.value)
 
 const recipients = computed(() => message.value?.to ?? [])
 const copies = computed(() => message.value?.cc ?? [])
@@ -203,20 +208,18 @@ function openPerson(address?: string) {
         class="m-4"
       />
       <div v-else-if="message">
-        <UAlert
-          v-if="hasRemoteImages && !allowRemoteImages"
-          color="neutral"
-          variant="subtle"
-          icon="i-lucide-image-off"
-          title="Remote images are blocked to protect your privacy."
-          :actions="[{ label: 'Load images', color: 'neutral', variant: 'outline', onClick: () => { allowRemoteImages = true } }]"
-          orientation="horizontal"
-          class="rounded-none"
+        <MailRemoteImages
+          v-model:allow-remote="allowRemoteImages"
+          :html="message.html"
+          :sender="message.from[0]?.address ?? mail.from[0]?.address"
+          :trusted="trustedImageSenders"
+          @trust="trust"
+          @untrust="untrust"
         />
         <MailBody
           :html="message.html"
           :text="message.text"
-          :allow-remote-images="allowRemoteImages"
+          :allow-remote-images="remoteImagesAllowed"
         />
       </div>
     </div>

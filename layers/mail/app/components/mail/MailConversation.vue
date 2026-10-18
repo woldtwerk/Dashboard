@@ -23,11 +23,7 @@ const emits = defineEmits<{
 
 const toast = useToast()
 
-const { data: mails, status, error, refresh } = await useFetch<MailSummary[]>(() => `/api/mail/conversations/${encodeURIComponent(props.conversationKey)}`, {
-  query: computed(() => ({ service: props.service })),
-  default: () => [],
-  lazy: true
-})
+const { data: mails, status, error, refresh } = useMailConversation(() => props.conversationKey, () => props.service)
 
 // A stream is a mailing list or bulk sender; both kinds now read as one accordion
 const isStream = computed(() => isStreamKey(props.conversationKey))

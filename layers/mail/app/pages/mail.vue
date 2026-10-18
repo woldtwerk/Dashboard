@@ -8,14 +8,21 @@ import { trashTarget } from '#layers/mail/shared/mail-delete'
 import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
 import type { RetainedConversations, RetainedMail, RetainedMails } from '#layers/mail/app/utils/mail-retention'
 import type { SetupState } from '#layers/core/shared/types/setup'
+import type { MailListView, MailSettings } from '#layers/mail/shared/types/settings'
 
 useSeoMeta({ title: 'Mail' })
 
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
+const nuxtApp = useNuxtApp()
 // Forwards the browser's cookies on the server; plain `$fetch` on the client
 const requestFetch = useRequestFetch()
+
+// Read in setup, before the first list request, so SSR and hydration already use
+// the saved view; ?view= still wins for a shared link.
+const { data: mailSettings, save: saveMailSettings } = useSettings<MailSettings>('mail')
+const savedListView = computed<MailListView>(() => mailSettings.value.listView === 'conversations' ? 'conversations' : 'mails')
 
 const { data: allServices } = await useServices()
 const services = computed(() => allServices.value.filter(item => item.domain === 'mail'))
@@ -166,6 +173,19 @@ async function applyAssistant() {
   }
 }
 
+// Search index status (null without an index); refreshed when a sync finishes
+const { data: indexStatus, refresh: refreshIndexStatus } = await useFetch('/api/mail/index-status')
+const currentIndex = computed(() => indexStatus.value?.find(item => item.service === service.value))
+const indexAvailable = computed(() => !!indexStatus.value)
+const indexing = computed(() => !!currentIndex.value && (currentIndex.value.syncing || !currentIndex.value.complete))
+
+// Conversations view; the option only shows while a search index is configured.
+// An explicit ?view= wins for this visit, otherwise the saved listView applies.
+const viewParam = computed(() => mailViewParamFromQuery(route.query))
+const effectiveView = computed(() => effectiveListView(viewParam.value, savedListView.value, indexAvailable.value))
+const conversationKey = computed(() => mailConversationFromQuery(route.query))
+const showThreads = computed(() => effectiveView.value === 'conversations')
+
 // The URL `?pages=N` restores the loaded depth. A provider caps one request, so
 // the depth is restored page by page in parallel and merged newest first.
 const basePages = ref(list.value.pages)
@@ -180,6 +200,12 @@ const baseQuery = computed(() => ({
 }))
 
 const { data: baseResult, status, error, refresh } = await useAsyncData('mail-restore', async () => {
+  // The conversations view never shows the mails list, so fetching it there is a
+  // second, unused request. It loads when the view switches back to mails.
+  if (showThreads.value) {
+    return { mails: [] as MailSummary[], done: false }
+  }
+
   const pages = Math.min(basePages.value, Math.ceil(MAIL_REQUEST_MAX / MAIL_PAGE_SIZE))
   const results = await Promise.all(restoreRequests(pages, MAIL_PAGE_SIZE).map(offset => requestFetch<MailSummary[]>('/api/mail/messages', {
     query: { ...baseQuery.value, limit: MAIL_PAGE_SIZE, offset }
@@ -251,26 +277,24 @@ onBeforeUnmount(clearRetention)
 
 const listRef = ref<{ scrollToTop: () => void } | null>(null)
 
-const listIdentity = computed(() => JSON.stringify({
-  service: service.value,
-  mailbox: mailbox.value,
-  allFolders: allFolders.value,
-  criteria: criteria.value
-}))
+// The list's own params: account, folder, view and search filters start a fresh
+// list. The selection (uid/in/conversation/compose) is deliberately not part of
+// it, so opening a mail or a conversation leaves the list and its scroll alone.
+const listIdentity = computed(() => listIdentityFromQuery(route.query))
 
-// A filter, folder or account change starts a fresh list at page 1 and returns to the top
+// A filter, folder, account or view change starts the visible list over
 watch(listIdentity, () => {
-  basePages.value = 1
   clearRetention()
+
+  if (showThreads.value) {
+    // The conversations watcher below reloads the list that is actually shown
+    return
+  }
+
+  basePages.value = 1
   refresh()
   listRef.value?.scrollToTop()
 })
-
-// Search index status (null without an index); refreshed when a sync finishes
-const { data: indexStatus, refresh: refreshIndexStatus } = await useFetch('/api/mail/index-status')
-const currentIndex = computed(() => indexStatus.value?.find(item => item.service === service.value))
-const indexAvailable = computed(() => !!indexStatus.value)
-const indexing = computed(() => !!currentIndex.value && (currentIndex.value.syncing || !currentIndex.value.complete))
 
 // Index progress: poll while any account is still incomplete, and only on a
 // visible tab. A complete service stops the poll; an event refresh catches the rest.
@@ -291,15 +315,17 @@ watch([anyIndexing, documentVisible], ([pending, visibility]) => {
   }
 }, { immediate: true })
 
-// Conversations view; the option only shows while a search index is configured
-const view = computed(() => mailViewFromQuery(route.query))
-const conversationKey = computed(() => mailConversationFromQuery(route.query))
-const showThreads = computed(() => indexAvailable.value && view.value === 'threads')
-
-// The checkbox mirrors `?view=threads`; turning it off drops the parameter
+// The checkbox mirrors the effective view; toggling writes both the URL and the
+// saved default, so a reload without ?view= keeps the chosen view.
 const conversationsView = computed({
-  get: () => view.value === 'threads',
-  set: (value: boolean) => updateQuery(mailViewToQuery(value ? 'threads' : 'mails'))
+  get: () => effectiveView.value === 'conversations',
+  set: (value: boolean) => {
+    updateQuery(mailViewToQuery(value ? 'threads' : 'mails'))
+    void saveMailSettings({
+      trustedImageSenders: mailSettings.value.trustedImageSenders ?? [],
+      listView: value ? 'conversations' : 'mails'
+    })
+  }
 })
 
 // "View options" menu of the search toolbar; the checkbox mirrors `?view=threads`
@@ -422,8 +448,10 @@ async function reloadConversations() {
   }
 }
 
-// Fetch once the view is switched, and again from the start whenever the filters change
-watch([showThreads, conversationParams], () => {
+// Fetch once the view is switched, and again from the start whenever the list
+// identity changes. Selection params are not part of it, so opening a
+// conversation neither reloads the list nor scrolls it back to the top.
+watch([showThreads, listIdentity], () => {
   if (import.meta.client && showThreads.value) {
     conversationListRef.value?.scrollToTop()
     loadConversations(true)
@@ -438,13 +466,15 @@ function closeConversation() {
   updateQuery(mailConversationToQuery(null))
 }
 
+// The panel fetches the same conversation through the same cache, so the hover
+// prefetch and the click are one request, not two.
 function prefetchConversation(key: string) {
-  $fetch(`/api/mail/conversations/${encodeURIComponent(key)}`, { query: { service: service.value } }).catch(() => {})
+  prefetchMailConversation(nuxtApp, requestFetch, service.value, key)
 }
 
 function onConversationSeen() {
-  reloadConversations()
-  refreshNuxtData('mail-folders')
+  reloadConversationsFromEvents()
+  refreshFoldersFromEvents()
 }
 
 // Reloading keeps the loaded depth: fetch as many pages as the URL says are shown
@@ -456,13 +486,18 @@ function reloadList() {
 const refreshListFromEvents = useDebounceFn(() => reloadList(), 300)
 const refreshFoldersFromEvents = useDebounceFn(() => refreshNuxtData('mail-folders'), 300)
 const refreshIndexFromEvents = useDebounceFn(() => refreshIndexStatus(), 300)
+// A seen-update and the server's own change event both ask for a reload; debounced,
+// the two become one and the conversations list is fetched once.
+const reloadConversationsFromEvents = useDebounceFn(() => reloadConversations(), 300)
 
 useDomainEvents({ domains: ['mail'] }, (event) => {
   const plan = mailRefreshFor(event, { service: service.value, mailbox: mailbox.value })
   if (plan.list) {
-    refreshListFromEvents()
+    // Refresh only the list on screen; the other view fetches fresh when opened
     if (showThreads.value) {
-      reloadConversations()
+      reloadConversationsFromEvents()
+    } else {
+      refreshListFromEvents()
     }
   }
   if (plan.folders) {
@@ -480,16 +515,23 @@ useDomainEvents({ domains: ['mail'] }, (event) => {
 })
 
 // Sender suggestions for the `from` control, from the index facets; null without an index
-const { data: facets } = await useFetch('/api/mail/facets', {
-  query: computed(() => ({
-    service: service.value,
-    scope: allFolders.value ? 'all' : undefined,
-    mailbox: allFolders.value ? undefined : mailbox.value,
-    ...mailSearchToApiQuery({ ...criteria.value, from: undefined })
-  })),
+const facetsQuery = computed(() => ({
+  service: service.value,
+  scope: allFolders.value ? 'all' : undefined,
+  mailbox: allFolders.value ? undefined : mailbox.value,
+  ...mailSearchToApiQuery({ ...criteria.value, from: undefined })
+}))
+
+const { data: facets, refresh: refreshFacets } = await useFetch('/api/mail/facets', {
+  query: facetsQuery,
+  // The automatic query watcher cannot tell a filter change from a selection
+  // change (both rewrite `route.query`), so it is off; the list identity drives it.
+  watch: false,
   default: () => null,
   lazy: true
 })
+
+watch(listIdentity, () => refreshFacets())
 const fromItems = computed(() => (facets.value?.from ?? []).map(item => item.value))
 
 // Append the next page; the loaded depth goes back into the URL so a reload restores it

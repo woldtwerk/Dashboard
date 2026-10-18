@@ -1,5 +1,6 @@
 import { format, subDays } from 'date-fns'
 import type { MailConversation, MailSearch, MailSummary } from '#layers/mail/shared/types/mail'
+import type { MailListView } from '#layers/mail/shared/types/settings'
 import { mailKey } from './mail'
 
 /** URL query of the mail page; every key is optional */
@@ -170,8 +171,49 @@ export function isSelectedMail(mail: MailSummary, selection?: MailSelection): bo
 /** How the mail page lays out its list: single mails or grouped conversations */
 export type MailView = 'mails' | 'threads'
 
+/** The explicit `?view=` of the URL; absent means "use the saved default" */
+export function mailViewParamFromQuery(query: MailQuery): MailView | undefined {
+  const value = stringParam(query, 'view')
+  return value === 'threads' || value === 'mails' ? value : undefined
+}
+
 export function mailViewFromQuery(query: MailQuery): MailView {
-  return stringParam(query, 'view') === 'threads' ? 'threads' : 'mails'
+  return mailViewParamFromQuery(query) ?? 'mails'
+}
+
+/**
+ * The identity of the visible list: everything a list reset may depend on —
+ * account, folder, view and the search criteria (with the all-folders scope).
+ * The selection params (`uid`, `in`, `conversation`, `compose`) and the loaded
+ * `pages` are deliberately left out, so opening a mail or a conversation does
+ * not look like a list change and never resets or scrolls the list.
+ */
+export function listIdentityFromQuery(query: MailQuery): string {
+  return JSON.stringify({
+    service: stringParam(query, 'service') ?? '',
+    mailbox: stringParam(query, 'mailbox') ?? 'INBOX',
+    allFolders: stringParam(query, 'scope') === 'all',
+    view: mailViewFromQuery(query),
+    search: mailSearchFromQuery(query)
+  })
+}
+
+/**
+ * The view a visit shows: an explicit `?view=` wins for that visit, otherwise
+ * the saved `mail.listView`. Without a search index there are no conversations.
+ */
+export function effectiveListView(
+  queryView: MailView | undefined,
+  saved: MailListView,
+  indexAvailable: boolean
+): MailListView {
+  if (!indexAvailable) {
+    return 'mails'
+  }
+  if (queryView) {
+    return queryView === 'threads' ? 'conversations' : 'mails'
+  }
+  return saved === 'conversations' ? 'conversations' : 'mails'
 }
 
 /** URL patch for the view toggle; a conversation only exists in the conversations view */
