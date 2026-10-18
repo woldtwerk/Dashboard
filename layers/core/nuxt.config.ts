@@ -5,12 +5,24 @@ import { fileURLToPath } from 'node:url'
 export default defineNuxtConfig({
   modules: [
     '@nuxt/ui',
-    '@vueuse/nuxt'
+    '@vueuse/nuxt',
+    'nuxt-auth-utils'
   ],
 
   css: [fileURLToPath(new URL('./app/assets/css/main.css', import.meta.url))],
 
   runtimeConfig: {
+    // Sealed session cookie; its password comes from NUXT_SESSION_PASSWORD.
+    // maxAge/httpOnly/sameSite are what the login expects, the module already
+    // defaults to httpOnly + secure + sameSite=lax.
+    session: {
+      maxAge: 60 * 60 * 24 * 30,
+      cookie: {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: true
+      }
+    },
     database: {
       // NUXT_DATABASE_PATH — SQLite file, relative to the working directory
       path: '.data/allmight.sqlite'
@@ -26,6 +38,18 @@ export default defineNuxtConfig({
       retentionDays: 7,
       // NUXT_LOGS_MAX_ENTRIES — keep at most this many log entries
       maxEntries: 50000
+    },
+    vapid: {
+      // NUXT_VAPID_PUBLIC_KEY — base64url public key, also handed to the browser in `public.vapidPublicKey`
+      publicKey: '',
+      // NUXT_VAPID_PRIVATE_KEY — base64url private key, only used by the server to sign pushes
+      privateKey: '',
+      // NUXT_VAPID_SUBJECT — `mailto:` or `https:` contact for the push service
+      subject: ''
+    },
+    public: {
+      // The env var is not a NUXT_PUBLIC_* name, so the public copy is filled here
+      vapidPublicKey: process.env.NUXT_VAPID_PUBLIC_KEY ?? ''
     }
   },
 

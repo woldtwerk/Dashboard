@@ -7,6 +7,8 @@ export interface MailIndexQuery {
   services: string[]
   /** Omit to search all folders */
   mailbox?: string
+  /** Only these folders, e.g. all real folders of an account; omit for all */
+  mailboxes?: string[]
   /** Normalized address that has to be on the mail as sender, recipient or in cc */
   participant?: string
   /** Only mails filed under one of these conversation keys */

@@ -4,6 +4,8 @@ export default defineEventHandler(async (event) => {
   const { service, paths } = await readValidatedBody(event, drivePathsBodySchema)
 
   await (await useDriveProvider(service)).trash(paths)
+
+  await invalidateDriveListings(service, affectedPaths('trash', { paths }))
   await publishDriveChanges(service, paths)
   await publishDriveTrashChange(service)
 

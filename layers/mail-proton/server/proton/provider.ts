@@ -4,6 +4,7 @@ import type { SetupValues } from '../../../core/shared/types/setup'
 import type { MailProvider } from '../../../mail/server/utils/mail-provider'
 import type { Mailbox, MailMessage, MailMessageState, MailSearch, MailSummary } from '../../../mail/shared/types/mail'
 import { sequenceRange, uidPage } from './sequence'
+import { isProtonLabel, protonSpecialUse } from './special-use'
 import { toMailAddresses, toMailSummary, toProtonSettings, withProtonBridge, withProtonMailbox } from './bridge'
 import { sendProtonMail } from './mailer'
 
@@ -64,7 +65,8 @@ export function createProtonMailProvider(values: SetupValues): MailProvider {
             path: item.path,
             name: item.name,
             delimiter: item.delimiter,
-            specialUse: item.specialUse,
+            specialUse: protonSpecialUse(item.path, item.specialUse),
+            label: isProtonLabel(item.path) || undefined,
             total: item.status?.messages ?? 0,
             unread: item.status?.unseen ?? 0
           }))

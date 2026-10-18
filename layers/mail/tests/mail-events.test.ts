@@ -41,6 +41,10 @@ describe('mailRefreshFor', () => {
     expect(plan.folders).toBe(false)
   })
 
+  it('refreshes the index status while folders are indexed', () => {
+    expect(mailRefreshFor(event({ resource: 'Sent' }), current).indexStatus).toBe(true)
+  })
+
   it('ignores other domains', () => {
     expect(mailRefreshFor(event({ domain: 'calendar' }), current)).toEqual({
       list: false,

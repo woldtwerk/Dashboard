@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { DriveEntry } from '#layers/drive/shared/types/drive'
-import { downloadUrl, entryKindLabel, formatDate, formatSize, previewKind } from '../../utils/drive'
+import { downloadUrl, entryKindLabel, entryVersion, formatDate, formatSize, previewKind } from '../../utils/drive'
 import { driveRequest } from '../../utils/drive-request'
 
 const open = defineModel<boolean>('open', { required: true })
@@ -16,7 +16,7 @@ const emit = defineEmits<{
 }>()
 
 const kind = computed(() => props.entry ? previewKind(props.entry) : undefined)
-const previewUrl = computed(() => props.entry ? downloadUrl(props.service, [props.entry.path], { inline: true }) : '')
+const previewUrl = computed(() => props.entry ? downloadUrl(props.service, [props.entry.path], { inline: true, version: entryVersion(props.entry) }) : '')
 const text = ref<string>()
 
 watch(() => props.entry?.path, async () => {

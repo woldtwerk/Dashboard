@@ -83,11 +83,11 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
       await settle(index.deleteDocuments({ filter: buildMailFilter({ services: [service], mailbox, search: {} }) }))
     },
 
-    async search({ services, mailbox, participant, conversationKeys, search, limit, offset }: MailIndexQuery): Promise<MailSummary[]> {
+    async search({ services, mailbox, mailboxes, participant, conversationKeys, search, limit, offset }: MailIndexQuery): Promise<MailSummary[]> {
       await ensureSettings()
       const text = search.text?.trim()
       const result = await index.search(text || null, {
-        filter: buildMailFilter({ services, mailbox, participant, conversationKeys, search }),
+        filter: buildMailFilter({ services, mailbox, mailboxes, participant, conversationKeys, search }),
         limit,
         offset,
         // Without text, browse newest first; with text, rank by relevance

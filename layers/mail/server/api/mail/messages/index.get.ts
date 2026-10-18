@@ -10,16 +10,28 @@ export default defineEventHandler(async (event) => {
   // Keep the index fresh in the background
   await requestMailSync(service)
 
-  // Searches and cross-folder listing come from the index once the wanted folders are fully
-  // synced (`scope=all` needs every folder, a single folder only itself); a partial index
-  // would answer them incorrectly. Plain browsing stays on the provider, so the newest mail
-  // shows without waiting for the next sync.
+  // The index answers every list — plain browsing included — once the wanted
+  // folders are fully synced, so the result is always sorted by date. Cross-folder
+  // listing only covers real folders: a label would repeat the mail it shares
+  // with a folder. A partial index would answer incorrectly, so the provider
+  // serves a folder until its first full sync finished.
   const index = useMailSearchIndex()
-  if (index && (allFolders || hasSearchCriteria(criteria)) && await isMailboxIndexed(service, allFolders ? undefined : mailbox)) {
-    return index.search({ services: [service], mailbox: allFolders ? undefined : mailbox, search: criteria, limit, offset })
+  const mailboxes = index && allFolders ? searchableMailboxes(await (await useMailProvider(service)).listMailboxes()) : undefined
+  const indexed = index ? await isMailboxIndexed(service, allFolders ? mailboxes : mailbox) : false
+  const source = mailListSource({ indexAvailable: !!index, indexed, allFolders, hasCriteria: hasSearchCriteria(criteria) })
+
+  if (source === 'index' && index) {
+    return index.search({
+      services: [service],
+      mailbox: allFolders ? undefined : mailbox,
+      mailboxes,
+      search: criteria,
+      limit,
+      offset
+    })
   }
 
-  // Plain browsing stays on the provider, which pages by offset; it serves one
+  // Until the folder is indexed, the provider pages by offset; it serves one
   // provider-sized page per request, since the mail server caps a fetch.
   return (await useMailProvider(service)).listMessages(mailbox, { limit: Math.min(limit, MAIL_PROVIDER_MAX_LIMIT), offset, search: criteria })
 })

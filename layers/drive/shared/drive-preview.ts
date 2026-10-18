@@ -64,3 +64,19 @@ export function previewContentType(mediaType: string | undefined, name: string):
 
   return undefined
 }
+
+/**
+ * Whether an `If-None-Match` header matches the ETag of a versioned inline
+ * response, so the request can be answered with `304 Not Modified` without
+ * asking the provider for the bytes again.
+ */
+export function matchesEtag(header: string | undefined, etag: string): boolean {
+  if (!header) {
+    return false
+  }
+  const wanted = etag.trim()
+  return header.split(',').some((candidate) => {
+    const value = candidate.trim()
+    return value === '*' || value.replace(/^W\//, '') === wanted
+  })
+}

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { breakpointsTailwind, refDebounced, useDebounceFn } from '@vueuse/core'
+import { breakpointsTailwind, refDebounced, useDebounceFn, useDocumentVisibility, useIntervalFn } from '@vueuse/core'
 import type { LocationQuery } from 'vue-router'
 import type { MailConversation, MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
 import { buildReply, emptyOutgoingMail, type OutgoingMail } from '#layers/mail/shared/mail-compose'
@@ -268,6 +268,25 @@ const currentIndex = computed(() => indexStatus.value?.find(item => item.service
 const indexAvailable = computed(() => !!indexStatus.value)
 const indexing = computed(() => !!currentIndex.value && (currentIndex.value.syncing || !currentIndex.value.complete))
 
+// Index progress: poll while any account is still incomplete, and only on a
+// visible tab. A complete service stops the poll; an event refresh catches the rest.
+const serviceNames = computed(() => new Map(services.value.map(item => [item.id, item.name])))
+const anyIndexing = computed(() => (indexStatus.value ?? []).some(item => !item.complete))
+const documentVisible = useDocumentVisibility()
+
+const { pause: pauseIndexPolling, resume: resumeIndexPolling } = useIntervalFn(() => {
+  refreshIndexStatus()
+}, 3000, { immediate: false })
+
+watch([anyIndexing, documentVisible], ([pending, visibility]) => {
+  // resume() would start a server timer during SSR; polling belongs to the client
+  if (import.meta.client && pending && visibility === 'visible') {
+    resumeIndexPolling()
+  } else {
+    pauseIndexPolling()
+  }
+}, { immediate: true })
+
 // Conversations view; the toggle only shows while a search index is configured
 const view = computed(() => mailViewFromQuery(route.query))
 const conversationKey = computed(() => mailConversationFromQuery(route.query))
@@ -430,6 +449,7 @@ function reloadList() {
 
 const refreshListFromEvents = useDebounceFn(() => reloadList(), 300)
 const refreshFoldersFromEvents = useDebounceFn(() => refreshNuxtData('mail-folders'), 300)
+const refreshIndexFromEvents = useDebounceFn(() => refreshIndexStatus(), 300)
 
 useDomainEvents({ domains: ['mail'] }, (event) => {
   const plan = mailRefreshFor(event, { service: service.value, mailbox: mailbox.value })
@@ -443,7 +463,7 @@ useDomainEvents({ domains: ['mail'] }, (event) => {
     refreshFoldersFromEvents()
   }
   if (plan.indexStatus) {
-    refreshIndexStatus()
+    refreshIndexFromEvents()
   }
 }, {
   onReconnect: () => {
@@ -867,6 +887,13 @@ const isMobile = breakpoints.smaller('lg')
         />
       </UTooltip>
     </UDashboardToolbar>
+
+    <MailIndexProgress
+      v-for="indexState in indexStatus ?? []"
+      :key="indexState.service"
+      :status="indexState"
+      :name="services.length > 1 ? serviceNames.get(indexState.service) : undefined"
+    />
 
     <div v-if="criteriaChips.length" class="flex flex-wrap gap-1.5 border-b border-default px-4 py-2 sm:px-6">
       <UBadge
