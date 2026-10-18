@@ -90,6 +90,20 @@ describe('createMailApplier', () => {
     expect(provider.calls).toEqual([])
   })
 
+  it('creates the label folder before filing a copy when the provider supports it', async () => {
+    const provider = mailProvider()
+    const created: string[] = []
+    provider.createMailbox = async (mailbox) => {
+      created.push(mailbox)
+    }
+    const applier = createMailApplier({ provider, publish: vi.fn() })
+
+    await applier.apply([{ type: 'label', label: 'Invoices' }], mailItem())
+
+    expect(created).toEqual(['Labels/Invoices'])
+    expect(provider.calls).toEqual([['addLabel', 'INBOX', 1, 'Invoices']])
+  })
+
   it('reverses a move and a label copy', async () => {
     const provider = mailProvider()
     const applier = createMailApplier({ provider, publish: vi.fn() })

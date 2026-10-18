@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AutomationRun, AutomationWorkflow } from '#layers/automation/shared/types/automation'
+import type { WorkflowTemplate } from '#layers/automation/shared/workflow-templates'
 import { runConfidence } from '#layers/automation/shared/automation'
 
 useSeoMeta({ title: 'Automation' })
@@ -17,7 +18,7 @@ const activeTab = computed({
   set: value => router.replace({ query: { ...route.query, tab: value } })
 })
 
-const { data: workflows, refresh: refreshWorkflows } = useFetch<AutomationWorkflow[]>('/api/automation/workflows', {
+const { data: workflows, refresh: refreshWorkflows, pending: workflowsPending } = useFetch<AutomationWorkflow[]>('/api/automation/workflows', {
   key: 'automation-workflows',
   default: () => []
 })
@@ -124,6 +125,65 @@ async function create() {
   }
 }
 
+// --- Templates ------------------------------------------------------------
+
+const templatesOpen = ref(false)
+const instantiating = ref<string | null>(null)
+
+async function instantiate(template: WorkflowTemplate) {
+  instantiating.value = template.id
+  try {
+    const workflow = await $fetch<AutomationWorkflow>('/api/automation/workflows/from-template', {
+      method: 'POST',
+      body: { template: template.id }
+    })
+    templatesOpen.value = false
+    await router.push(`/automation/${workflow.id}`)
+  } catch (failure) {
+    toast.add({ title: failure instanceof Error ? failure.message : 'Could not add the template', color: 'error', icon: 'i-lucide-circle-alert' })
+  } finally {
+    instantiating.value = null
+  }
+}
+
+function startBlank() {
+  templatesOpen.value = false
+  creating.value = true
+}
+
+// --- Delete (optimistic) --------------------------------------------------
+
+const deleting = ref<AutomationWorkflow | null>(null)
+const deleteOpen = computed({
+  get: () => deleting.value !== null,
+  set: (value) => { if (!value) deleting.value = null }
+})
+
+async function remove(workflow: AutomationWorkflow) {
+  const previous = workflows.value
+  const at = previous.findIndex(entry => entry.id === workflow.id)
+  workflows.value = previous.filter(entry => entry.id !== workflow.id)
+  deleting.value = null
+
+  try {
+    await $fetch(`/api/automation/workflows/${workflow.id}`, { method: 'DELETE' })
+    toast.add({ title: `Deleted "${workflow.name}"`, color: 'success', icon: 'i-lucide-trash-2' })
+  } catch {
+    // Put the row back where it was, not at the end of the list
+    const restored = [...workflows.value]
+    restored.splice(at < 0 ? restored.length : at, 0, workflow)
+    workflows.value = restored
+    toast.add({ title: 'Could not delete the workflow', color: 'error', icon: 'i-lucide-circle-alert' })
+  }
+}
+
+function rowItems(workflow: AutomationWorkflow) {
+  return [
+    { label: 'Edit', icon: 'i-lucide-pencil', onSelect: () => router.push(`/automation/${workflow.id}`) },
+    { label: 'Delete', icon: 'i-lucide-trash-2', color: 'error' as const, onSelect: () => { deleting.value = workflow } }
+  ]
+}
+
 // --- Activity actions -----------------------------------------------------
 
 async function runAction(run: AutomationRun, action: 'apply' | 'undo' | 'reject') {
@@ -151,6 +211,15 @@ onMounted(() => {
     <UDashboardNavbar title="Automation">
       <template #right>
         <UButton
+          label="Templates"
+          icon="i-lucide-layout-template"
+          color="neutral"
+          variant="soft"
+          size="sm"
+          data-testid="templates-button"
+          @click="templatesOpen = true"
+        />
+        <UButton
           label="New workflow"
           icon="i-lucide-plus"
           size="sm"
@@ -169,11 +238,15 @@ onMounted(() => {
 
     <!-- Workflows -->
     <div v-if="activeTab === 'workflows'" class="flex-1 overflow-auto p-4">
-      <p v-if="!workflows.length" class="text-sm text-muted">
-        No workflows yet. Create one to sort mail, label it or enrich documents.
-      </p>
+      <div v-if="!workflows.length && !workflowsPending" class="rounded-xl border border-default bg-elevated/20 p-4">
+        <WorkflowTemplateGallery
+          :busy="instantiating"
+          @select="instantiate"
+          @blank="startBlank"
+        />
+      </div>
 
-      <ul class="space-y-2">
+      <ul v-else class="space-y-2">
         <li
           v-for="(workflow, index) in workflows"
           :key="workflow.id"
@@ -215,14 +288,16 @@ onMounted(() => {
             class="shrink-0"
             @update:model-value="value => patchWorkflow(workflow, { enabled: value })"
           />
-          <UButton
-            icon="i-lucide-pencil"
-            color="neutral"
-            variant="ghost"
-            size="sm"
-            :to="`/automation/${workflow.id}`"
-            aria-label="Edit"
-          />
+          <UDropdownMenu :items="rowItems(workflow)">
+            <UButton
+              icon="i-lucide-ellipsis-vertical"
+              color="neutral"
+              variant="ghost"
+              size="sm"
+              aria-label="Workflow actions"
+              data-testid="workflow-actions"
+            />
+          </UDropdownMenu>
         </li>
       </ul>
     </div>
@@ -347,6 +422,41 @@ onMounted(() => {
           icon="i-lucide-plus"
           :disabled="!draft.name.trim()"
           @click="create"
+        />
+      </div>
+    </template>
+  </UModal>
+
+  <UModal v-model:open="templatesOpen" title="Workflow templates">
+    <template #body>
+      <WorkflowTemplateGallery
+        :busy="instantiating"
+        @select="instantiate"
+        @blank="startBlank"
+      />
+    </template>
+  </UModal>
+
+  <UModal v-model:open="deleteOpen" title="Delete workflow">
+    <template #body>
+      <p class="text-sm text-muted">
+        Delete "{{ deleting?.name }}"? Its history stays in the activity log.
+      </p>
+    </template>
+    <template #footer>
+      <div class="flex w-full justify-end gap-2">
+        <UButton
+          label="Cancel"
+          color="neutral"
+          variant="ghost"
+          @click="deleteOpen = false"
+        />
+        <UButton
+          label="Delete"
+          icon="i-lucide-trash-2"
+          color="error"
+          data-testid="confirm-delete"
+          @click="deleting && remove(deleting)"
         />
       </div>
     </template>

@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   buildDocumentState,
   buildMailState,
+  isPendingRun,
   matchesCondition,
   matchesConditions,
   nextAttempt,
+  pendingRunIds,
   planUndo,
   runConfidence,
   selectActions,
@@ -167,6 +169,27 @@ describe('runConfidence', () => {
 
   it('is undefined without answers', () => {
     expect(runConfidence({})).toBeUndefined()
+  })
+})
+
+describe('workflow deletion', () => {
+  const runs = [
+    { id: 'r1', workflow: 'w1', outcome: 'suggested' as const },
+    { id: 'r2', workflow: 'w1', outcome: 'applied' as const },
+    { id: 'r3', workflow: 'w1', outcome: 'failed' as const },
+    { id: 'r4', workflow: 'w1', outcome: 'undone' as const },
+    { id: 'r5', workflow: 'w1', outcome: 'skipped' as const },
+    { id: 'r6', workflow: 'w2', outcome: 'suggested' as const }
+  ]
+
+  it('drops only the pending suggestions and keeps the run history', () => {
+    expect(pendingRunIds(runs, 'w1')).toEqual(['r1'])
+    expect(pendingRunIds(runs, 'w2')).toEqual(['r6'])
+    expect(pendingRunIds(runs, 'w1')).not.toContain('r2')
+  })
+
+  it('knows which outcomes are still pending', () => {
+    expect(runs.filter(isPendingRun).map(run => run.id)).toEqual(['r1', 'r6'])
   })
 })
 

@@ -15,6 +15,12 @@ export interface MailActionProvider {
   setSeen(mailbox: string, uid: number, seen: boolean): Promise<void>
   setFlagged(mailbox: string, uid: number, flagged: boolean): Promise<void>
   deleteMessage(mailbox: string, uid: number): Promise<void>
+  /**
+   * Creates an IMAP folder. Proton keeps labels as folders under `Labels/`, and
+   * `addLabel` copies into an existing one, so a label used for the first time is
+   * created here. Optional: a provider that creates the folder itself omits it.
+   */
+  createMailbox?(mailbox: string): Promise<void>
 }
 
 export interface MailApplierContext {
@@ -26,6 +32,22 @@ export interface MailApplierContext {
 
 /** The Proton folder a label is filed under */
 export const labelMailbox = (label: string) => `Labels/${label}`
+
+/**
+ * Makes sure the label's folder exists before the copy is filed into it. Most
+ * providers either create the folder themselves (and omit `createMailbox`) or
+ * answer that it already exists; `addLabel` reports a real failure either way.
+ */
+async function ensureLabelMailbox(provider: MailActionProvider, mailbox: string): Promise<void> {
+  if (!provider.createMailbox) {
+    return
+  }
+  try {
+    await provider.createMailbox(mailbox)
+  } catch {
+    // An existing folder is the common case; the copy below is the real check
+  }
+}
 
 /**
  * Applies mail actions one by one, tracking the message's uid across a move (IMAP
@@ -54,7 +76,10 @@ export function createMailApplier(context: MailApplierContext): AutomationApplie
           }
           case 'label': {
             const target = labelMailbox(action.label)
+            await ensureLabelMailbox(context.provider, target)
             const { uid } = await context.provider.addLabel(current.mailbox, current.uid, action.label)
+            // The copy is undone by deleting it; the label folder itself is kept,
+            // because it may hold other mail by the time the run is undone.
             applied.push({ type: 'label', label: action.label, labelMailbox: target, uid })
             await context.publish(target)
             break

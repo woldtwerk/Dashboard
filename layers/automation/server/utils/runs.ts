@@ -12,6 +12,7 @@ import type {
   PlannedAction,
   WorkflowPathStep
 } from '../../shared/types/automation'
+import { pendingRunIds } from '../../shared/automation'
 import * as cacheSchema from '../db/cache-schema'
 import { automationRuns, automationSeen, automationSweep } from '../db/cache-schema'
 import type { AutomationRunRow } from '../db/cache-schema'
@@ -111,6 +112,31 @@ export async function updateRun(id: string, patch: {
     throw createError({ status: 404, statusText: 'Automation run not found' })
   }
   return toAutomationRun(row)
+}
+
+/**
+ * Cleans up after a deleted workflow. Its pending suggestions can never be applied
+ * and are dropped; every run it already produced stays in the activity log, marked
+ * with the workflow's last name. Retry/seen state is keyed per (domain, service),
+ * not per workflow, so it is deliberately left alone: dropping it would make the
+ * remaining workflows evaluate every item again.
+ */
+export async function forgetWorkflowRuns(workflow: string, workflowName: string): Promise<void> {
+  const db = await automationCacheDb()
+  const rows = await db.select({
+    id: automationRuns.id,
+    workflow: automationRuns.workflow,
+    outcome: automationRuns.outcome
+  }).from(automationRuns).where(eq(automationRuns.workflow, workflow))
+
+  const pending = pendingRunIds(rows, workflow)
+  if (pending.length) {
+    await db.delete(automationRuns).where(inArray(automationRuns.id, pending))
+  }
+
+  // The name was copied when the run was recorded; refresh it so the activity log
+  // reads with the workflow's final name even if it had been renamed.
+  await db.update(automationRuns).set({ workflowName }).where(eq(automationRuns.workflow, workflow))
 }
 
 export interface AutomationRunQuery {

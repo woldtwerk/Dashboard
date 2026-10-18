@@ -79,6 +79,11 @@ function outputCount(edges: WorkflowGraph['edges'], nodeId: string, output: stri
   return edges.filter(edge => edge.source === nodeId && edge.sourceHandle === output).length
 }
 
+/** Whether a document action carries a real provider id rather than an unresolved placeholder */
+function isPositiveId(value: number): boolean {
+  return Number.isInteger(value) && value > 0
+}
+
 /**
  * Validates a graph: one trigger, unique ids, edges that reference real nodes and
  * outputs, at most one edge per output, no cycles, valid decision options and
@@ -126,6 +131,20 @@ export function validateWorkflow(graph: WorkflowGraph, domain?: AutomationDomain
       const allowed = domain === 'mail' ? MAIL_ACTIONS : DOCUMENT_ACTIONS
       if (!allowed.has(node.data.action.type)) {
         errors.push({ nodeId: node.id, message: `Action "${node.data.action.type}" does not belong to the ${domain} domain` })
+      }
+    }
+    if (node.type === 'action') {
+      // A template can carry a name instead of an id; an id that was not resolved
+      // yet (0) is shown as an error until the user picks a real tag or type.
+      const action = node.data.action
+      if (action.type === 'add-tag' && !isPositiveId(action.tag)) {
+        errors.push({ nodeId: node.id, message: 'The tag action needs a tag' })
+      }
+      if (action.type === 'set-correspondent' && !isPositiveId(action.correspondent)) {
+        errors.push({ nodeId: node.id, message: 'The correspondent action needs a correspondent' })
+      }
+      if (action.type === 'set-type' && !isPositiveId(action.documentType)) {
+        errors.push({ nodeId: node.id, message: 'The document type action needs a document type' })
       }
     }
   }

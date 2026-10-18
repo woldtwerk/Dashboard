@@ -4,6 +4,7 @@ import type {
   AutomationCondition,
   AutomationConditions,
   AutomationItem,
+  AutomationOutcome,
   AutomationRun,
   CorrectionExample,
   DecisionAnswer,
@@ -168,6 +169,30 @@ export const AUTOMATION_MAX_ATTEMPTS = AUTOMATION_RETRY_MINUTES.length + 1
 export function runConfidence(answers: Record<string, DecisionAnswer>): number | undefined {
   const values = Object.values(answers).map(answer => answer.confidence).filter(value => Number.isFinite(value))
   return values.length ? Math.max(...values) : undefined
+}
+
+// --- Workflow deletion ----------------------------------------------------
+
+/** The outcomes that are still waiting for a user; they cannot outlive their workflow */
+export const PENDING_RUN_OUTCOMES: AutomationOutcome[] = ['suggested']
+
+/** Whether a recorded run is still pending (a suggestion nobody applied or rejected) */
+export function isPendingRun(run: Pick<AutomationRun, 'outcome'>): boolean {
+  return PENDING_RUN_OUTCOMES.includes(run.outcome)
+}
+
+/**
+ * The run ids a workflow's deletion drops: only its pending suggestions, which can
+ * never be applied once the workflow is gone. Everything the engine already did —
+ * applied, failed, undone, skipped — is history and stays in the activity log.
+ */
+export function pendingRunIds(
+  runs: Array<Pick<AutomationRun, 'id' | 'workflow' | 'outcome'>>,
+  workflow: string
+): string[] {
+  return runs
+    .filter(run => run.workflow === workflow && isPendingRun(run))
+    .map(run => run.id)
 }
 
 /** Maps a reacted-to run to a fine-tune example; only corrected runs reach this */

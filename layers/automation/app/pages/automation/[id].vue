@@ -24,6 +24,7 @@ definePageMeta({
 })
 
 const route = useRoute()
+const router = useRouter()
 const id = route.params.id as string
 const toast = useToast()
 
@@ -157,6 +158,19 @@ async function save() {
   }
 }
 
+const deleteOpen = ref(false)
+
+async function removeWorkflow() {
+  deleteOpen.value = false
+  try {
+    await $fetch(`/api/automation/workflows/${id}`, { method: 'DELETE' })
+    toast.add({ title: 'Workflow deleted', color: 'success', icon: 'i-lucide-trash-2' })
+    await router.push('/automation')
+  } catch (failure) {
+    toast.add({ title: failure instanceof Error ? failure.message : 'Could not delete the workflow', color: 'error', icon: 'i-lucide-circle-alert' })
+  }
+}
+
 function highlight(nodeIds: string[], edgeIds: string[]) {
   highlightedNodes.value = new Set(nodeIds)
   highlightedEdges.value = new Set(edgeIds)
@@ -206,6 +220,15 @@ function focusNode(nodeId: string | null) {
           variant="soft"
           size="sm"
           @click="previewOpen = !previewOpen"
+        />
+        <UButton
+          icon="i-lucide-trash-2"
+          color="error"
+          variant="ghost"
+          size="sm"
+          aria-label="Delete workflow"
+          data-testid="delete-workflow"
+          @click="deleteOpen = true"
         />
         <UButton
           label="Save"
@@ -305,4 +328,29 @@ function focusNode(nodeId: string | null) {
       </aside>
     </div>
   </UDashboardPanel>
+
+  <UModal v-model:open="deleteOpen" title="Delete workflow">
+    <template #body>
+      <p class="text-sm text-muted">
+        Delete "{{ name || 'this workflow' }}"? Its history stays in the activity log.
+      </p>
+    </template>
+    <template #footer>
+      <div class="flex w-full justify-end gap-2">
+        <UButton
+          label="Cancel"
+          color="neutral"
+          variant="ghost"
+          @click="deleteOpen = false"
+        />
+        <UButton
+          label="Delete"
+          icon="i-lucide-trash-2"
+          color="error"
+          data-testid="confirm-delete"
+          @click="removeWorkflow"
+        />
+      </div>
+    </template>
+  </UModal>
 </template>

@@ -6,6 +6,7 @@ import type { AutomationWorkflow, AutomationWorkflowInput, WorkflowGraph } from 
 import { createDefaultGraph, validateWorkflow } from '../../shared/workflow'
 import { automationWorkflows } from '../db/schema'
 import type { AutomationWorkflowRow } from '../db/schema'
+import { forgetWorkflowRuns } from './runs'
 
 export type { AutomationWorkflowRow }
 
@@ -187,9 +188,12 @@ async function nextPosition(): Promise<number> {
   return (row?.value ?? -1) + 1
 }
 
-export async function createWorkflow(input: z.infer<typeof automationWorkflowCreateSchema>): Promise<AutomationWorkflow> {
-  const graph = createDefaultGraph(input.domain)
-  assertValidGraph(graph, input.domain)
+/**
+ * Inserts a workflow with a graph that is already built. Templates use this: they
+ * are stored disabled and in suggest mode, with the graph exactly as instantiated
+ * (an unresolved document type stays invalid until the user picks one).
+ */
+export async function insertWorkflow(input: AutomationWorkflowInput): Promise<AutomationWorkflow> {
   const now = new Date()
 
   const [row] = await (await useDb()).insert(automationWorkflows).values({
@@ -200,12 +204,19 @@ export async function createWorkflow(input: z.infer<typeof automationWorkflowCre
     enabled: input.enabled,
     mode: input.mode,
     position: await nextPosition(),
-    graph,
+    graph: input.graph,
     createdAt: now,
     updatedAt: now
   }).returning()
 
   return toAutomationWorkflow(row!)
+}
+
+export async function createWorkflow(input: z.infer<typeof automationWorkflowCreateSchema>): Promise<AutomationWorkflow> {
+  const graph = createDefaultGraph(input.domain)
+  assertValidGraph(graph, input.domain)
+
+  return insertWorkflow({ ...input, graph })
 }
 
 export async function updateWorkflow(id: string, patch: Partial<AutomationWorkflowInput>): Promise<AutomationWorkflow> {
@@ -231,6 +242,14 @@ export async function removeWorkflow(id: string): Promise<void> {
   if (!removed) {
     throw createError({ status: 404, statusText: 'Workflow not found' })
   }
+
+  // The workflow is gone; its pending suggestions can never be applied. The runs
+  // it already produced stay in the activity log under the workflow's last name.
+  await forgetWorkflowRuns(id, removed.name).catch((error) => {
+    // The workflow itself is already deleted; failing here would only make the
+    // caller think the delete failed
+    console.warn('[automation] Could not clean up the deleted workflow runs', { workflow: id, error: String(error) })
+  })
 }
 
 /** Persists a new order; every id must exist, none may be repeated */
