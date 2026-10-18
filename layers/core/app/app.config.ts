@@ -20,6 +20,13 @@ export default defineAppConfig({
         to: '/services',
         shortcut: 'g-s',
         order: 90
+      },
+      logs: {
+        label: 'Logs',
+        icon: 'i-lucide-scroll-text',
+        to: '/logs',
+        shortcut: 'g-l',
+        order: 85
       }
     }
   }

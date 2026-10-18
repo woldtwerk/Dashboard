@@ -16,3 +16,49 @@
   --color-green-900: #0A5331;
   --color-green-950: #052E16;
 }
+
+/*
+ * Chart palette. A domain keeps its own color everywhere (never by rank), so
+ * the same series reads the same in every chart. Status colors are shared by
+ * the service health row and the log level badges and stay identical in both
+ * modes. Grid and axis text use Nuxt UI's own border/text tokens, never a
+ * series color.
+ *
+ * Nuxt UI resolves the color mode to a `dark`/`light` class on <html>
+ * (@nuxtjs/color-mode with an empty class suffix), so dark values live under
+ * `.dark`. The media query covers the system preference, and `:not(.light)`
+ * keeps an explicit light choice from being overridden by it.
+ */
+:root {
+  --chart-mail: #2a78d6;
+  --chart-calendar: #eb6834;
+  --chart-contacts: #1baf7a;
+  --chart-drive: #eda100;
+  --chart-documents: #e87ba4;
+  --chart-core: #6250d6;
+
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --chart-mail: #3987e5;
+    --chart-calendar: #d95926;
+    --chart-contacts: #199e70;
+    --chart-drive: #c98500;
+    --chart-documents: #d55181;
+    --chart-core: #9085e9;
+  }
+}
+
+.dark {
+  --chart-mail: #3987e5;
+  --chart-calendar: #d95926;
+  --chart-contacts: #199e70;
+  --chart-drive: #c98500;
+  --chart-documents: #d55181;
+  --chart-core: #9085e9;
+}

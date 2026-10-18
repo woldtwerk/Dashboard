@@ -6,8 +6,11 @@
   "main": "./nuxt.config.ts",
   "dependencies": {
     "@nuxt/ui": "catalog:",
+    "@unovis/ts": "catalog:",
+    "@unovis/vue": "catalog:",
     "@vueuse/core": "catalog:",
     "@vueuse/nuxt": "catalog:",
+    "date-fns": "catalog:",
     "drizzle-orm": "catalog:",
     "h3": "catalog:",
     "hookable": "catalog:",

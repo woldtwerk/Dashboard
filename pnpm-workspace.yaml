@@ -13,6 +13,8 @@ catalog:
   '@iconify-json/simple-icons': ^1.2.99
   '@nuxt/eslint': ^1.17.0
   '@nuxt/ui': ^4.11.3
+  '@unovis/ts': 1.7.1
+  '@unovis/vue': 1.7.1
   '@date-fns/tz': ^1.5.0
   '@types/mailparser': ^3.9.0
   '@vueuse/core': ^15.0.0
