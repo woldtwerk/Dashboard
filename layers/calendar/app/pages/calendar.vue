@@ -941,8 +941,8 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
               :class="isOtherMonth(day, currentMonth) && 'bg-elevated/30 text-dimmed'"
             >
               <button
-                class="inline-flex h-5 shrink-0 items-center justify-center rounded-full px-1 text-[11px] leading-none hover:bg-elevated"
-                :class="[isToday(day) && 'bg-primary text-inverted', isFirstOfMonth(day) && 'font-semibold']"
+                class="inline-flex h-5 shrink-0 items-center justify-center rounded-full text-[11px] leading-none hover:bg-elevated"
+                :class="[isToday(day) && 'bg-primary text-inverted', isFirstOfMonth(day) && 'font-semibold', isFirstOfMonth(day) ? 'px-1.5' : 'w-5']"
                 @click="newEventOn(day)"
               >
                 {{ isFirstOfMonth(day) ? `${dayNumber(day)} ${format(zoned(day, timeZone), 'MMM')}` : dayNumber(day) }}
