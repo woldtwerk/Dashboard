@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { breakpointsTailwind, refDebounced, useDebounceFn, useDocumentVisibility, useIntervalFn } from '@vueuse/core'
 import type { LocationQuery } from 'vue-router'
-import type { MailConversation, MailSummary } from '#layers/mail/shared/types/mail'
+import type { MailConversation, MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
+import { buildReply, emptyOutgoingMail, type OutgoingMail } from '#layers/mail/shared/mail-compose'
+import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
 import type { RetainedConversations, RetainedMails } from '#layers/mail/app/utils/mail-retention'
 import type { SetupState } from '#layers/core/shared/types/setup'
 
@@ -597,6 +599,117 @@ function markUnread() {
   setSeen(mail, false)
 }
 
+// --- Composing ---
+
+// The composer rides on `?compose=` and, for a reply, the `uid`/`in` of the mail it answers
+const composeQuery = computed(() => mailComposeFromQuery(route.query, mailbox.value))
+const composeStorageKey = computed(() => composeQuery.value ? composeDraftKey(composeQuery.value) : undefined)
+const composeTitle = computed(() => {
+  const mode = composeQuery.value?.mode
+  return mode === 'reply' || mode === 'replyAll' ? 'Reply' : mode === 'forward' ? 'Forward' : 'New mail'
+})
+const composeDraft = ref<OutgoingMail | null>(null)
+const sending = ref(false)
+
+const isComposerOpen = computed({
+  get: () => !!composeQuery.value,
+  set: (value: boolean) => {
+    if (!value) {
+      closeCompose()
+    }
+  }
+})
+
+const ownAddresses = computed(() => ownAddress.value ? [ownAddress.value] : [])
+
+// One full-message request per mail, shared by the composer and its hover prefetch
+const messageCache = new Map<string, Promise<MailMessage>>()
+
+function mailMessage(uid: number, fromMailbox: string): Promise<MailMessage> {
+  const key = `${service.value}:${fromMailbox}:${uid}`
+  let request = messageCache.get(key)
+  if (!request) {
+    request = $fetch<MailMessage>(`/api/mail/messages/${uid}`, { query: { service: service.value, mailbox: fromMailbox } })
+    messageCache.set(key, request)
+    request.catch(() => messageCache.delete(key))
+  }
+  return request
+}
+
+function openCompose(mode: MailComposeMode, mail?: MailSummary) {
+  updateQuery(mailComposeToQuery(
+    mode === 'new' || !mail ? { mode: 'new' } : { mode, uid: mail.uid, mailbox: mail.mailbox },
+    mailbox.value
+  ))
+}
+
+/** The unsent draft stays in sessionStorage, so reopening restores it */
+function closeCompose() {
+  composeDraft.value = null
+  updateQuery(mailComposeToQuery(null, mailbox.value))
+}
+
+function discardCompose() {
+  if (composeStorageKey.value) {
+    clearMailDraft(composeStorageKey.value)
+  }
+  closeCompose()
+}
+
+function prefetchCompose(mode: MailComposeMode) {
+  const mail = selectedMail.value
+  if (!mail || mode === 'new') {
+    return
+  }
+  mailMessage(mail.uid, mail.mailbox).catch(() => {})
+}
+
+watch(composeQuery, async (compose) => {
+  if (!compose) {
+    composeDraft.value = null
+    return
+  }
+  if (compose.mode === 'new' || !compose.uid) {
+    composeDraft.value = emptyOutgoingMail()
+    return
+  }
+
+  composeDraft.value = null
+  try {
+    const message = await mailMessage(compose.uid, compose.mailbox ?? mailbox.value)
+    composeDraft.value = buildReply(message, ownAddresses.value, compose.mode)
+  } catch {
+    toast.add({ title: 'Could not load the mail', color: 'error', icon: 'i-lucide-circle-alert' })
+    closeCompose()
+  }
+}, { immediate: true })
+
+async function sendCompose(mail: OutgoingMail) {
+  const compose = composeQuery.value
+  sending.value = true
+  try {
+    await $fetch('/api/mail/send', {
+      method: 'POST',
+      query: { service: service.value },
+      body: {
+        ...mail,
+        reply: compose && compose.uid && compose.mode !== 'new'
+          ? { mailbox: compose.mailbox ?? mailbox.value, uid: compose.uid }
+          : undefined
+      }
+    })
+    toast.add({ title: 'Mail sent', color: 'success', icon: 'i-lucide-send' })
+    if (composeStorageKey.value) {
+      clearMailDraft(composeStorageKey.value)
+    }
+    closeCompose()
+  } catch (error) {
+    toast.add({ title: 'Could not send mail', description: mailErrorMessage(error), color: 'error', icon: 'i-lucide-circle-alert' })
+  } finally {
+    sending.value = false
+  }
+}
+
 const breakpoints = useBreakpoints(breakpointsTailwind)
 const isMobile = breakpoints.smaller('lg')
 </script>
@@ -618,6 +731,12 @@ const isMobile = breakpoints.smaller('lg')
       </template>
 
       <template #right>
+        <UButton
+          label="New mail"
+          icon="i-lucide-square-pen"
+          size="xs"
+          @click="openCompose('new')"
+        />
         <UTabs
           v-if="indexAvailable"
           v-model="selectedView"
@@ -864,6 +983,8 @@ const isMobile = breakpoints.smaller('lg')
     :service="service"
     @close="selectedMail = null"
     @mark-unread="markUnread"
+    @compose="openCompose($event, selectedMail ?? undefined)"
+    @prefetch="prefetchCompose"
   />
   <MailConversation
     v-else-if="showThreads && conversationKey && !isMobile"
@@ -901,8 +1022,22 @@ const isMobile = breakpoints.smaller('lg')
           :service="service"
           @close="selectedMail = null"
           @mark-unread="markUnread"
+          @compose="openCompose($event, selectedMail ?? undefined)"
+          @prefetch="prefetchCompose"
         />
       </template>
     </USlideover>
   </ClientOnly>
+
+  <MailComposer
+    v-if="composeDraft"
+    :open="isComposerOpen"
+    :mail="composeDraft"
+    :title="composeTitle"
+    :draft-key="composeStorageKey"
+    :sending="sending"
+    @update:open="isComposerOpen = $event"
+    @send="sendCompose"
+    @discard="discardCompose"
+  />
 </template>

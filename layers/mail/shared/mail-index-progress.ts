@@ -2,6 +2,8 @@
 export interface MailIndexProgress {
   /** Whole percent, 0..100; 100 once the service is complete */
   percent: number
+  /** No total to measure against yet, so the bar shows activity instead of a share */
+  indeterminate: boolean
   /** Indexed count against the total, e.g. "19,556 of 25,012" */
   label: string
 }
@@ -21,10 +23,10 @@ const COUNT = new Intl.NumberFormat('en')
  */
 export function indexProgress({ indexed, total, complete }: MailIndexProgressInput): MailIndexProgress {
   if (!total || total <= 0) {
-    return { percent: complete ? 100 : 0, label: `${COUNT.format(indexed)} messages` }
+    return { percent: complete ? 100 : 0, indeterminate: !complete, label: `${COUNT.format(indexed)} messages` }
   }
 
   const percent = complete ? 100 : Math.min(100, Math.max(0, Math.round((indexed / total) * 100)))
 
-  return { percent, label: `${COUNT.format(indexed)} of ${COUNT.format(total)}` }
+  return { percent, indeterminate: false, label: `${COUNT.format(indexed)} of ${COUNT.format(total)}` }
 }

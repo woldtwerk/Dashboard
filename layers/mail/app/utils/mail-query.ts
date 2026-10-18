@@ -188,3 +188,51 @@ export function mailConversationFromQuery(query: MailQuery): string | undefined 
 export function mailConversationToQuery(key: string | null): Record<string, string | null> {
   return { conversation: key, uid: null, in: null }
 }
+
+/** How the composer was opened: a fresh mail, or one built from an existing one */
+export type MailComposeMode = 'new' | 'reply' | 'replyAll' | 'forward'
+
+/** The open composer, from the URL */
+export interface MailComposeSelection {
+  mode: MailComposeMode
+  /** The mail a reply or forward is built from */
+  uid?: number
+  /** Its mailbox; `in` in the URL when it is not the current folder */
+  mailbox?: string
+}
+
+/** The open composer from the URL; `uid` and `in` name the mail it answers */
+export function mailComposeFromQuery(query: MailQuery, mailbox: string): MailComposeSelection | undefined {
+  const mode = stringParam(query, 'compose')
+
+  if (mode === 'new') {
+    return { mode: 'new' }
+  }
+  if (mode !== 'reply' && mode !== 'replyAll' && mode !== 'forward') {
+    return undefined
+  }
+
+  const uid = Number(stringParam(query, 'uid'))
+  if (!Number.isInteger(uid) || uid <= 0) {
+    return undefined
+  }
+
+  return { mode, uid, mailbox: stringParam(query, 'in') ?? mailbox }
+}
+
+/**
+ * URL patch for the composer. The reply mail rides on the same `uid`/`in` as the
+ * open mail, so a reply keeps the panel it was started from; closing the
+ * composer leaves that selection alone and only drops `compose`.
+ */
+export function mailComposeToQuery(compose: MailComposeSelection | null, mailbox: string): Record<string, string | null> {
+  if (!compose || compose.mode === 'new' || !compose.uid) {
+    return { compose: compose ? 'new' : null }
+  }
+
+  return {
+    compose: compose.mode,
+    uid: String(compose.uid),
+    in: compose.mailbox && compose.mailbox !== mailbox ? compose.mailbox : null
+  }
+}

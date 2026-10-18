@@ -9,6 +9,15 @@ export function mailKey(mail: Pick<MailSummary, 'uid' | 'mailbox' | 'service'>):
   return `${mail.service ?? ''}/${mail.mailbox}/${mail.uid}`
 }
 
+/** The server's message from a failed request, for a toast */
+export function mailErrorMessage(error: unknown): string {
+  if (error && typeof error === 'object') {
+    const { statusMessage, message } = error as { statusMessage?: string, message?: string }
+    return statusMessage || message || 'Unknown error'
+  }
+  return 'Unknown error'
+}
+
 const SPECIAL_USE: Record<string, { icon: string, order: number }> = {
   '\\Inbox': { icon: 'i-lucide-inbox', order: 0 },
   '\\Flagged': { icon: 'i-lucide-star', order: 1 },

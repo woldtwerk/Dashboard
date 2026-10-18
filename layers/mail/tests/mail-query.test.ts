@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MailConversation, MailSummary } from '../shared/types/mail'
-import { isSelectedMail, mailConversationFromQuery, mailConversationToQuery, mailListFromQuery, mailListToQuery, mailSearchFromQuery, mailSearchToApiQuery, mailSearchToQuery, mailSelectionFromQuery, mailSelectionToQuery, mailViewFromQuery, mailViewToQuery, mergeConversations, mergePage, nextPageState, restoreRequests } from '../app/utils/mail-query'
+import { isSelectedMail, mailComposeFromQuery, mailComposeToQuery, mailConversationFromQuery, mailConversationToQuery, mailListFromQuery, mailListToQuery, mailSearchFromQuery, mailSearchToApiQuery, mailSearchToQuery, mailSelectionFromQuery, mailSelectionToQuery, mailViewFromQuery, mailViewToQuery, mergeConversations, mergePage, nextPageState, restoreRequests } from '../app/utils/mail-query'
 
 const today = new Date('2026-10-16T12:00:00Z')
 
@@ -173,5 +173,42 @@ describe('mergeConversations', () => {
   it('appends groups and drops duplicates by key', () => {
     expect(mergeConversations([conversation('a'), conversation('b')], [conversation('b'), conversation('c')]).map(group => group.key))
       .toEqual(['a', 'b', 'c'])
+  })
+})
+
+describe('mailComposeFromQuery', () => {
+  it('opens a fresh composer from compose=new', () => {
+    expect(mailComposeFromQuery({ compose: 'new' }, 'INBOX')).toEqual({ mode: 'new' })
+  })
+
+  it('reads the mail a reply answers, from uid and in', () => {
+    expect(mailComposeFromQuery({ compose: 'replyAll', uid: '42', in: 'Archive' }, 'INBOX'))
+      .toEqual({ mode: 'replyAll', uid: 42, mailbox: 'Archive' })
+    expect(mailComposeFromQuery({ compose: 'forward', uid: '42' }, 'INBOX'))
+      .toEqual({ mode: 'forward', uid: 42, mailbox: 'INBOX' })
+  })
+
+  it('ignores an unknown mode or a missing uid', () => {
+    expect(mailComposeFromQuery({}, 'INBOX')).toBeUndefined()
+    expect(mailComposeFromQuery({ compose: 'draft' }, 'INBOX')).toBeUndefined()
+    expect(mailComposeFromQuery({ compose: 'reply' }, 'INBOX')).toBeUndefined()
+    expect(mailComposeFromQuery({ compose: 'reply', uid: '0' }, 'INBOX')).toBeUndefined()
+  })
+})
+
+describe('mailComposeToQuery', () => {
+  it('keeps the open mail when the composer closes', () => {
+    expect(mailComposeToQuery(null, 'INBOX')).toEqual({ compose: null })
+  })
+
+  it('leaves the selection alone for a fresh mail', () => {
+    expect(mailComposeToQuery({ mode: 'new' }, 'INBOX')).toEqual({ compose: 'new' })
+  })
+
+  it('names the replied-to mail, dropping a redundant folder', () => {
+    expect(mailComposeToQuery({ mode: 'reply', uid: 42, mailbox: 'INBOX' }, 'INBOX'))
+      .toEqual({ compose: 'reply', uid: '42', in: null })
+    expect(mailComposeToQuery({ mode: 'reply', uid: 42, mailbox: 'Archive' }, 'INBOX'))
+      .toEqual({ compose: 'reply', uid: '42', in: 'Archive' })
   })
 })

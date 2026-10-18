@@ -2,6 +2,9 @@ import { z } from 'zod'
 import type { DomainTool } from '../../core/shared/types/tools'
 import type { MailSearch } from '../shared/types/mail'
 import { mailLink, toMailSource } from '../shared/mail-source'
+import { OUTGOING_MESSAGE_ID_LIMIT, OUTGOING_MESSAGE_ID_PATTERN, OUTGOING_REFERENCES_LIMIT, OUTGOING_SUBJECT_LIMIT } from '../shared/mail-compose'
+import { mailAccountAddress } from './utils/mail-identity'
+import { sendMail } from './utils/mail-send'
 
 /** Mail text sent to an assistant or MCP client per message. */
 export const MAIL_TOOL_TEXT_LIMIT = 20_000
@@ -39,6 +42,25 @@ export const mailMoveInput = z.object({
   mailbox: z.string().min(1).describe('Mailbox path the message is currently in'),
   uid: z.number().int().positive().describe('IMAP UID of the message within its mailbox'),
   target: z.string().min(1).describe('Destination mailbox path, e.g. "Archive" or "Folders/Work"')
+})
+
+const mailAddressInput = z.object({
+  name: z.string().max(200).optional().describe('Display name'),
+  address: z.string().max(320).describe('Email address, e.g. "alice@example.com"')
+})
+
+/** A Message-ID is a single, whitespace-free token so it cannot start a header */
+const mailMessageIdInput = z.string().max(OUTGOING_MESSAGE_ID_LIMIT).regex(OUTGOING_MESSAGE_ID_PATTERN)
+
+export const mailSendInput = z.object({
+  service: z.string().min(1).describe('Mail service id to send from'),
+  to: z.array(mailAddressInput).min(1).describe('Recipients'),
+  cc: z.array(mailAddressInput).optional().describe('Carbon-copy recipients'),
+  bcc: z.array(mailAddressInput).optional().describe('Blind carbon-copy recipients'),
+  subject: z.string().max(OUTGOING_SUBJECT_LIMIT).regex(/^[^\r\n]*$/).describe('Subject line'),
+  text: z.string().describe('Plain-text body'),
+  inReplyTo: mailMessageIdInput.optional().describe('Message-ID this mail answers, when it is a reply'),
+  references: z.array(mailMessageIdInput).max(OUTGOING_REFERENCES_LIMIT).optional().describe('Message-ID chain of the thread, oldest first')
 })
 
 /** Maps tool input onto the domain search type; only well-formed criteria survive. */
@@ -190,6 +212,42 @@ export const mailTools: DomainTool[] = [
       await publishDomainEvent({ domain: 'mail', service: input.service, type: 'changed', resource: input.target })
 
       return { uid: input.uid, from: input.mailbox, to: input.target }
+    }
+  },
+  {
+    name: 'mail_send',
+    domain: 'mail',
+    description: 'Send a real mail from a configured account. This delivers the message to the recipients and cannot be undone; there is no draft. Use mail_read first to answer a mail and pass its Message-ID as `inReplyTo`.',
+    input: mailSendInput,
+    writes: true,
+    execute: async (raw) => {
+      const input = raw as z.infer<typeof mailSendInput>
+      const provider = await useMailProvider(input.service)
+      const address = await mailAccountAddress(input.service)
+
+      if (!address) {
+        return { error: 'The mail account has no sender address' }
+      }
+
+      const result = await sendMail({
+        to: input.to,
+        cc: input.cc ?? [],
+        bcc: input.bcc ?? [],
+        subject: input.subject,
+        text: input.text,
+        inReplyTo: input.inReplyTo,
+        references: input.references
+      }, undefined, {
+        provider,
+        from: { address },
+        markAnswered: provider.setAnswered
+          ? (mailbox: string, uid: number) => provider.setAnswered!(mailbox, uid, true)
+          : undefined,
+        publish: () => publishDomainEvent({ domain: 'mail', service: input.service, type: 'changed', resource: 'Sent' }),
+        logger: useServiceLogger('mail', input.service)
+      })
+
+      return result.status === 200 ? { messageId: result.messageId } : { error: result.error }
     }
   }
 ]

@@ -12,7 +12,17 @@ const props = defineProps<{
 const emits = defineEmits<{
   close: []
   markUnread: []
+  compose: [mode: 'reply' | 'replyAll' | 'forward']
+  /** Warm the message the composer will need */
+  prefetch: [mode: 'reply' | 'replyAll' | 'forward']
 }>()
+
+// r / a / f start a reply, a reply-all or a forward; not while typing in a field
+defineShortcuts({
+  r: () => emits('compose', 'reply'),
+  a: () => emits('compose', 'replyAll'),
+  f: () => emits('compose', 'forward')
+})
 
 const route = useRoute()
 const router = useRouter()
@@ -78,6 +88,36 @@ function openPerson(address?: string) {
       </template>
 
       <template #right>
+        <UTooltip text="Reply (r)">
+          <UButton
+            icon="i-lucide-reply"
+            color="neutral"
+            variant="ghost"
+            aria-label="Reply"
+            @mouseenter="emits('prefetch', 'reply')"
+            @click="emits('compose', 'reply')"
+          />
+        </UTooltip>
+        <UTooltip text="Reply all (a)">
+          <UButton
+            icon="i-lucide-reply-all"
+            color="neutral"
+            variant="ghost"
+            aria-label="Reply all"
+            @mouseenter="emits('prefetch', 'replyAll')"
+            @click="emits('compose', 'replyAll')"
+          />
+        </UTooltip>
+        <UTooltip text="Forward (f)">
+          <UButton
+            icon="i-lucide-forward"
+            color="neutral"
+            variant="ghost"
+            aria-label="Forward"
+            @mouseenter="emits('prefetch', 'forward')"
+            @click="emits('compose', 'forward')"
+          />
+        </UTooltip>
         <GraphLinkButton :entity="mailEntity" />
         <UDropdownMenu :items="dropdownItems">
           <UButton

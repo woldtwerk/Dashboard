@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MAIL_TOOL_TEXT_LIMIT, mailReadInput, mailSearchInput, toMailToolSearch } from '../server/tools'
+import { MAIL_TOOL_TEXT_LIMIT, mailReadInput, mailSearchInput, mailSendInput, toMailToolSearch } from '../server/tools'
 
 describe('toMailToolSearch', () => {
   it('maps the tool input onto the domain search', () => {
@@ -36,5 +36,20 @@ describe('toMailToolSearch', () => {
     expect(mailSearchInput.safeParse({ limit: 26 }).success).toBe(false)
     expect(mailReadInput.safeParse({ service: 's', mailbox: 'INBOX', uid: 1 }).success).toBe(true)
     expect(MAIL_TOOL_TEXT_LIMIT).toBe(20_000)
+  })
+})
+
+describe('mailSendInput', () => {
+  const base = { service: 's', to: [{ address: 'alice@example.com' }], subject: 'Hi', text: 'Body' }
+
+  it('accepts a well-formed mail and a well-formed reply id', () => {
+    expect(mailSendInput.safeParse(base).success).toBe(true)
+    expect(mailSendInput.safeParse({ ...base, inReplyTo: '<root@example.com>', references: ['<root@example.com>'] }).success).toBe(true)
+  })
+
+  it('rejects a subject or Message-ID carrying a line break', () => {
+    expect(mailSendInput.safeParse({ ...base, subject: 'Hi\r\nBcc: evil@example.com' }).success).toBe(false)
+    expect(mailSendInput.safeParse({ ...base, inReplyTo: 'a@example.com\r\nX: injected' }).success).toBe(false)
+    expect(mailSendInput.safeParse({ ...base, references: ['<ok@example.com>', 'bad id'] }).success).toBe(false)
   })
 })
