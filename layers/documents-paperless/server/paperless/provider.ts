@@ -92,6 +92,24 @@ export function createPaperlessProvider(values: SetupValues): DocumentsProvider 
       await client.request(`/api/documents/${id}/`, { method: 'DELETE' })
     },
 
+    async countInbox() {
+      const page = await client.request<{ count: number }>('/api/documents/', {
+        query: { is_in_inbox: true, page_size: 1 }
+      })
+      return page.count
+    },
+
+    async countAdded(since, until) {
+      const page = await client.request<{ count: number }>('/api/documents/', {
+        query: { added__date__gte: since, added__date__lt: until, page_size: 1 }
+      })
+      return page.count
+    },
+
+    async ping() {
+      await client.request('/api/')
+    },
+
     thumbnail: id => client.stream(`/api/documents/${id}/thumb/`),
     preview: id => client.stream(`/api/documents/${id}/preview/`),
     download: (id, options) => client.stream(`/api/documents/${id}/download/`, { query: { original: options.original } }),

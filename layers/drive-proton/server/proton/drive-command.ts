@@ -34,6 +34,10 @@ export function buildInfoArgs(path: string): string[] {
   return ['filesystem', 'info', path]
 }
 
+export function buildSizeArgs(path: string): string[] {
+  return ['filesystem', 'size', path]
+}
+
 export function buildCreateFolderArgs(parentPath: string, name: string): string[] {
   return ['filesystem', 'create-folder', parentPath, name]
 }
@@ -173,6 +177,53 @@ export function parseEntry(stdout: string, path: string): DriveEntry | undefined
     : candidate
 
   return isEntry(entry) ? toEntry(entry, parentPath(path)) : undefined
+}
+
+/** A byte count from JSON, accepting numbers and numeric strings */
+function bytesOf(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return value
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
+  }
+  return undefined
+}
+
+/**
+ * The size `filesystem size --json` reports. The CLI prints
+ * `{ size, numberOfDescendants }`; older or wrapped shapes name the size
+ * differently, so every plausible field is accepted.
+ */
+export function parseUsedBytes(stdout: string): number | undefined {
+  const data = parseJson(stdout)
+
+  function fromObject(value: unknown): number | undefined {
+    if (Array.isArray(value)) {
+      return value.map(fromObject).find((size): size is number => size !== undefined)
+    }
+    if (!value || typeof value !== 'object') {
+      return undefined
+    }
+
+    const record = value as Record<string, unknown>
+    for (const key of ['size', 'totalSize', 'totalSizeBytes', 'usedBytes', 'storageSize', 'bytes']) {
+      const size = bytesOf(record[key])
+      if (size !== undefined) {
+        return size
+      }
+    }
+    for (const key of ['folderSize', 'result', 'data']) {
+      const size = fromObject(record[key])
+      if (size !== undefined) {
+        return size
+      }
+    }
+    return undefined
+  }
+
+  return bytesOf(data) ?? fromObject(data)
 }
 
 function stringOf(value: unknown): string | undefined {

@@ -27,6 +27,8 @@ export interface MailSearchIndex {
   search(query: MailIndexQuery): Promise<MailSummary[]>
   /** Filter suggestions for the current query, e.g. the most frequent senders */
   facets(query: MailFacetQuery): Promise<MailFacets>
+  /** Message counts per UTC day in [since, until); for dashboard series */
+  countByDay(query: { services: string[], since: string, until: string }): Promise<{ date: string, count: number }[]>
 }
 
 let factory: (() => MailSearchIndex) | undefined

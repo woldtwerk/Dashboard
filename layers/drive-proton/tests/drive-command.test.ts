@@ -6,16 +6,22 @@ import {
   buildListArgs,
   buildMoveArgs,
   buildSetShareArgs,
+  buildSizeArgs,
   parseEntries,
   parseEntry,
   parseInvitations,
   parseJson,
-  parseShare
+  parseShare,
+  parseUsedBytes
 } from '../server/proton/drive-command'
 
 describe('argv building', () => {
   it('builds a listing command for a path', () => {
     expect(buildListArgs('/my-files/Docs')).toEqual(['filesystem', 'list', '/my-files/Docs'])
+  })
+
+  it('builds a size command for the whole drive', () => {
+    expect(buildSizeArgs('/my-files')).toEqual(['filesystem', 'size', '/my-files'])
   })
 
   it('passes names as their own arguments', () => {
@@ -96,6 +102,23 @@ describe('parseEntry', () => {
 
   it('returns undefined for a section', () => {
     expect(parseEntry(JSON.stringify({ uid: 'section' }), '/my-files')).toBeUndefined()
+  })
+})
+
+describe('parseUsedBytes', () => {
+  it('reads the size the CLI reports', () => {
+    expect(parseUsedBytes(JSON.stringify({ size: 123456, numberOfDescendants: 12 }))).toBe(123456)
+  })
+
+  it('accepts numeric strings and wrapped shapes', () => {
+    expect(parseUsedBytes(JSON.stringify({ folderSize: { totalSize: '4096' } }))).toBe(4096)
+    expect(parseUsedBytes(JSON.stringify({ data: { usedBytes: 99 } }))).toBe(99)
+  })
+
+  it('returns undefined without a byte count', () => {
+    expect(parseUsedBytes('')).toBeUndefined()
+    expect(parseUsedBytes('{}')).toBeUndefined()
+    expect(parseUsedBytes(JSON.stringify({ size: 'unknown' }))).toBeUndefined()
   })
 })
 

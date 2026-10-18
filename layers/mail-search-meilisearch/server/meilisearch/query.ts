@@ -8,6 +8,42 @@ export function filterValue(value: string): string {
 
 const unixSeconds = (isoDate: string) => Math.floor(new Date(`${isoDate}T00:00:00Z`).getTime() / 1000)
 
+const DAY_MS = 24 * 60 * 60 * 1000
+const dayKey = (date: Date) => date.toISOString().slice(0, 10)
+
+export interface DayCountQuery {
+  /** Bucket start, YYYY-MM-DD (UTC) */
+  date: string
+  /** Meilisearch filter for that day */
+  filter: string[]
+}
+
+/**
+ * One count query per day in [since, until), for a single Meilisearch
+ * `multiSearch`. `until` is exclusive.
+ */
+export function dayCountQueries(since: string, until: string, services: string[]): DayCountQuery[] {
+  const end = new Date(`${until}T00:00:00.000Z`).getTime()
+  let start = new Date(`${since}T00:00:00.000Z`).getTime()
+
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) {
+    return []
+  }
+
+  const queries: DayCountQuery[] = []
+  while (start < end) {
+    const date = dayKey(new Date(start))
+    const next = dayKey(new Date(start + DAY_MS))
+    queries.push({
+      date,
+      filter: buildMailFilter({ services, search: { since: date, before: next } })
+    })
+    start += DAY_MS
+  }
+
+  return queries
+}
+
 /** Meilisearch filter for a mail query; all parts are combined with AND */
 export function buildMailFilter({ services, mailbox, search }: Pick<MailIndexQuery, 'services' | 'mailbox' | 'search'>): string[] {
   const filter = [`service IN [${services.map(filterValue).join(', ')}]`]

@@ -54,6 +54,13 @@ export interface DocumentsProvider {
   update(id: number, patch: DocumentsDocumentPatch): Promise<DocumentsDocument>
   remove(id: number): Promise<void>
 
+  /** Number of documents currently in the inbox */
+  countInbox(): Promise<number>
+  /** Number of documents added in [since, until), dates as YYYY-MM-DD */
+  countAdded(since: string, until: string): Promise<number>
+  /** Verifies the provider answers, e.g. for the dashboard's service health */
+  ping(): Promise<void>
+
   /** Preview images. Guarded by {@link isInlinePreview} before rendering. */
   thumbnail(id: number): Promise<Response>
   preview(id: number): Promise<Response>

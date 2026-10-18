@@ -1,6 +1,6 @@
 import { createError } from 'nuxt/server'
 import type { SetupValues } from '../../../core/shared/types/setup'
-import type { DriveProvider, DriveUpload } from '../../../drive/server/utils/drive-provider'
+import type { DriveProvider, DriveProviderStatus, DriveUpload } from '../../../drive/server/utils/drive-provider'
 import type { DriveEntry, DriveInvitation, DriveShare } from '../../../drive/shared/types/drive'
 import { useProtonDriveControl } from './control'
 import {
@@ -18,11 +18,13 @@ import {
   buildRestoreArgs,
   buildSetShareArgs,
   buildShareStatusArgs,
+  buildSizeArgs,
   buildTrashArgs,
   parseEntries,
   parseEntry,
   parseInvitations,
-  parseShare
+  parseShare,
+  parseUsedBytes
 } from './drive-command'
 
 /** The last meaningful line of a CLI failure, skipping its `=` banner. */
@@ -129,6 +131,21 @@ export function createProtonDriveProvider(_values: SetupValues): DriveProvider {
 
     emptyTrash() {
       return run(buildEmptyTrashArgs(), 'empty the trash')
+    },
+
+    async usedBytes(): Promise<number> {
+      const size = parseUsedBytes(await stdoutOf(buildSizeArgs('/my-files'), 'measure the drive'))
+      if (size === undefined) {
+        throw createError({ status: 502, statusText: 'Proton Drive did not report the used space' })
+      }
+      return size
+    },
+
+    async status(): Promise<DriveProviderStatus> {
+      const { signedIn } = await control.status()
+      return signedIn
+        ? { health: 'ok' }
+        : { health: 'error', error: 'Proton Drive is not signed in' }
     },
 
     async share(path): Promise<DriveShare> {
