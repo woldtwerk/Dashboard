@@ -13,6 +13,9 @@ const STALE_MS = 2 * 60_000
 /** SQLite limits bound parameters per statement */
 const SQL_CHUNK = 500
 
+/** Bump when the stored bounds change meaning, so an outdated cache refetches */
+export const CALENDAR_CACHE_VERSION = 2
+
 export type CalendarCacheDb = SqliteRemoteDatabase<typeof calendarCacheSchema>
 type CacheTransaction = Parameters<Parameters<CalendarCacheDb['transaction']>[0]>[0]
 
@@ -44,13 +47,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-function toRows(service: string, calendarUrl: string, objects: RemoteCalendarObject[]) {
+/** The zone a floating iCalendar time is placed in, from the runtime config */
+function calendarTimeZone(): string {
+  return useRuntimeConfig().public.calendar.timeZone
+}
+
+function toRows(service: string, calendarUrl: string, objects: RemoteCalendarObject[], fallbackZone: string) {
   return objects.map((object) => {
     if (!object.data) {
       throw new Error('The calendar server returned an object without data')
     }
 
-    const bounds = objectBounds(object.data)
+    const bounds = objectBounds(object.data, fallbackZone)
 
     return {
       service,
@@ -89,7 +97,7 @@ async function upsertRows(service: string, rows: ReturnType<typeof toRows>): Pro
 
 /** Stores one already-fetched object, e.g. after a write through the provider. */
 export async function cacheCalendarObject(service: string, calendarUrl: string, object: RemoteCalendarObject): Promise<void> {
-  await upsertRows(service, toRows(service, calendarUrl, [object]))
+  await upsertRows(service, toRows(service, calendarUrl, [object], calendarTimeZone()))
 }
 
 /** Drops one cached object by href, e.g. after it was deleted remotely. */
@@ -122,8 +130,8 @@ export async function refreshCalendarObject(service: string, calendarUrl: string
 async function markSynced(service: string): Promise<void> {
   const syncedAt = new Date()
 
-  await write(tx => tx.insert(calendarSync).values({ service, syncedAt, error: null })
-    .onConflictDoUpdate({ target: calendarSync.service, set: { syncedAt, error: null } }))
+  await write(tx => tx.insert(calendarSync).values({ service, syncedAt, error: null, version: CALENDAR_CACHE_VERSION })
+    .onConflictDoUpdate({ target: calendarSync.service, set: { syncedAt, error: null, version: CALENDAR_CACHE_VERSION } }))
 }
 
 async function markFailed(service: string, error: unknown): Promise<void> {
@@ -131,6 +139,25 @@ async function markFailed(service: string, error: unknown): Promise<void> {
 
   await write(tx => tx.insert(calendarSync).values({ service, error: message })
     .onConflictDoUpdate({ target: calendarSync.service, set: { error: message } }))
+}
+
+/**
+ * Drops the cached objects of a service stored under an older cache version, so
+ * the next sync recomputes their bounds and the ctag forces a full refetch.
+ */
+async function ensureCacheVersion(service: string): Promise<void> {
+  const db = await cacheDb()
+  const row = await db.select({ version: calendarSync.version }).from(calendarSync)
+    .where(eq(calendarSync.service, service)).get()
+
+  if (!row || row.version === CALENDAR_CACHE_VERSION) {
+    return
+  }
+
+  await write(async (tx) => {
+    await tx.delete(calendarObjects).where(eq(calendarObjects.service, service))
+    await tx.update(calendarCollections).set({ ctag: null, syncToken: null }).where(eq(calendarCollections.service, service))
+  })
 }
 
 /** Stores the calendar list, dropping objects of calendars gone from the server. */
@@ -196,7 +223,7 @@ async function syncObjects(service: string, calendar: Calendar, provider: Calend
     }
     return object
   })
-  const rows = toRows(service, calendar.url, changed)
+  const rows = toRows(service, calendar.url, changed, calendarTimeZone())
   const syncedAt = new Date()
 
   await write(async (tx) => {
@@ -224,6 +251,10 @@ async function syncObjects(service: string, calendar: Calendar, provider: Calend
       syncedAt
     }).where(and(eq(calendarCollections.service, service), eq(calendarCollections.url, calendar.url)))
   })
+
+  if (diff.removed.length || changed.length) {
+    await publishDomainEvent({ domain: 'calendar', service, type: 'changed', resource: calendar.url })
+  }
 }
 
 /**
@@ -234,6 +265,8 @@ async function syncObjects(service: string, calendar: Calendar, provider: Calend
 export async function syncCalendarService(service: string): Promise<boolean> {
   const result = await withLock(lockName(service), LOCK_TTL_MS, async ({ renew }) => {
     try {
+      // A cache stored before the bounds were fixed has to be refetched
+      await ensureCacheVersion(service)
       const provider = await useCalendarProvider(service)
       const calendars = await provider.listCalendars()
       const storedCtags = await syncCollections(service, calendars)
@@ -252,9 +285,11 @@ export async function syncCalendarService(service: string): Promise<boolean> {
       }
 
       await markSynced(service)
+      await publishDomainEvent({ domain: 'calendar', service, type: 'synced' })
       return true
     } catch (error) {
       await markFailed(service, error).catch(markError => console.error(`[calendar] Could not record the sync error of ${service}:`, markError))
+      await publishDomainEvent({ domain: 'calendar', service, type: 'sync-failed' })
       throw error
     }
   })
@@ -269,10 +304,10 @@ export async function requestCalendarSync(service: string): Promise<void> {
   }
 
   const db = await cacheDb()
-  const row = await db.select({ syncedAt: calendarSync.syncedAt }).from(calendarSync)
+  const row = await db.select({ syncedAt: calendarSync.syncedAt, version: calendarSync.version }).from(calendarSync)
     .where(eq(calendarSync.service, service)).get()
 
-  if (!row?.syncedAt || Date.now() - row.syncedAt.getTime() > STALE_MS) {
+  if (!row?.syncedAt || row.version !== CALENDAR_CACHE_VERSION || Date.now() - row.syncedAt.getTime() > STALE_MS) {
     syncCalendarService(service).catch((error) => {
       console.error(`[calendar] Sync of ${service} failed:`, error)
     })
@@ -347,6 +382,7 @@ export async function cachedEvents(
   service: string,
   calendarUrls: string[],
   window: { start: string, end: string },
+  fallbackZone: string,
   db?: CalendarCacheDb
 ): Promise<CalendarEvent[]> {
   if (!calendarUrls.length) {
@@ -375,5 +411,5 @@ export async function cachedEvents(
     etag: row.etag ?? undefined,
     calendar: row.calendarUrl,
     service
-  }, { start: new Date(window.start), end: new Date(window.end) }))
+  }, { start: new Date(window.start), end: new Date(window.end) }, fallbackZone))
 }

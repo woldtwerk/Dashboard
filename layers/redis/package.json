@@ -5,6 +5,7 @@
   "description": "Redis as Nitro storage mount `redis`, shared by all cluster workers",
   "main": "./nuxt.config.ts",
   "dependencies": {
+    "@allmight/core": "workspace:*",
     "ioredis": "catalog:",
     "unstorage": "catalog:"
   },

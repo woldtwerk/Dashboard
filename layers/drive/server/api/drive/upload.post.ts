@@ -14,5 +14,7 @@ export default defineEventHandler(async (event) => {
     contentLength: getRequestHeader(event, 'content-length')
   })
 
+  await publishDriveChange(service, path)
+
   return { ok: true }
 })

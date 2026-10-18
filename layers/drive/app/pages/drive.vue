@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { refDebounced } from '@vueuse/core'
+import { refDebounced, useDebounceFn } from '@vueuse/core'
 import type { DropdownMenuItem } from '@nuxt/ui'
 import type { DriveEntry, DriveInvitation, DriveOrder, DriveSort, DriveView } from '#layers/drive/shared/types/drive'
 import { isWithinPath, joinPath, parentPath } from '#layers/drive/shared/drive-path'
@@ -51,6 +51,15 @@ const { data: entries, status, error, refresh } = await useFetch<DriveEntry[]>('
 
 const visible = computed(() => sortEntries(filterEntries(entries.value, debouncedSearch.value), sort.value, order.value))
 const visiblePaths = computed(() => visible.value.map(entry => entry.path))
+
+const refreshFromEvents = useDebounceFn(() => refresh(), 300)
+useDomainEvents({ domains: ['drive'] }, (event) => {
+  if (driveRefreshFor(event, path.value)) {
+    refreshFromEvents()
+  }
+}, {
+  onReconnect: () => refreshFromEvents()
+})
 
 // --- Prefetch -------------------------------------------------------------
 

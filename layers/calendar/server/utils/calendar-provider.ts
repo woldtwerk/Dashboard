@@ -188,7 +188,7 @@ export function createCalDavProvider(values: SetupValues, service = ''): Calenda
         url: object.url,
         etag: object.etag,
         calendar: calendar.url
-      }, { start: new Date(window.start), end: new Date(window.end) }))
+      }, { start: new Date(window.start), end: new Date(window.end) }, useRuntimeConfig().public.calendar.timeZone))
     },
 
     async listObjectEtags(calendarUrl) {
@@ -241,10 +241,11 @@ export function createCalDavProvider(values: SetupValues, service = ''): Calenda
       const url = trustedObjectUrl(calendar, event.url)
       const existing = await fetchObject(client, calendar, url, event.uid)
       const recurrenceId = event.recurrenceId ?? event.start
+      const timeZone = useRuntimeConfig().public.calendar.timeZone
 
       const data = scope === 'one'
-        ? applyOccurrenceEdit(existing.data, recurrenceId, edit)
-        : applySeriesEdit(existing.data, edit, event.recurrenceId)
+        ? applyOccurrenceEdit(existing.data, recurrenceId, edit, timeZone)
+        : applySeriesEdit(existing.data, edit, timeZone, event.recurrenceId)
 
       const response = await client.updateCalendarObject({
         calendarObject: { url, etag: existing.etag ?? event.etag, data }
@@ -259,7 +260,7 @@ export function createCalDavProvider(values: SetupValues, service = ''): Calenda
 
       if (scope === 'one') {
         const existing = await fetchObject(client, calendar, url, event.uid)
-        const data = applyOccurrenceDelete(existing.data, event.recurrenceId ?? event.start)
+        const data = applyOccurrenceDelete(existing.data, event.recurrenceId ?? event.start, useRuntimeConfig().public.calendar.timeZone)
         const response = await client.updateCalendarObject({
           calendarObject: { url, etag: existing.etag ?? event.etag, data }
         })

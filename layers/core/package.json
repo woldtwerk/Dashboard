@@ -9,6 +9,7 @@
     "@vueuse/core": "catalog:",
     "@vueuse/nuxt": "catalog:",
     "drizzle-orm": "catalog:",
+    "h3": "catalog:",
     "hookable": "catalog:",
     "tailwindcss": "catalog:",
     "zod": "catalog:"

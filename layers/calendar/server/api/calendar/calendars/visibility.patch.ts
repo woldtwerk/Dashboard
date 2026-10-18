@@ -22,5 +22,7 @@ export default defineEventHandler(async (event) => {
       set: { hidden }
     })
 
+  await publishDomainEvent({ domain: 'calendar', service, type: 'changed' })
+
   return { ok: true }
 })

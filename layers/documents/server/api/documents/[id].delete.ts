@@ -5,6 +5,7 @@ export default defineEventHandler(async (event) => {
   const id = documentsParamId(event)
 
   await (await useDocumentsProvider(service)).remove(id)
+  await publishDomainEvent({ domain: 'documents', service, type: 'changed', resource: String(id) })
 
   return { ok: true }
 })

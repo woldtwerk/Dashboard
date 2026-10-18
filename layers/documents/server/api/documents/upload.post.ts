@@ -24,5 +24,7 @@ export default defineEventHandler(async (event) => {
     contentLength: getRequestHeader(event, 'content-length')
   })
 
+  await publishDomainEvent({ domain: 'documents', service, type: 'changed' })
+
   return { taskId }
 })

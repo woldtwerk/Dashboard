@@ -1,5 +1,6 @@
 import ICAL from 'ical.js'
 import type { CalendarEvent, CalendarEventInput } from '../../shared/types/calendar'
+import { icalTimeToDate, tzidOf } from './ical-time'
 
 type IcalComponent = InstanceType<typeof ICAL.Component>
 type IcalEvent = InstanceType<typeof ICAL.Event>
@@ -45,13 +46,12 @@ function pad(value: number): string {
   return String(value).padStart(2, '0')
 }
 
-/** ISO 8601 of an iCalendar time; date-only values become UTC midnight. */
-export function timeToIso(time: IcalTime): string {
-  if (time.isDate) {
-    return `${time.year}-${pad(time.month)}-${pad(time.day)}T00:00:00.000Z`
-  }
-
-  return time.toJSDate().toISOString()
+/**
+ * ISO 8601 of an iCalendar time; date-only values become UTC midnight. The TZID
+ * is passed in, because a time whose zone ical.js could not resolve is floating.
+ */
+export function timeToIso(time: IcalTime, tzid: string | undefined, fallbackZone: string): string {
+  return icalTimeToDate(time, tzid, fallbackZone).toISOString()
 }
 
 function readRrule(event: IcalEvent): string | undefined {
@@ -73,7 +73,10 @@ function readReminders(event: IcalEvent): number[] {
   return minutes.sort((a, b) => a - b)
 }
 
-function baseEvent(event: IcalEvent, source: EventSource, start: IcalTime, end: IcalTime, recurrenceId?: string): CalendarEvent {
+function baseEvent(event: IcalEvent, source: EventSource, start: IcalTime, end: IcalTime, fallbackZone: string, recurrenceId?: string): CalendarEvent {
+  const startTzid = tzidOf(event.component.getFirstProperty('dtstart'))
+  const endTzid = tzidOf(event.component.getFirstProperty('dtend')) ?? startTzid
+
   return {
     uid: event.uid,
     url: source.url,
@@ -83,8 +86,8 @@ function baseEvent(event: IcalEvent, source: EventSource, start: IcalTime, end: 
     title: event.summary || '(no title)',
     description: event.description || undefined,
     location: event.location || undefined,
-    start: timeToIso(start),
-    end: timeToIso(end),
+    start: timeToIso(start, startTzid, fallbackZone),
+    end: timeToIso(end, endTzid, fallbackZone),
     allDay: start.isDate,
     recurrence: readRrule(event),
     reminders: readReminders(event),
@@ -100,13 +103,14 @@ function baseEvent(event: IcalEvent, source: EventSource, start: IcalTime, end: 
  * Overrides (VEVENTs that carry a RECURRENCE-ID) are not listed on their own —
  * the master's expansion resolves them through `getOccurrenceDetails`.
  */
-export function expandEvents(ics: string, source: EventSource, window: EventWindow): CalendarEvent[] {
+export function expandEvents(ics: string, source: EventSource, window: EventWindow, fallbackZone: string): CalendarEvent[] {
   const calendar = parseCalendar(ics)
 
   return calendar.getAllSubcomponents('vevent')
     .filter(component => !component.getFirstProperty('recurrence-id'))
     .flatMap((component) => {
       const event = new ICAL.Event(component)
+      const tzid = tzidOf(component.getFirstProperty('dtstart'))
       const results: CalendarEvent[] = []
 
       if (event.isRecurring()) {
@@ -117,13 +121,15 @@ export function expandEvents(ics: string, source: EventSource, window: EventWind
           if (!occurrence) {
             break
           }
-          if (occurrence.toJSDate() >= window.end) {
+          if (icalTimeToDate(occurrence, tzid, fallbackZone) >= window.end) {
             break
           }
 
           const details = event.getOccurrenceDetails(occurrence)
-          if (details.endDate.toJSDate() > window.start && details.startDate.toJSDate() < window.end) {
-            results.push({ ...baseEvent(event, source, details.startDate, details.endDate, timeToIso(details.recurrenceId)), recurring: true })
+          // The iterator keeps the master's TZID, so each occurrence is placed
+          // in its zone anew — DST between two occurrences is applied per one.
+          if (icalTimeToDate(details.endDate, tzid, fallbackZone) > window.start && icalTimeToDate(details.startDate, tzid, fallbackZone) < window.end) {
+            results.push({ ...baseEvent(event, source, details.startDate, details.endDate, fallbackZone, timeToIso(details.recurrenceId, tzid, fallbackZone)), recurring: true })
           }
         }
 
@@ -132,8 +138,9 @@ export function expandEvents(ics: string, source: EventSource, window: EventWind
 
       const start = event.startDate
       const end = event.endDate
-      if (start && end && timeToIso(end) > window.start.toISOString() && timeToIso(start) < window.end.toISOString()) {
-        results.push(baseEvent(event, source, start, end))
+      const endTzid = tzidOf(component.getFirstProperty('dtend')) ?? tzid
+      if (start && end && icalTimeToDate(end, endTzid, fallbackZone) > window.start && icalTimeToDate(start, tzid, fallbackZone) < window.end) {
+        results.push(baseEvent(event, source, start, end, fallbackZone))
       }
 
       return results
@@ -171,9 +178,10 @@ function timeFromIso(iso: string, allDay: boolean): IcalTime {
   return time
 }
 
-function sameRecurrenceId(component: IcalComponent, recurrenceId: IcalTime): boolean {
-  const value = component.getFirstPropertyValue('recurrence-id')
-  return value instanceof ICAL.Time && timeToIso(value) === timeToIso(recurrenceId)
+function sameRecurrenceId(component: IcalComponent, recurrenceId: IcalTime, fallbackZone: string): boolean {
+  const property = component.getFirstProperty('recurrence-id')
+  const value = property?.getFirstValue()
+  return value instanceof ICAL.Time && timeToIso(value, tzidOf(property), fallbackZone) === timeToIso(recurrenceId, undefined, fallbackZone)
 }
 
 /** DTEND is exclusive; a same-day all-day edit ends the next day. */
@@ -234,7 +242,7 @@ function writeFields(component: IcalComponent, edit: EventEdit, times: { start: 
  * property, and its DTSTART/DTEND move by the delta between the occurrence the
  * form was opened at and the new time.
  */
-export function applySeriesEdit(ics: string, edit: EventEdit, recurrenceId?: string, now = new Date()): string {
+export function applySeriesEdit(ics: string, edit: EventEdit, fallbackZone: string, recurrenceId?: string, now = new Date()): string {
   const calendar = parseCalendar(ics)
   const master = findMaster(calendar)
   if (!master) {
@@ -244,14 +252,19 @@ export function applySeriesEdit(ics: string, edit: EventEdit, recurrenceId?: str
   const start = new Date(edit.start)
   let times = { start, end: endDate(edit) }
 
+  const ownStartProperty = master.getFirstProperty('dtstart')
   const ownStart = master.getFirstPropertyValue('dtstart')
   if (recurrenceId && ownStart instanceof ICAL.Time) {
+    const startTzid = tzidOf(ownStartProperty)
     const delta = start.getTime() - new Date(recurrenceId).getTime()
-    const moved = new Date(new Date(timeToIso(ownStart)).getTime() + delta)
+    const moved = new Date(new Date(timeToIso(ownStart, startTzid, fallbackZone)).getTime() + delta)
+    const ownEndProperty = master.getFirstProperty('dtend')
     const ownEnd = master.getFirstPropertyValue('dtend')
     times = {
       start: moved,
-      end: ownEnd instanceof ICAL.Time ? new Date(new Date(timeToIso(ownEnd)).getTime() + delta) : times.end
+      end: ownEnd instanceof ICAL.Time
+        ? new Date(new Date(timeToIso(ownEnd, tzidOf(ownEndProperty) ?? startTzid, fallbackZone)).getTime() + delta)
+        : times.end
     }
   }
 
@@ -264,7 +277,7 @@ export function applySeriesEdit(ics: string, edit: EventEdit, recurrenceId?: str
  * Change a single occurrence: add or update the override VEVENT that carries
  * the occurrence's original RECURRENCE-ID, leaving the master untouched.
  */
-export function applyOccurrenceEdit(ics: string, recurrenceId: string, edit: EventEdit, now = new Date()): string {
+export function applyOccurrenceEdit(ics: string, recurrenceId: string, edit: EventEdit, fallbackZone: string, now = new Date()): string {
   const calendar = parseCalendar(ics)
   const master = findMaster(calendar)
   if (!master) {
@@ -275,7 +288,7 @@ export function applyOccurrenceEdit(ics: string, recurrenceId: string, edit: Eve
   const allDay = edit.allDay ?? (ownStart instanceof ICAL.Time && ownStart.isDate)
   const id = timeFromIso(recurrenceId, allDay)
 
-  let override = calendar.getAllSubcomponents('vevent').find(component => component !== master && sameRecurrenceId(component, id))
+  let override = calendar.getAllSubcomponents('vevent').find(component => component !== master && sameRecurrenceId(component, id, fallbackZone))
   if (override) {
     override.updatePropertyWithValue('recurrence-id', id)
   } else {
@@ -296,7 +309,7 @@ export function applyOccurrenceEdit(ics: string, recurrenceId: string, edit: Eve
  * Cancel a single occurrence: EXDATE it on the master and drop any override
  * that had changed it.
  */
-export function applyOccurrenceDelete(ics: string, recurrenceId: string): string {
+export function applyOccurrenceDelete(ics: string, recurrenceId: string, fallbackZone: string): string {
   const calendar = parseCalendar(ics)
   const master = findMaster(calendar)
   if (!master) {
@@ -308,7 +321,7 @@ export function applyOccurrenceDelete(ics: string, recurrenceId: string): string
   const id = timeFromIso(recurrenceId, allDay)
 
   for (const component of calendar.getAllSubcomponents('vevent')) {
-    if (component !== master && sameRecurrenceId(component, id)) {
+    if (component !== master && sameRecurrenceId(component, id, fallbackZone)) {
       calendar.removeSubcomponent(component)
     }
   }
@@ -316,7 +329,7 @@ export function applyOccurrenceDelete(ics: string, recurrenceId: string): string
   if (master.getFirstProperty('rrule')) {
     const cancelled = master.getAllProperties('exdate').some((property) => {
       const value = property.getFirstValue()
-      return value instanceof ICAL.Time && timeToIso(value) === timeToIso(id)
+      return value instanceof ICAL.Time && timeToIso(value, tzidOf(property), fallbackZone) === timeToIso(id, undefined, fallbackZone)
     })
     if (!cancelled) {
       master.addPropertyWithValue('exdate', id)

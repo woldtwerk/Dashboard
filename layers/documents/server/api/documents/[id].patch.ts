@@ -4,6 +4,9 @@ export default defineEventHandler(async (event) => {
   const { service } = await getValidatedQuery(event, documentsServiceSchema)
   const id = documentsParamId(event)
   const patch = await readValidatedBody(event, documentsPatchSchema)
+  const updated = await (await useDocumentsProvider(service)).update(id, patch)
 
-  return (await useDocumentsProvider(service)).update(id, patch)
+  await publishDomainEvent({ domain: 'documents', service, type: 'changed', resource: String(id) })
+
+  return updated
 })

@@ -5,6 +5,7 @@ export default defineEventHandler(async (event) => {
   const { service, paths } = await readValidatedBody(event, drivePathsBodySchema)
 
   await (await useDriveProvider(service)).remove(paths)
+  await publishDriveChanges(service, paths)
 
   return { ok: true }
 })

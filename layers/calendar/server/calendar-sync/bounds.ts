@@ -1,5 +1,6 @@
 import ICAL from 'ical.js'
-import { parseCalendar, timeToIso } from '../utils/calendar-ical'
+import { parseCalendar } from '../utils/calendar-ical'
+import { icalTimeToDate, tzidOf } from '../utils/ical-time'
 
 type IcalComponent = InstanceType<typeof ICAL.Component>
 type IcalEvent = InstanceType<typeof ICAL.Event>
@@ -25,20 +26,20 @@ function findMaster(calendar: IcalComponent): IcalComponent | undefined {
   return events.find(isMaster) ?? events[0]
 }
 
-/** Date-only values are UTC midnight, like the expanded event strings */
-function toDate(time: IcalTime): Date {
-  return new Date(timeToIso(time))
+/** Date-only values are UTC midnight; a TZID time is placed in its zone */
+function toDate(time: IcalTime, tzid: string | undefined, fallbackZone: string): Date {
+  return icalTimeToDate(time, tzid, fallbackZone)
 }
 
-function eventEnd(event: IcalEvent): Date {
-  return toDate(event.endDate)
+function eventEnd(event: IcalEvent, tzid: string | undefined, fallbackZone: string): Date {
+  return toDate(event.endDate, tzid, fallbackZone)
 }
 
 /**
  * End of the last occurrence of a rule. Null when nothing bounds it, which
  * includes a rule with more occurrences than expansion would ever walk.
  */
-function recurrenceEnd(event: IcalEvent, rule: InstanceType<typeof ICAL.Recur>): Date | null {
+function recurrenceEnd(event: IcalEvent, rule: InstanceType<typeof ICAL.Recur>, tzid: string | undefined, fallbackZone: string): Date | null {
   if (!rule.isFinite() || (rule.count && rule.count > MAX_OCCURRENCES)) {
     return null
   }
@@ -64,11 +65,11 @@ function recurrenceEnd(event: IcalEvent, rule: InstanceType<typeof ICAL.Recur>):
     return null
   }
 
-  return new Date(toDate(last).getTime() + durationMs)
+  return new Date(toDate(last, tzid, fallbackZone).getTime() + durationMs)
 }
 
 /** Start and end of one object's master event and its overrides. */
-export function objectBounds(ics: string): ObjectBounds {
+export function objectBounds(ics: string, fallbackZone: string): ObjectBounds {
   const calendar = parseCalendar(ics)
   const components = calendar.getAllSubcomponents('vevent')
   const master = findMaster(calendar)
@@ -77,19 +78,23 @@ export function objectBounds(ics: string): ObjectBounds {
   }
 
   const event = new ICAL.Event(master)
-  let firstStart = toDate(event.startDate)
-  let lastEnd: Date | null = eventEnd(event)
+  const startTzid = tzidOf(master.getFirstProperty('dtstart'))
+  const endTzid = tzidOf(master.getFirstProperty('dtend')) ?? startTzid
+  let firstStart = toDate(event.startDate, startTzid, fallbackZone)
+  let lastEnd: Date | null = eventEnd(event, endTzid, fallbackZone)
 
   const rule = master.getFirstPropertyValue('rrule')
   if (rule instanceof ICAL.Recur) {
-    lastEnd = recurrenceEnd(event, rule)
+    lastEnd = recurrenceEnd(event, rule, startTzid, fallbackZone)
   }
 
   // Overrides may move an occurrence outside the master's span
   for (const component of components.filter(item => !isMaster(item))) {
     const override = new ICAL.Event(component)
-    const start = toDate(override.startDate)
-    const end = eventEnd(override)
+    const overrideStartTzid = tzidOf(component.getFirstProperty('dtstart'))
+    const overrideEndTzid = tzidOf(component.getFirstProperty('dtend')) ?? overrideStartTzid
+    const start = toDate(override.startDate, overrideStartTzid, fallbackZone)
+    const end = eventEnd(override, overrideEndTzid, fallbackZone)
 
     if (start < firstStart) {
       firstStart = start
