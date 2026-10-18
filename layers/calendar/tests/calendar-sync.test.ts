@@ -8,7 +8,7 @@ import { loadMigrations, runMigrations } from '../../core/server/db/migrate'
 import { diffObjects } from '../server/calendar-sync/diff'
 import { objectBounds } from '../server/calendar-sync/bounds'
 import { calendarCollections, calendarObjects, calendarSync } from '../server/db/cache-schema'
-import { cachedEvents } from '../server/utils/calendar-sync'
+import { cachedEvents, cachedEventsForParticipant } from '../server/utils/calendar-sync'
 import type { CalendarCacheDb } from '../server/utils/calendar-sync'
 
 const calendar = (body: string) => `BEGIN:VCALENDAR\r\nVERSION:2.0\r\n${body}\r\nEND:VCALENDAR\r\n`
@@ -138,7 +138,9 @@ describe('cachedEvents', () => {
       'UID:single@example.com',
       'DTSTART:20261005T090000Z',
       'DTEND:20261005T100000Z',
-      'SUMMARY:Single'
+      'SUMMARY:Single',
+      'ORGANIZER:mailto:jane@example.com',
+      'ATTENDEE:mailto:bob@example.com'
     ])
     const series = event([
       'UID:series@example.com',
@@ -156,6 +158,7 @@ describe('cachedEvents', () => {
         etag: '1',
         uid: 'single@example.com',
         data: single,
+        participants: JSON.stringify(['bob@example.com', 'jane@example.com']),
         firstStart: new Date('2026-10-05T09:00:00.000Z'),
         lastEnd: new Date('2026-10-05T10:00:00.000Z')
       },
@@ -198,5 +201,62 @@ describe('cachedEvents', () => {
     }, 'Europe/Berlin', db)
 
     expect(events.map(item => item.start)).toEqual(['2026-10-04T09:00:00.000Z'])
+  })
+})
+
+describe('cachedEventsForParticipant', () => {
+  let directory: string
+  let sqlite: ReturnType<typeof openSqlite>
+  let db: CalendarCacheDb
+
+  beforeAll(async () => {
+    directory = await mkdtemp(join(tmpdir(), 'allmight-calendar-'))
+    sqlite = openSqlite(join(directory, 'calendar.sqlite'))
+    runMigrations(sqlite, await loadMigrations(readMigration))
+    db = createDatabase(sqlite, { calendarCollections, calendarObjects, calendarSync })
+
+    await db.insert(calendarObjects).values({
+      service: 'svc',
+      calendarUrl: 'https://dav.example/cal/',
+      url: 'https://dav.example/cal/meeting.ics',
+      etag: '1',
+      uid: 'meeting@example.com',
+      data: event([
+        'UID:meeting@example.com',
+        'DTSTART:20261005T090000Z',
+        'DTEND:20261005T100000Z',
+        'SUMMARY:Meeting',
+        'ORGANIZER:mailto:jane@example.com',
+        'ATTENDEE:mailto:bob@example.com'
+      ]),
+      participants: JSON.stringify(['bob@example.com', 'jane@example.com']),
+      firstStart: new Date('2026-10-05T09:00:00.000Z'),
+      lastEnd: new Date('2026-10-05T10:00:00.000Z')
+    })
+  })
+
+  afterAll(async () => {
+    sqlite.close()
+    await rm(directory, { recursive: true, force: true })
+  })
+
+  const window = { start: '2026-10-03T00:00:00.000Z', end: '2026-10-06T00:00:00.000Z' }
+
+  it('returns the events an address takes part in, with their organizer', async () => {
+    const events = await cachedEventsForParticipant('svc', 'jane@example.com', window, 'Europe/Berlin', db)
+
+    expect(events.map(item => item.event.uid)).toEqual(['meeting@example.com'])
+    expect(events[0]!.organizer).toBe('jane@example.com')
+  })
+
+  it('returns an attendee with the organizer still named', async () => {
+    const events = await cachedEventsForParticipant('svc', 'bob@example.com', window, 'Europe/Berlin', db)
+
+    expect(events).toHaveLength(1)
+    expect(events[0]!.organizer).toBe('jane@example.com')
+  })
+
+  it('does not return events for a stranger', async () => {
+    expect(await cachedEventsForParticipant('svc', 'stranger@example.com', window, 'Europe/Berlin', db)).toEqual([])
   })
 })

@@ -1,0 +1,1 @@
+ALTER TABLE `calendar_objects` ADD `participants` text DEFAULT '[]' NOT NULL;

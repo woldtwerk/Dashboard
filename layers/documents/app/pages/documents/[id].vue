@@ -143,6 +143,7 @@ async function removeDocument() {
       </template>
 
       <template #right>
+        <GraphLinkButton :entity="{ type: 'document', service, id: String(id) }" />
         <UButton
           label="Original"
           icon="i-lucide-download"

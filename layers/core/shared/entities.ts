@@ -86,7 +86,8 @@ export function entityLink(ref: EntityRef): string {
     case 'contact':
       return `/contacts${query([['contact', ref.id]])}`
     case 'document':
-      return `/documents/${encodeURIComponent(ref.id)}`
+      // The detail page reads its service from the query string
+      return `/documents/${encodeURIComponent(ref.id)}${query([['service', ref.service ?? '']])}`
     case 'file':
       return `/drive${query([['path', parentOf(ref.id)], ['item', ref.id]])}`
     case 'person':

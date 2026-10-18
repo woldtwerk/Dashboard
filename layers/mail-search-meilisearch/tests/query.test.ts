@@ -32,6 +32,11 @@ describe('buildMailFilter', () => {
   it('omits criteria that are not set', () => {
     expect(buildMailFilter({ services: ['a'], search: { hasAttachment: false, unread: false } })).toEqual(['service IN ["a"]'])
   })
+
+  it('filters by a normalized participant', () => {
+    expect(buildMailFilter({ services: ['a'], participant: ' Jane@Example.COM ', search: {} }))
+      .toEqual(['service IN ["a"]', 'participantTerms = "jane@example.com"'])
+  })
 })
 
 describe('dayCountQueries', () => {

@@ -15,6 +15,13 @@
       "when": 1792336550817,
       "tag": "0001_reflective_mimic",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792339822023,
+      "tag": "0002_striped_big_bertha",
+      "breakpoints": true
     }
   ]
 }
