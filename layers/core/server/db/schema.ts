@@ -21,3 +21,12 @@ export const locks = sqliteTable('locks', {
   owner: text('owner').notNull(),
   expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull()
 })
+
+/** User order and renaming of the sidebar entries; a missing row means the layer's default */
+export const navigationPreferences = sqliteTable('navigation_preferences', {
+  key: text('key').primaryKey(),
+  /** Overrides the layer's label when set; null keeps the default */
+  label: text('label'),
+  /** Position in the sidebar; lower comes first */
+  position: integer('position').notNull()
+})

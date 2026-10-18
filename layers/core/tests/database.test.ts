@@ -6,6 +6,7 @@ import type { Database } from '../server/db/client'
 import { loadMigrations, runMigrations } from '../server/db/migrate'
 import type { Migration } from '../server/db/migrate'
 import { deleteService, findService, findServices, upsertService } from '../server/db/service-repository'
+import { listNavigationPreferences, replaceNavigationPreferences } from '../server/db/navigation-repository'
 import { acquireLock, isLocked, releaseLock, renewLock } from '../server/db/locks'
 
 const migrationsDir = fileURLToPath(new URL('../server/db/migrations/', import.meta.url))
@@ -112,6 +113,38 @@ describe('service repository', () => {
     expect(await deleteService(db, 'a')).toMatchObject({ id: 'a', domain: 'mail' })
     expect(await deleteService(db, 'a')).toBeUndefined()
     expect(await findServices(db)).toEqual([])
+  })
+})
+
+describe('navigation repository', () => {
+  let db: Database
+
+  beforeEach(async () => {
+    const sqlite = openSqlite(':memory:')
+    runMigrations(sqlite, await loadMigrations(readMigration))
+    db = createDatabase(sqlite)
+  })
+
+  it('replaces every preference in one go, ordered by position', async () => {
+    await replaceNavigationPreferences(db, [
+      { key: 'mail', label: 'Inbox', position: 0 },
+      { key: 'home', label: null, position: 1 }
+    ])
+
+    expect(await listNavigationPreferences(db)).toEqual([
+      { key: 'mail', label: 'Inbox', position: 0 },
+      { key: 'home', label: null, position: 1 }
+    ])
+
+    await replaceNavigationPreferences(db, [{ key: 'home', label: null, position: 0 }])
+    expect(await listNavigationPreferences(db)).toEqual([{ key: 'home', label: null, position: 0 }])
+  })
+
+  it('clears the stored preferences with an empty list', async () => {
+    await replaceNavigationPreferences(db, [{ key: 'home', label: 'Start', position: 0 }])
+    await replaceNavigationPreferences(db, [])
+
+    expect(await listNavigationPreferences(db)).toEqual([])
   })
 })
 

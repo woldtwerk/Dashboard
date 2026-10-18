@@ -36,6 +36,13 @@
       "when": 1792333585245,
       "tag": "0004_demonic_pete_wisdom",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1792336087678,
+      "tag": "0005_nervous_guardian",
+      "breakpoints": true
     }
   ]
 }

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { CommandPaletteItem, NavigationMenuChildItem, NavigationMenuItem } from '@nuxt/ui'
 
-const { navigation } = useDashboard()
+const { navigation, entries, isDefault, update, reset } = useDashboard()
 
 const open = ref(false)
+const editing = ref(false)
 
 const closeOnSelect = <T extends NavigationMenuChildItem>(item: T): T => ({
   ...item,
@@ -36,8 +37,20 @@ const flatten = (items: NavigationMenuChildItem[], parent?: string): CommandPale
 const groups = computed(() => [{
   id: 'links',
   label: 'Go to',
-  items: navigation.value.flatMap(({ label, icon, to, children }) => [{ label, icon, to }, ...flatten(children ?? [], label)])
+  items: [
+    ...navigation.value.flatMap(({ label, icon, to, children }) => [{ label, icon, to }, ...flatten(children ?? [], label)]),
+    { label: 'Customize menu', icon: 'i-lucide-pencil', onSelect: () => { editing.value = true } }
+  ] as CommandPaletteItem[]
 }])
+
+// The editor works on the current list; names and order are persisted by the composable
+function move(from: number, to: number) {
+  update(moveEntry(entries.value, from, to))
+}
+
+function rename(key: string, label: string) {
+  update(entries.value.map(entry => entry.key === key ? { ...entry, label } : entry))
+}
 </script>
 
 <template>
@@ -66,7 +79,14 @@ const groups = computed(() => [{
       <template #default="{ collapsed }">
         <UDashboardSearchButton :collapsed="collapsed" class="bg-transparent ring-default" />
 
+        <NavigationMenuEditor
+          v-if="editing"
+          :entries="entries"
+          @move="move"
+          @rename="rename"
+        />
         <UNavigationMenu
+          v-else
           :collapsed="collapsed"
           :items="links"
           orientation="vertical"
@@ -76,7 +96,35 @@ const groups = computed(() => [{
       </template>
 
       <template #footer="{ collapsed }">
-        <ThemeMenu :collapsed="collapsed" />
+        <template v-if="editing">
+          <UButton
+            icon="i-lucide-rotate-ccw"
+            label="Reset to default"
+            color="neutral"
+            variant="ghost"
+            block
+            :disabled="isDefault"
+            @click="reset"
+          />
+          <UButton
+            icon="i-lucide-check"
+            label="Done"
+            block
+            @click="editing = false"
+          />
+        </template>
+        <template v-else>
+          <UButton
+            icon="i-lucide-pencil"
+            :label="collapsed ? undefined : 'Customize menu'"
+            color="neutral"
+            variant="ghost"
+            block
+            :square="collapsed"
+            @click="editing = true"
+          />
+          <ThemeMenu :collapsed="collapsed" />
+        </template>
       </template>
     </UDashboardSidebar>
 
