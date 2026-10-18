@@ -31,5 +31,7 @@ export default defineEventHandler(async (event) => {
     await refreshCalendarObject(service, calendar, url)
   }
 
+  await publishDomainEvent({ domain: 'calendar', service, type: 'changed', resource: calendar })
+
   return { ok: true }
 })

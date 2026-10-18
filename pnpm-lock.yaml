@@ -422,6 +422,9 @@ importers:
       drizzle-orm:
         specifier: 'catalog:'
         version: 0.45.4
+      h3:
+        specifier: 'catalog:'
+        version: 1.15.11
       hookable:
         specifier: 'catalog:'
         version: 6.1.2
@@ -630,6 +633,9 @@ importers:
 
   layers/redis:
     dependencies:
+      '@allmight/core':
+        specifier: workspace:*
+        version: link:../core
       ioredis:
         specifier: 'catalog:'
         version: 5.10.1(supports-color@10.2.2)

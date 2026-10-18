@@ -224,6 +224,10 @@ async function syncObjects(service: string, calendar: Calendar, provider: Calend
       syncedAt
     }).where(and(eq(calendarCollections.service, service), eq(calendarCollections.url, calendar.url)))
   })
+
+  if (diff.removed.length || changed.length) {
+    await publishDomainEvent({ domain: 'calendar', service, type: 'changed', resource: calendar.url })
+  }
 }
 
 /**
@@ -252,9 +256,11 @@ export async function syncCalendarService(service: string): Promise<boolean> {
       }
 
       await markSynced(service)
+      await publishDomainEvent({ domain: 'calendar', service, type: 'synced' })
       return true
     } catch (error) {
       await markFailed(service, error).catch(markError => console.error(`[calendar] Could not record the sync error of ${service}:`, markError))
+      await publishDomainEvent({ domain: 'calendar', service, type: 'sync-failed' })
       throw error
     }
   })

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { refDebounced } from '@vueuse/core'
+import { refDebounced, useDebounceFn } from '@vueuse/core'
 import type { DropdownMenuItem } from '@nuxt/ui'
 import type { DocumentsBulkAction, DocumentsDocument, DocumentsFilters, DocumentsPage, DocumentsSavedView } from '#layers/documents/shared/types/documents'
 import { applyBulkAction } from '#layers/documents/shared/bulk-edit'
@@ -54,6 +54,15 @@ const { data: page, status, error, refresh } = await useFetch<DocumentsPage<Docu
 })
 
 const documents = computed(() => page.value.results)
+
+const refreshFromEvents = useDebounceFn(() => refresh(), 300)
+useDomainEvents({ domains: ['documents'] }, (event) => {
+  if (documentsRefreshFor(event)) {
+    refreshFromEvents()
+  }
+}, {
+  onReconnect: () => refreshFromEvents()
+})
 
 const library = useDocumentsLibrary(service)
 const { tagList, correspondentList, documentTypeList, storagePathList, customFieldList } = library

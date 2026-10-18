@@ -41,12 +41,14 @@ export async function syncMailService(service: string): Promise<boolean> {
     for (const { mailbox } of known.filter(row => !mailboxes.some(item => item.path === row.mailbox))) {
       await index.removeMailbox(service, mailbox)
       await forgetMailbox(service, mailbox)
+      await publishDomainEvent({ domain: 'mail', service, type: 'changed', resource: mailbox })
     }
 
     for (const mailbox of mailboxes) {
       await syncMailbox({ service, mailbox, provider, index, renew })
     }
 
+    await publishDomainEvent({ domain: 'mail', service, type: 'synced' })
     return true
   })
 
@@ -114,6 +116,10 @@ async function syncMailbox({ service, mailbox, provider, index, renew }: {
   }
 
   await db.update(mailIndexMailboxes).set({ complete: true, syncedAt: new Date() }).where(where)
+
+  if (diff.removed.length || diff.changed.length || diff.added.length) {
+    await publishDomainEvent({ domain: 'mail', service, type: 'changed', resource: path })
+  }
 }
 
 /** Starts a background sync when the index of the service is stale; never waits for it */

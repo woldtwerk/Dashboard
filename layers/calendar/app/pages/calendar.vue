@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useIntervalFn, useNow } from '@vueuse/core'
+import { useDebounceFn, useIntervalFn, useNow } from '@vueuse/core'
 import { addDays, format, isSameMonth, startOfDay } from 'date-fns'
 import type { Calendar, CalendarEvent, CalendarEventInput, CalendarList, CalendarSyncStatus, EventScope } from '#layers/calendar/shared/types/calendar'
 
@@ -71,24 +71,31 @@ const colorOf = (url: string) => calendarByUrl.value.get(url)?.color
 
 // --- Syncing ---
 
-const { data: syncStatus, refresh: refreshSyncStatus } = await useFetch<CalendarSyncStatus[]>('/api/calendar/sync-status', {
+const { data: syncStatus } = await useFetch<CalendarSyncStatus[]>('/api/calendar/sync-status', {
   default: () => [],
   lazy: true
 })
 
-const syncing = computed(() => syncStatus.value.some(status => status.syncing))
-const { pause, resume } = useIntervalFn(() => refreshSyncStatus(), 5000, { immediate: false })
-watch(syncing, value => value ? resume() : pause(), { immediate: true })
+// The initial status drives the spinner; domain events switch it off instead of polling
+const syncing = ref(false)
+watch(syncStatus, (value) => {
+  syncing.value = value.some(status => status.syncing)
+}, { immediate: true })
 
-// A changed stamp means a service finished a sync; pull the fresh events and
-// calendar list in
-const syncStamps = computed(() => syncStatus.value.map(status => `${status.service}:${status.syncedAt ?? ''}`).sort().join('|'))
-watch(syncStamps, (value, previous) => {
-  if (previous === undefined || value === previous) {
-    return
-  }
+const refreshFromEvents = useDebounceFn(() => {
   refreshEvents()
   refreshCalendars()
+}, 300)
+
+useDomainEvents({ domains: ['calendar'] }, (event) => {
+  if (event.type === 'synced' || event.type === 'sync-failed') {
+    syncing.value = false
+  }
+  if (calendarRefreshFor(event)) {
+    refreshFromEvents()
+  }
+}, {
+  onReconnect: () => refreshFromEvents()
 })
 
 // --- Views ---

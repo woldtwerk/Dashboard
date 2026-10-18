@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { breakpointsTailwind, refDebounced, useIntervalFn } from '@vueuse/core'
+import { breakpointsTailwind, refDebounced, useDebounceFn } from '@vueuse/core'
 import type { LocationQuery } from 'vue-router'
 import type { MailSummary } from '#layers/mail/shared/types/mail'
 
@@ -169,13 +169,33 @@ const { data: mails, status, error, refresh } = await useFetch('/api/mail/messag
   default: () => []
 })
 
-// Search index status (null without an index); polled while it's being built
+// Search index status (null without an index); refreshed when a sync finishes
 const { data: indexStatus, refresh: refreshIndexStatus } = await useFetch('/api/mail/index-status')
 const currentIndex = computed(() => indexStatus.value?.find(item => item.service === service.value))
 const indexAvailable = computed(() => !!indexStatus.value)
 const indexing = computed(() => !!currentIndex.value && (currentIndex.value.syncing || !currentIndex.value.complete))
-const { pause, resume } = useIntervalFn(() => refreshIndexStatus(), 5000, { immediate: false })
-watch(indexing, value => value ? resume() : pause(), { immediate: true })
+
+const refreshListFromEvents = useDebounceFn(() => refresh(), 300)
+const refreshFoldersFromEvents = useDebounceFn(() => refreshNuxtData('mail-folders'), 300)
+
+useDomainEvents({ domains: ['mail'] }, (event) => {
+  const plan = mailRefreshFor(event, { service: service.value, mailbox: mailbox.value })
+  if (plan.list) {
+    refreshListFromEvents()
+  }
+  if (plan.folders) {
+    refreshFoldersFromEvents()
+  }
+  if (plan.indexStatus) {
+    refreshIndexStatus()
+  }
+}, {
+  onReconnect: () => {
+    refreshListFromEvents()
+    refreshFoldersFromEvents()
+    refreshIndexStatus()
+  }
+})
 
 // Sender suggestions for the `from` control, from the index facets; null without an index
 const { data: facets } = await useFetch('/api/mail/facets', {

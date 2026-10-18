@@ -13,6 +13,7 @@ export default defineEventHandler(async (event) => {
   const existing = { uid, addressBook, url, etag, name: '' } as Contact
 
   await provider.deleteContact(existing)
+  await publishDomainEvent({ domain: 'contacts', service, type: 'changed', resource: addressBook })
 
   return { ok: true }
 })

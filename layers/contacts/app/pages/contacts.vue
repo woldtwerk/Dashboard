@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { breakpointsTailwind, refDebounced } from '@vueuse/core'
+import { breakpointsTailwind, refDebounced, useDebounceFn } from '@vueuse/core'
 import type { Contact, ContactInput, ContactList } from '#layers/contacts/shared/types/contacts'
 
 defineOptions({ name: 'ContactsPage' })
@@ -28,6 +28,15 @@ const addressBooks = computed(() => contactLists.value.flatMap(list => list.addr
 const bookItems = computed(() => addressBooks.value.map(book => ({ label: book.name, value: book.url })))
 
 const { data: contacts, refresh } = await useFetch<Contact[]>('/api/contacts', { default: () => [] })
+
+const refreshFromEvents = useDebounceFn(() => refresh(), 300)
+useDomainEvents({ domains: ['contacts'] }, (event) => {
+  if (contactsRefreshFor(event)) {
+    refreshFromEvents()
+  }
+}, {
+  onReconnect: () => refreshFromEvents()
+})
 
 // Search lives in the URL; typing is debounced so the history stays clean
 const search = ref(queryString('q') ?? '')

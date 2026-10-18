@@ -4,6 +4,7 @@ export default defineEventHandler(async (event) => {
   const { service } = await readValidatedBody(event, driveEmptyTrashBodySchema)
 
   await (await useDriveProvider(service)).emptyTrash()
+  await publishDriveTrashChange(service)
 
   return { ok: true }
 })
