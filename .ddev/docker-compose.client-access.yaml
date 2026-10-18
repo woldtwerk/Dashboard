@@ -1,0 +1,65 @@
+# Client-access proxy: lets other clients on THIS machine (Thunderbird,
+# Evolution, GNOME Calendar, …) use the dashboard's CalDAV, CardDAV, IMAP and
+# SMTP, authenticated with the per-device app passwords the settings page
+# issues. The real Bridge/carbonate passwords never leave the containers: the
+# proxy asks the app for the upstream credentials over the project network.
+#
+# HTTP (CalDAV/CardDAV) is routed by the ddev router as dav.$DDEV_HOSTNAME, so
+# it uses ddev's mkcert certificate. Mail is published on loopback only, because
+# IMAP/SMTP cannot go through the HTTP router.
+#
+# Secret: CLIENT_ACCESS_SECRET in .ddev/.env.client-access, the same value as
+# NUXT_CLIENT_ACCESS_SECRET in .ddev/.env.web (both gitignored, paired by
+# ensure-secrets.sh). A `ddev restart` is required before this service is
+# created, dav.$DDEV_HOSTNAME is routed and the secret exists (the task must not
+# restart it for you).
+services:
+  client-access:
+    container_name: ddev-${DDEV_SITENAME}-client-access
+    image: ${CLIENT_ACCESS_DOCKER_IMAGE:-docker.io/library/nginx:1.29-alpine}
+    hostname: client-access
+    # These labels ensure this service is discoverable by ddev.
+    labels:
+      com.ddev.site-name: ${DDEV_SITENAME}
+      com.ddev.approot: ${DDEV_APPROOT}
+    restart: "no"
+    depends_on:
+      - web
+      - carbonate
+      - proton-bridge
+    environment:
+      # Route the DAV endpoint under its own subdomain via the ddev router. This
+      # is also what puts dav.$DDEV_HOSTNAME into the mkcert SAN list and into
+      # DNS resolution.
+      - VIRTUAL_HOST=dav.$DDEV_HOSTNAME
+      - HTTP_EXPOSE=80:80
+      - HTTPS_EXPOSE=443:80
+      # The shared secret the app's /_client-access/... endpoints require.
+      - CLIENT_ACCESS_SECRET=${CLIENT_ACCESS_SECRET:-}
+      # Mail TLS. The default ddev mkcert certificate is signed by the CA
+      # `mkcert -install` trusts and carries an IP SAN for 127.0.0.1, which the
+      # per-project certificate does not — clients on this machine connect to
+      # 127.0.0.1. It also covers *.localhost, so dav.$DDEV_HOSTNAME matches.
+      - CLIENT_ACCESS_TLS_CERT=/mnt/ddev-global-cache/traefik/certs/default_cert.crt
+      - CLIENT_ACCESS_TLS_KEY=/mnt/ddev-global-cache/traefik/certs/default_key.key
+      # Keeps the entrypoint's envsubst off nginx's own $variables.
+      - NGINX_ENVSUBST_FILTER=^CLIENT_ACCESS_
+      # The image renders /etc/nginx/templates/nginx.conf.template to nginx.conf
+      # in this output dir, replacing the stock config (which has no mail block).
+      - NGINX_ENVSUBST_OUTPUT_DIR=/etc/nginx
+    # Mail ports on loopback only; the DAV endpoint is routed, not published.
+    ports:
+      - "127.0.0.1:1993:993"
+      - "127.0.0.1:1465:465"
+    volumes:
+      - "./client-access/nginx.conf.template:/etc/nginx/templates/nginx.conf.template:ro"
+      # The ddev mkcert certificate, read-only. The same volume ddev mounts into
+      # web and the router.
+      - "ddev-global-cache:/mnt/ddev-global-cache:ro"
+    x-ddev:
+      describe-info: |
+        CalDAV/CardDAV https://dav.${DDEV_HOSTNAME}, IMAP 127.0.0.1:1993, SMTP 127.0.0.1:1465
+
+volumes:
+  ddev-global-cache:
+    external: true

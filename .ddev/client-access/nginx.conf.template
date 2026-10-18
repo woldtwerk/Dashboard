@@ -1,0 +1,101 @@
+# Client-access proxy: the only thing other clients on this machine talk to for
+# CalDAV/CardDAV/IMAP/SMTP. Every connection is authenticated with an app
+# password by asking the app's internal endpoints (/_client-access/...), which
+# also hand back the upstream credentials — so the real Bridge/carbonate
+# passwords never reach the client.
+#
+# The nginx image entrypoint renders this file to /etc/nginx/nginx.conf. Only
+# ${CLIENT_ACCESS_*} placeholders are substituted (NGINX_ENVSUBST_FILTER), so
+# nginx's own $variables ($http_authorization, $upstream_http_*, …) survive.
+
+worker_processes auto;
+error_log /var/log/nginx/error.log notice;
+pid /run/nginx.pid;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    sendfile on;
+    keepalive_timeout 65;
+
+    # CalDAV/CardDAV. The ddev router terminates TLS for dav.$DDEV_HOSTNAME and
+    # forwards here on port 80.
+    server {
+        listen 80 default_server;
+        server_name _;
+
+        # Calendar and contact uploads can be a few megabytes
+        client_max_body_size 20m;
+
+        # The auth subrequest asks the app whether the client's Basic
+        # credentials are a live app password with the `dav` scope, and gets the
+        # upstream Basic header back.
+        location = /_auth {
+            internal;
+            proxy_pass http://web:3000/_client-access/dav-auth;
+            proxy_pass_request_body off;
+            proxy_set_header Content-Length "";
+            proxy_set_header X-Original-Authorization $http_authorization;
+            proxy_set_header X-Client-Access-Secret ${CLIENT_ACCESS_SECRET};
+            # The app rate limits per client address; the proxy is the edge here.
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+
+        location / {
+            auth_request /_auth;
+            auth_request_set $upstream_auth $upstream_http_x_upstream_authorization;
+
+            proxy_pass http://carbonate:8081;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            # Replace the client's app password with carbonate's own credentials
+            proxy_set_header Authorization $upstream_auth;
+            # DAV headers, kept explicit so a method or header cannot be dropped
+            # silently; the request body and every DAV method pass through.
+            proxy_set_header Depth $http_depth;
+            proxy_set_header Destination $http_destination;
+            proxy_set_header If $http_if;
+            proxy_set_header Overwrite $http_overwrite;
+            proxy_set_header Brief $http_brief;
+        }
+
+        # A denied auth subrequest must still tell the client how to authenticate
+        error_page 401 = @unauthorized;
+        location @unauthorized {
+            add_header WWW-Authenticate 'Basic realm="Allmight"' always;
+            return 401;
+        }
+    }
+}
+
+mail {
+    server_name dav.allmight.localhost;
+    auth_http http://web:3000/_client-access/mail-auth;
+    auth_http_header X-Client-Access-Secret ${CLIENT_ACCESS_SECRET};
+    proxy_pass_error_message on;
+
+    # The ddev mkcert certificate. The default certificate is signed by the CA
+    # `mkcert -install` trusts and carries an IP SAN for 127.0.0.1, which the
+    # per-project certificate lacks — clients on this machine connect to
+    # 127.0.0.1. It also covers *.localhost.
+    ssl_certificate ${CLIENT_ACCESS_TLS_CERT};
+    ssl_certificate_key ${CLIENT_ACCESS_TLS_KEY};
+
+    # IMAP: the client authenticates with its app password; nginx then opens a
+    # plaintext connection to Bridge and logs in with the returned credentials.
+    server {
+        listen 993 ssl;
+        protocol imap;
+    }
+
+    # SMTP submission, same scheme.
+    server {
+        listen 465 ssl;
+        protocol smtp;
+        smtp_auth login plain;
+    }
+}

@@ -16,6 +16,7 @@ CARBONATE="$DDEV_DIR/.env.carbonate"
 DRIVE="$DDEV_DIR/.env.proton-drive"
 PAPERLESS="$DDEV_DIR/.env.paperless"
 IMGPOPROXY="$DDEV_DIR/.env.imgproxy"
+CLIENT_ACCESS="$DDEV_DIR/.env.client-access"
 
 random() {
   openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
@@ -121,6 +122,11 @@ ensure_pair "$DRIVE" PROTON_DRIVE_CONTROL_TOKEN "$WEB" NUXT_PROTON_DRIVE_TOKEN
 ensure_pair "$IMGPOPROXY" IMGPROXY_KEY "$WEB" NUXT_IMGPROXY_KEY
 ensure_pair "$IMGPOPROXY" IMGPROXY_SALT "$WEB" NUXT_IMGPROXY_SALT
 ensure "$WEB" NUXT_IMAGE_SOURCE_SECRET
+
+# Shared secret between the client-access proxy and the app's internal auth
+# endpoints (/_client-access/...). The proxy presents it in
+# X-Client-Access-Secret; a mismatch makes the endpoints answer 404.
+ensure_pair "$CLIENT_ACCESS" CLIENT_ACCESS_SECRET "$WEB" NUXT_CLIENT_ACCESS_SECRET
 
 # Paperless-ngx admin, secret key and initial superuser (injected into the paperless service)
 ensure_default "$PAPERLESS" PAPERLESS_ADMIN_USER admin

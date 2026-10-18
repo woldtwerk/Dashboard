@@ -1,4 +1,5 @@
 import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core'
+import type { AppPasswordScope } from '../../shared/types/app-passwords'
 
 /** Configured service instances (e.g. one Proton account) */
 export const services = sqliteTable('services', {
@@ -29,6 +30,21 @@ export const mcpTokens = sqliteTable('mcp_tokens', {
   /** Lower-case hex SHA-256 of the token */
   tokenHash: text('token_hash').notNull().unique(),
   scope: text('scope', { enum: ['read', 'write'] }).notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  lastUsedAt: integer('last_used_at', { mode: 'timestamp_ms' }),
+  revokedAt: integer('revoked_at', { mode: 'timestamp_ms' })
+})
+
+/** Per-device app passwords for CalDAV/CardDAV/IMAP/SMTP; only the hash is stored */
+export const appPasswords = sqliteTable('app_passwords', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  /** JSON array of scopes: 'dav' and/or 'mail' */
+  scopes: text('scopes', { mode: 'json' }).$type<AppPasswordScope[]>().notNull(),
+  /** Lower-case hex SHA-256 of the token */
+  tokenHash: text('token_hash').notNull().unique(),
+  /** First characters of the token, for display */
+  prefix: text('prefix').notNull(),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   lastUsedAt: integer('last_used_at', { mode: 'timestamp_ms' }),
   revokedAt: integer('revoked_at', { mode: 'timestamp_ms' })

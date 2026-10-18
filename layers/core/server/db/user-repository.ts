@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { eq, sql } from 'drizzle-orm'
+import { asc, eq, sql } from 'drizzle-orm'
 import type { AuthUser } from '../../shared/types/auth'
 import type { Database } from './client'
 import { users } from './schema'
@@ -29,6 +29,17 @@ export async function countUsers(db: Database): Promise<number> {
 export async function findUserByEmail(db: Database, email: string): Promise<UserRecord | undefined> {
   return await db.select().from(users)
     .where(eq(users.email, normalizeEmail(email)))
+    .get() as UserRecord | undefined
+}
+
+/**
+ * The dashboard's owner account: the first (and only) user. App passwords are
+ * issued for it, and its email is the username clients sign in with.
+ */
+export async function findOwner(db: Database): Promise<UserRecord | undefined> {
+  return await db.select().from(users)
+    .orderBy(asc(users.createdAt))
+    .limit(1)
     .get() as UserRecord | undefined
 }
 
