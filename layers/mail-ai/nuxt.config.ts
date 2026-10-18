@@ -5,7 +5,8 @@ export default defineNuxtConfig({
     assistant: {
       // NUXT_ASSISTANT_DOMAINS — comma-separated domains the assistant may read (default: mail).
       // Every enabled domain's data is sent to the configured AI provider; only enable what
-      // the provider is trusted with.
+      // the provider is trusted with. Adding `core` gives the assistant the cross-reference
+      // tools get_related, find_person, get_graph and list_known_people.
       domains: 'mail'
     }
   }

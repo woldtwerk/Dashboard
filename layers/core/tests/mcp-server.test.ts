@@ -4,6 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import type { DomainTool } from '../shared/types/tools'
+import { coreTools } from '../server/tools'
 import { calendarTools } from '../../calendar/server/tools'
 import { contactsTools } from '../../contacts/server/tools'
 import { documentsTools } from '../../documents/server/tools'
@@ -42,7 +43,7 @@ async function connect(scope: 'read' | 'write') {
   return client
 }
 
-registerDomainTools([...mailTools, ...calendarTools, ...contactsTools, ...driveTools, ...documentsTools, echo])
+registerDomainTools([...mailTools, ...calendarTools, ...contactsTools, ...driveTools, ...documentsTools, ...coreTools, echo])
 
 describe('MCP tool exposure', () => {
   it('exposes every read tool with its description, input schema and annotations', async () => {
@@ -55,6 +56,16 @@ describe('MCP tool exposure', () => {
     expect(search.description).toBeTruthy()
     expect(search.annotations?.readOnlyHint).toBe(true)
     expect((search.inputSchema as { type?: string }).type).toBe('object')
+  })
+
+  it('lists the core cross-reference tools for a read token', async () => {
+    const client = await connect('read')
+    const names = (await client.listTools()).tools.map(tool => tool.name)
+
+    expect(names).toContain('get_related')
+    expect(names).toContain('find_person')
+    expect(names).toContain('get_graph')
+    expect(names).toContain('list_known_people')
   })
 
   it('hides write tools from a read token and lists them for a write token', async () => {

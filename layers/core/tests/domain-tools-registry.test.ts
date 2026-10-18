@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DomainTool } from '../shared/types/tools'
+import { coreTools } from '../server/tools'
 import { calendarTools } from '../../calendar/server/tools'
 import { contactsTools } from '../../contacts/server/tools'
 import { documentsTools } from '../../documents/server/tools'
@@ -12,7 +13,8 @@ const domainTools: DomainTool[] = [
   ...calendarTools,
   ...contactsTools,
   ...driveTools,
-  ...documentsTools
+  ...documentsTools,
+  ...coreTools
 ]
 
 const SNAKE_CASE = /^[a-z][a-z0-9]*(_[a-z0-9]+)*$/
@@ -24,7 +26,7 @@ describe('domain tools', () => {
   it('registers at least one tool per domain', () => {
     const domains = new Set(domainTools.map(tool => tool.domain))
 
-    expect(domains).toEqual(new Set(['mail', 'calendar', 'contacts', 'drive', 'documents']))
+    expect(domains).toEqual(new Set(['core', 'mail', 'calendar', 'contacts', 'drive', 'documents']))
   })
 
   it('uses unique snake_case names', () => {
