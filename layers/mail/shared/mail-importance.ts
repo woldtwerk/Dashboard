@@ -29,10 +29,10 @@ export interface MailImportanceSource {
 }
 
 export interface MailImportanceContext {
-  /** Normalized addresses of the user's contacts */
+  /** Normalized addresses of the user's contacts, without the own addresses */
   contacts: ReadonlySet<string>
-  /** The mail account's own address, from the service setup */
-  ownAddress?: string
+  /** Every normalized address the account sends from, e.g. its login and sent-mail aliases */
+  ownAddresses: ReadonlySet<string>
 }
 
 export type ImportantMail = MailSummary & { reasons: string[] }
@@ -54,19 +54,19 @@ function isFromContact(mail: MailImportanceSource, contacts: ReadonlySet<string>
   return addressesOf(mail.from).some(email => contacts.has(email))
 }
 
-/**
- * A mail that answers the user's own message: the setup's address is the sole
- * recipient and the subject carries a reply prefix. `In-Reply-To` is not part
- * of the mail summary yet, so the recipients are the available evidence.
- */
-function isReplyToMe(mail: MailImportanceSource, ownAddress?: string): boolean {
-  const own = normalizeEmail(ownAddress)
-  if (!own) {
-    return false
-  }
+/** Whether the mail was sent by the account itself, from any of its addresses */
+function isFromOwnAddress(mail: MailImportanceSource, ownAddresses: ReadonlySet<string>): boolean {
+  return addressesOf(mail.from).some(email => ownAddresses.has(email))
+}
 
+/**
+ * A mail that answers one of the user's own messages: an own address is the
+ * sole recipient and the subject carries a reply prefix. `In-Reply-To` is not
+ * part of the mail summary yet, so the recipients are the available evidence.
+ */
+function isReplyToMe(mail: MailImportanceSource, ownAddresses: ReadonlySet<string>): boolean {
   const recipients = new Set(addressesOf(mail.to))
-  return recipients.size === 1 && recipients.has(own) && REPLY_SUBJECT.test(mail.subject)
+  return recipients.size === 1 && [...recipients].every(email => ownAddresses.has(email)) && REPLY_SUBJECT.test(mail.subject)
 }
 
 function importanceReasonKeys(mail: MailImportanceSource, context: MailImportanceContext): MailImportanceReason[] {
@@ -78,12 +78,17 @@ function importanceReasonKeys(mail: MailImportanceSource, context: MailImportanc
   if (mail.flagged) {
     reasons.push('flagged')
   }
-  if (isFromContact(mail, context.contacts)) {
-    reasons.push('contact')
+
+  // Mail the user sent to themselves is never a contact or a reply, only starred
+  if (!isFromOwnAddress(mail, context.ownAddresses)) {
+    if (isFromContact(mail, context.contacts)) {
+      reasons.push('contact')
+    }
+    if (isReplyToMe(mail, context.ownAddresses)) {
+      reasons.push('reply')
+    }
   }
-  if (isReplyToMe(mail, context.ownAddress)) {
-    reasons.push('reply')
-  }
+
   return reasons
 }
 

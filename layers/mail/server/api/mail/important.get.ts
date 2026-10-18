@@ -4,7 +4,7 @@ import type { MailSummary } from '../../../shared/types/mail'
 import { compareImportantMails, rankImportantMails, toImportantMail, MAIL_IMPORTANCE_SCAN_LIMIT } from '../../../shared/mail-importance'
 import { dashboardStorage } from '../../../../core/server/utils/dashboard'
 import { knownAddresses } from '../../../../core/server/utils/relations'
-import { mailOwnAddress } from '../../utils/mail-identity'
+import { mailOwnAddresses } from '../../utils/mail-identity'
 import { MAIL_PROVIDER_MAX_LIMIT } from '../../utils/mail-schema'
 import type { MailImportanceContext, RankedImportantMail } from '../../../shared/mail-importance'
 
@@ -57,8 +57,11 @@ async function unreadInbox(service: string): Promise<MailSummary[]> {
 }
 
 async function importantOf(service: string, contacts: ReadonlySet<string>): Promise<RankedImportantMail<MailSummary>[]> {
-  const [ownAddress, mails] = await Promise.all([mailOwnAddress(service), unreadInbox(service)])
-  const context: MailImportanceContext = { contacts, ownAddress }
+  const [own, mails] = await Promise.all([mailOwnAddresses(service), unreadInbox(service)])
+  const ownAddresses = new Set(own)
+  // An own address that is also a contact must not count as one
+  const knownContacts = new Set([...contacts].filter(email => !ownAddresses.has(email)))
+  const context: MailImportanceContext = { contacts: knownContacts, ownAddresses }
 
   return rankImportantMails(mails.map(mail => ({ ...mail, service: mail.service ?? service })), context)
 }

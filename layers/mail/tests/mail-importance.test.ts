@@ -8,10 +8,11 @@ import type { MailImportanceContext, MailImportanceSource } from '../shared/mail
 
 const contact = 'alice@example.com'
 const own = 'me@example.com'
+const alias = 'alias@example.com'
 
 const context: MailImportanceContext = {
   contacts: new Set([contact]),
-  ownAddress: own
+  ownAddresses: new Set([own, alias])
 }
 
 function mail(overrides: Partial<MailImportanceSource> = {}): MailImportanceSource {
@@ -42,6 +43,22 @@ describe('importanceReasons', () => {
     expect(importanceReasons(mail({ subject: '  AW: Lunch' }), context)).toEqual(['Reply'])
   })
 
+  it('marks a reply to any own address, e.g. a sending alias', () => {
+    const to = [{ address: alias }]
+    expect(importanceReasons(mail({ subject: 'Re: Lunch', to }), context)).toEqual(['Reply'])
+  })
+
+  it('never marks mail the user sent themselves as contact or reply', () => {
+    const selfContext: MailImportanceContext = {
+      contacts: new Set([own, alias]),
+      ownAddresses: new Set([own, alias])
+    }
+
+    expect(importanceReasons(mail({ from: [{ address: own }] }), selfContext)).toEqual([])
+    expect(importanceReasons(mail({ from: [{ address: alias }], to: [{ address: alias }], subject: 'Re: Lunch' }), selfContext)).toEqual([])
+    expect(importanceReasons(mail({ from: [{ address: own }], flagged: true }), selfContext)).toEqual(['Starred'])
+  })
+
   it('does not mark a reply sent to more recipients', () => {
     const to = [{ address: own }, { address: 'someone-else@example.com' }]
     expect(importanceReasons(mail({ subject: 'Re: Lunch', to }), context)).toEqual([])
@@ -53,7 +70,7 @@ describe('importanceReasons', () => {
   })
 
   it('does not mark a reply without a known own address', () => {
-    expect(importanceReasons(mail({ subject: 'Re: Lunch' }), { contacts: new Set() })).toEqual([])
+    expect(importanceReasons(mail({ subject: 'Re: Lunch' }), { contacts: new Set(), ownAddresses: new Set() })).toEqual([])
   })
 
   it('lists every reason, strongest first', () => {
@@ -82,6 +99,16 @@ describe('mailImportanceRank', () => {
 
   it('returns undefined for mail that is not important', () => {
     expect(mailImportanceRank(mail(), context)).toBeUndefined()
+  })
+
+  it('leaves self-sent mail out even when the own address is a contact', () => {
+    const selfContext: MailImportanceContext = {
+      contacts: new Set([own]),
+      ownAddresses: new Set([own])
+    }
+
+    expect(mailImportanceRank(mail({ from: [{ address: own }] }), selfContext)).toBeUndefined()
+    expect(mailImportanceRank(mail({ from: [{ address: own }], flagged: true }), selfContext)).toBe(0)
   })
 })
 
