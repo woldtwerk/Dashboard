@@ -18,6 +18,14 @@ export default defineNuxtConfig({
     cache: {
       // NUXT_CACHE_DIR — per-domain cache databases, rebuilt from their sources when deleted
       dir: '.data/cache'
+    },
+    logs: {
+      // NUXT_LOGS_LEVEL — minimum level persisted and streamed: debug, info, warn or error
+      level: 'info',
+      // NUXT_LOGS_RETENTION_DAYS — drop log entries older than this
+      retentionDays: 7,
+      // NUXT_LOGS_MAX_ENTRIES — keep at most this many log entries
+      maxEntries: 50000
     }
   },
 
@@ -26,6 +34,9 @@ export default defineNuxtConfig({
     serverAssets: [{
       baseName: 'migrations',
       dir: fileURLToPath(new URL('./server/db/migrations', import.meta.url))
+    }, {
+      baseName: 'migrations-logs',
+      dir: fileURLToPath(new URL('./server/db/logs-migrations', import.meta.url))
     }]
   }
 })

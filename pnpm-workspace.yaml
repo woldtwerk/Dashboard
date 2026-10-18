@@ -18,6 +18,7 @@ catalog:
   '@vueuse/core': ^15.0.0
   '@vueuse/nuxt': ^15.0.0
   ai: 7.0.127
+  consola: 3.4.2
   date-fns: ^4.4.0
   drizzle-kit: 0.31.11
   drizzle-orm: 0.45.4

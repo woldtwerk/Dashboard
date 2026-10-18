@@ -33,13 +33,22 @@ function errorLine(stderr: string): string {
   return lines.at(-1) ?? ''
 }
 
-export function createProtonDriveProvider(_values: SetupValues): DriveProvider {
+export function createProtonDriveProvider(_values: SetupValues, serviceId?: string): DriveProvider {
   const control = useProtonDriveControl()
+  const logger = serviceId ? useServiceLogger('drive', serviceId) : undefined
+
+  function fail(action: string, error: unknown): never {
+    logger?.error(`Proton Drive could not ${action}`, { error: error instanceof Error ? error.message : String(error) })
+    throw error
+  }
 
   async function stdoutOf(argv: string[], action: string): Promise<string> {
-    const result = await control.command(argv)
+    const result = await control.command(argv).catch(error => fail(action, error))
+
     if (result.exitCode !== 0) {
-      throw createError({ status: 502, statusText: errorLine(result.stderr) || `Proton Drive could not ${action}` })
+      const message = errorLine(result.stderr) || `Proton Drive could not ${action}`
+      logger?.error(`Proton Drive could not ${action}`, { error: message })
+      throw createError({ status: 502, statusText: message })
     }
     return result.stdout
   }
@@ -81,13 +90,18 @@ export function createProtonDriveProvider(_values: SetupValues): DriveProvider {
       }
 
       const response = await fetch(`${control.url}/upload?path=${encodeURIComponent(path)}`, init)
+        .catch(error => fail('upload the files', error))
 
       const result = await response.json().catch(() => ({})) as { exitCode?: number, stderr?: string, error?: string }
       if (!response.ok) {
-        throw createError({ status: response.status, statusText: result.error || 'Proton Drive could not upload the files' })
+        const message = result.error || 'Proton Drive could not upload the files'
+        logger?.error('Proton Drive could not upload the files', { error: message, status: response.status })
+        throw createError({ status: response.status, statusText: message })
       }
       if (result.exitCode !== 0) {
-        throw createError({ status: 502, statusText: errorLine(result.stderr ?? '') || 'Proton Drive could not upload the files' })
+        const message = errorLine(result.stderr ?? '') || 'Proton Drive could not upload the files'
+        logger?.error('Proton Drive could not upload the files', { error: message })
+        throw createError({ status: 502, statusText: message })
       }
     },
 
@@ -98,9 +112,12 @@ export function createProtonDriveProvider(_values: SetupValues): DriveProvider {
       }
 
       const response = await fetch(`${control.url}/download?${params.toString()}`, { headers: control.headers })
+        .catch(error => fail('download the files', error))
       if (!response.ok) {
         const body = await response.json().catch(() => ({})) as { error?: string }
-        throw createError({ status: response.status, statusText: body.error || 'Proton Drive could not download the files' })
+        const message = body.error || 'Proton Drive could not download the files'
+        logger?.error('Proton Drive could not download the files', { error: message, status: response.status })
+        throw createError({ status: response.status, statusText: message })
       }
       return response
     },

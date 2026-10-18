@@ -17,6 +17,13 @@ export interface PaperlessClient {
   stream(path: string, options?: PaperlessRequestOptions): Promise<Response>
 }
 
+export interface PaperlessClientOptions {
+  url: string
+  token: string
+  /** The stored service, when the client is built for one; enables error logging */
+  serviceId?: string
+}
+
 /** Strips trailing slashes and refuses anything but http(s). */
 function normalizeUrl(url: string): string {
   let parsed: URL
@@ -85,9 +92,10 @@ async function errorMessage(response: Response): Promise<string> {
  * provider builds from validated ids; the token never leaves the server.
  * The API version is discovered once per client from the running instance.
  */
-export function createPaperlessClient(options: { url: string, token: string }): PaperlessClient {
+export function createPaperlessClient(options: PaperlessClientOptions): PaperlessClient {
   const url = normalizeUrl(options.url)
   const token = options.token
+  const logger = options.serviceId ? useServiceLogger('documents', options.serviceId) : undefined
 
   if (!token) {
     throw createError({ status: 400, statusText: 'A Paperless-ngx API token is required' })
@@ -148,7 +156,9 @@ export function createPaperlessClient(options: { url: string, token: string }): 
     async request<T>(path: string, requestOptions: PaperlessRequestOptions = {}): Promise<T> {
       const response = await send(path, requestOptions)
       if (!response.ok) {
-        throw createError({ status: response.status, statusText: await errorMessage(response) })
+        const message = await errorMessage(response)
+        logger?.error('Paperless-ngx request failed', { path, status: response.status, error: message })
+        throw createError({ status: response.status, statusText: message })
       }
       if (response.status === 204) {
         return undefined as T
@@ -159,11 +169,13 @@ export function createPaperlessClient(options: { url: string, token: string }): 
     async stream(path: string, requestOptions: PaperlessRequestOptions = {}): Promise<Response> {
       const response = await send(path, requestOptions)
       if (!response.ok) {
-        throw createError({ status: response.status, statusText: await errorMessage(response) })
+        const message = await errorMessage(response)
+        logger?.error('Paperless-ngx request failed', { path, status: response.status, error: message })
+        throw createError({ status: response.status, statusText: message })
       }
       return response
     }
   }
 }
 
-export type PaperlessClientFactory = (options: { url: string, token: string }) => PaperlessClient
+export type PaperlessClientFactory = (options: PaperlessClientOptions) => PaperlessClient

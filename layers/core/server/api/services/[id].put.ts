@@ -6,7 +6,7 @@ export default defineEventHandler(async (event) => {
   const connector = getConnector(service.connector)
   const values = await resolveSetupValues(connector, body.values, service)
 
-  await connector.test?.(values)
+  await connector.test?.(values, { serviceId: service.id })
 
   return saveService({ id: service.id, connector, name: body.name, values })
 })

@@ -5,10 +5,22 @@ import type { DomainEvent } from '../../shared/types/domain-events'
 export type { DomainEventFilter } from '../../shared/domain-events'
 export { matchesFilter }
 
+/** Bus channels other than domain events, e.g. `logs`, live under one Redis prefix */
+export const CHANNEL_PREFIX = 'allmight:'
+export const DOMAIN_EVENTS_CHANNEL = 'domain-events'
+
+export function channelName(channel: string): string {
+  return `${CHANNEL_PREFIX}${channel}`
+}
+
 export interface DomainEventBus {
   publish(event: DomainEvent): Promise<void>
   /** Returns an unsubscribe function */
   subscribe(handler: (event: DomainEvent) => void): () => void
+  /** Publishes an arbitrary payload on a separate channel, so it cannot crowd out events */
+  publishTo(channel: string, payload: unknown): Promise<void>
+  /** Returns an unsubscribe function */
+  subscribeTo(channel: string, handler: (payload: unknown) => void): () => void
 }
 
 const eventSchema = z.object({
@@ -19,6 +31,12 @@ const eventSchema = z.object({
   at: z.iso.datetime()
 })
 
+/** Parses one event value that already came through a bus; anything malformed is dropped. */
+export function parseDomainEventValue(value: unknown): DomainEvent | undefined {
+  const result = eventSchema.safeParse(value)
+  return result.success ? result.data : undefined
+}
+
 /** Parses one Redis/SSE payload; anything malformed is dropped rather than delivered. */
 export function parseDomainEvent(raw: string): DomainEvent | undefined {
   let value: unknown
@@ -28,8 +46,7 @@ export function parseDomainEvent(raw: string): DomainEvent | undefined {
     return undefined
   }
 
-  const result = eventSchema.safeParse(value)
-  return result.success ? result.data : undefined
+  return parseDomainEventValue(value)
 }
 
 /** An SSE message carrying one domain event. */
@@ -48,24 +65,47 @@ export function formatSseEvent(event: DomainEvent): SseDomainEvent {
  * cluster worker, so it is only correct while Nitro runs with one worker.
  */
 export function createInProcessBus(): DomainEventBus {
-  const handlers = new Set<(event: DomainEvent) => void>()
+  const channels = new Map<string, Set<(payload: unknown) => void>>()
+
+  function subscribeTo(channel: string, handler: (payload: unknown) => void): () => void {
+    const handlers = channels.get(channel) ?? new Set()
+    handlers.add(handler)
+    channels.set(channel, handlers)
+
+    return () => {
+      handlers.delete(handler)
+      if (!handlers.size) {
+        channels.delete(channel)
+      }
+    }
+  }
+
+  function publishTo(channel: string, payload: unknown) {
+    for (const handler of [...(channels.get(channel) ?? [])]) {
+      try {
+        handler(payload)
+      } catch (error) {
+        console.error(`[events] A "${channel}" subscriber failed:`, error)
+      }
+    }
+  }
 
   return {
     async publish(event) {
-      for (const handler of [...handlers]) {
-        try {
-          handler(event)
-        } catch (error) {
-          console.error('[events] A domain event subscriber failed:', error)
-        }
-      }
+      publishTo(DOMAIN_EVENTS_CHANNEL, event)
     },
     subscribe(handler) {
-      handlers.add(handler)
-      return () => {
-        handlers.delete(handler)
-      }
-    }
+      return subscribeTo(DOMAIN_EVENTS_CHANNEL, (payload) => {
+        const event = parseDomainEventValue(payload)
+        if (event) {
+          handler(event)
+        }
+      })
+    },
+    async publishTo(channel, payload) {
+      publishTo(channel, payload)
+    },
+    subscribeTo
   }
 }
 
@@ -102,5 +142,14 @@ export async function publishDomainEvent(event: Omit<DomainEvent, 'at'>): Promis
     await useDomainEventBus().publish({ ...event, at: new Date().toISOString() })
   } catch (error) {
     console.error('[events] Could not publish a domain event:', error)
+  }
+}
+
+/** Same contract for channels such as `logs`: a busy or down broker never fails a write. */
+export async function publishToChannel(channel: string, payload: unknown): Promise<void> {
+  try {
+    await useDomainEventBus().publishTo(channel, payload)
+  } catch (error) {
+    console.error(`[events] Could not publish to "${channel}":`, error)
   }
 }

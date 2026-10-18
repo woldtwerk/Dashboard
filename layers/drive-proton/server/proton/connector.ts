@@ -25,5 +25,5 @@ export const protonDriveConnector: Connector = {
     }]
   },
 
-  test: () => testProtonDriveConnection()
+  test: (_values, context) => runLoggedTest('drive', context?.serviceId, 'Proton Drive connection test failed', () => testProtonDriveConnection())
 }

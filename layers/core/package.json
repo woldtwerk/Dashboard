@@ -8,6 +8,7 @@
     "@nuxt/ui": "catalog:",
     "@vueuse/core": "catalog:",
     "@vueuse/nuxt": "catalog:",
+    "consola": "catalog:",
     "drizzle-orm": "catalog:",
     "h3": "catalog:",
     "hookable": "catalog:",
