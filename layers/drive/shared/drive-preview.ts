@@ -65,6 +65,30 @@ export function previewContentType(mediaType: string | undefined, name: string):
   return undefined
 }
 
+/** Downloads get the strictest policy: no scripts, no framing, a sandboxed document. */
+export const ATTACHMENT_SECURITY_POLICY = 'sandbox; default-src \'none\''
+
+/** Raster images a browser renders without needing a document sandbox. */
+const RASTER_TYPE = /^image\/(?:png|jpe?g|gif|webp|avif)$/
+
+/**
+ * The `Content-Security-Policy` for an inline response, by its content type.
+ * A PDF gets `frame-ancestors 'self'` and nothing else: a `sandbox` directive
+ * stops Chrome from running its built-in viewer, so the iframe would stay blank.
+ * Raster images close off resource loading; every other type that may be inline
+ * (e.g. `text/plain`) is still sandboxed. Attachments never come through here.
+ */
+export function inlineSecurityHeaders(contentType: string): string {
+  const type = contentType.split(';')[0]!.trim().toLowerCase()
+  if (type === 'application/pdf') {
+    return 'frame-ancestors \'self\''
+  }
+  if (RASTER_TYPE.test(type)) {
+    return 'default-src \'none\'; frame-ancestors \'self\''
+  }
+  return 'sandbox; default-src \'none\'; frame-ancestors \'self\''
+}
+
 /**
  * Whether an `If-None-Match` header matches the ETag of a versioned inline
  * response, so the request can be answered with `304 Not Modified` without

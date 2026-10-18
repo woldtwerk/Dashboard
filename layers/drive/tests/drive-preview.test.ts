@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { matchesEtag, previewContentType } from '../shared/drive-preview'
+import { ATTACHMENT_SECURITY_POLICY, inlineSecurityHeaders, matchesEtag, previewContentType } from '../shared/drive-preview'
 
 describe('previewContentType', () => {
   it('render PDFs inline', () => {
@@ -41,6 +41,29 @@ describe('previewContentType', () => {
   it('ignores content type parameters', () => {
     expect(previewContentType('text/plain; charset=utf-8', 'x')).toBe('text/plain; charset=utf-8')
     expect(previewContentType('application/pdf; foo=bar', 'x')).toBe('application/pdf')
+  })
+})
+
+describe('inlineSecurityHeaders', () => {
+  it('lets a PDF run its viewer instead of sandboxing it away', () => {
+    expect(inlineSecurityHeaders('application/pdf')).toBe('frame-ancestors \'self\'')
+    expect(inlineSecurityHeaders('application/pdf; foo=bar')).toBe('frame-ancestors \'self\'')
+    expect(inlineSecurityHeaders('Application/PDF')).toBe('frame-ancestors \'self\'')
+  })
+
+  it('closes off resource loading for raster images', () => {
+    for (const type of ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp', 'image/avif']) {
+      expect(inlineSecurityHeaders(type)).toBe('default-src \'none\'; frame-ancestors \'self\'')
+    }
+  })
+
+  it('keeps every other inline type sandboxed', () => {
+    expect(inlineSecurityHeaders('text/plain; charset=utf-8')).toBe('sandbox; default-src \'none\'; frame-ancestors \'self\'')
+    expect(inlineSecurityHeaders('image/svg+xml')).toBe('sandbox; default-src \'none\'; frame-ancestors \'self\'')
+  })
+
+  it('gives an attachment the strictest policy', () => {
+    expect(ATTACHMENT_SECURITY_POLICY).toBe('sandbox; default-src \'none\'')
   })
 })
 
