@@ -159,38 +159,43 @@ async function applyAssistant() {
   }
 }
 
-// The URL `?pages=N` restores the loaded depth: the first N pages arrive in one
-// request, later pages are appended one at a time as the list is scrolled.
+// The URL `?pages=N` restores the loaded depth. A provider caps one request, so
+// the depth is restored page by page in parallel and merged newest first.
 const basePages = ref(list.value.pages)
-// The messages API accepts at most 1000 per request (provider requests are capped further)
+// The messages API accepts at most 1000 per request
 const MAIL_REQUEST_MAX = 1000
-const baseLimit = computed(() => Math.min(basePages.value * MAIL_PAGE_SIZE, MAIL_REQUEST_MAX))
 
-const { data: baseMails, status, error, refresh } = await useFetch('/api/mail/messages', {
-  query: computed(() => ({
-    service: service.value,
-    scope: allFolders.value ? 'all' : undefined,
-    mailbox: allFolders.value ? undefined : mailbox.value,
-    limit: baseLimit.value,
-    ...mailSearchToApiQuery(criteria.value)
-  })),
-  default: () => [],
-  // Pages are appended explicitly; a change here must not refetch from the top
-  watch: false
-})
+const baseQuery = computed(() => ({
+  service: service.value,
+  scope: allFolders.value ? 'all' : undefined,
+  mailbox: allFolders.value ? undefined : mailbox.value,
+  ...mailSearchToApiQuery(criteria.value)
+}))
+
+const { data: baseResult, status, error, refresh } = await useAsyncData('mail-restore', async () => {
+  const pages = Math.min(basePages.value, Math.ceil(MAIL_REQUEST_MAX / MAIL_PAGE_SIZE))
+  const results = await Promise.all(restoreRequests(pages, MAIL_PAGE_SIZE).map(offset => $fetch<MailSummary[]>('/api/mail/messages', {
+    query: { ...baseQuery.value, limit: MAIL_PAGE_SIZE, offset }
+  })))
+
+  return {
+    mails: results.reduce<MailSummary[]>((merged, page) => mergePage(merged, page), []),
+    done: (results.at(-1)?.length ?? 0) < MAIL_PAGE_SIZE
+  }
+}, { default: () => ({ mails: [] as MailSummary[], done: false }) })
 
 // Everything loaded so far; appended pages keep the newest-first order
 const mails = ref<MailSummary[]>([])
 const pageState = ref({ offset: 0, done: false })
 const loadingMore = ref(false)
 
-watch(baseMails, (value) => {
-  mails.value = value
-  pageState.value = nextPageState({ offset: 0, done: false }, value.length, baseLimit.value)
+watch(baseResult, (value) => {
+  mails.value = value.mails
+  pageState.value = { offset: value.mails.length, done: value.done }
 
-  // The provider serves fewer than the requested depth; keep the URL honest
+  // Only the pages that really arrived belong in the URL
   if (import.meta.client) {
-    const pages = Math.max(1, Math.ceil(value.length / MAIL_PAGE_SIZE))
+    const pages = Math.max(1, Math.ceil(value.mails.length / MAIL_PAGE_SIZE))
     if (pages !== list.value.pages) {
       updateQuery({ pages: pages > 1 ? String(pages) : null })
     }
@@ -289,19 +294,22 @@ async function loadConversations(reset = false) {
   }
 }
 
-/** Reload the depth already loaded, e.g. after unread flags changed */
+/** Reload the depth already loaded, page by page, e.g. after unread flags changed */
 async function reloadConversations() {
   if (!showThreads.value) {
     return
   }
 
-  const depth = Math.min(Math.max(MAIL_PAGE_SIZE, conversationState.value.offset), 1000)
+  const pages = Math.max(1, Math.ceil(conversationState.value.offset / MAIL_PAGE_SIZE))
   conversationsLoading.value = true
   conversationsStatus.value = 'pending'
   try {
-    const page = await fetchConversations(0, depth)
-    conversations.value = page
-    conversationState.value = nextPageState({ offset: 0, done: false }, page.length, depth)
+    const results = await Promise.all(restoreRequests(pages, MAIL_PAGE_SIZE).map(offset => fetchConversations(offset, MAIL_PAGE_SIZE)))
+    conversations.value = results.reduce<MailConversation[]>((merged, page) => mergeConversations(merged, page), [])
+    conversationState.value = {
+      offset: conversations.value.length,
+      done: (results.at(-1)?.length ?? 0) < MAIL_PAGE_SIZE
+    }
     conversationsStatus.value = 'success'
   } catch {
     conversationsStatus.value = 'success'

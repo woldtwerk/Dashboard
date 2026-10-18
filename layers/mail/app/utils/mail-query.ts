@@ -104,6 +104,14 @@ export function nextPageState(state: MailPageState, received: number, pageSize: 
   }
 }
 
+/**
+ * The offsets to restore `pages` pages of `pageSize`, one request each, in order.
+ * A depth is restored page by page so a provider cap cannot shorten it.
+ */
+export function restoreRequests(pages: number, pageSize: number): number[] {
+  return Array.from({ length: Math.max(0, Math.floor(pages)) }, (_, index) => index * pageSize)
+}
+
 /** Appends items by key, dropping the ones already present; order is kept */
 function mergeByKey<T>(list: T[], page: T[], keyOf: (item: T) => string): T[] {
   const seen = new Set(list.map(keyOf))

@@ -85,6 +85,7 @@ defineShortcuts({
       v-for="mail in mails"
       :key="mailKey(mail)"
       :ref="(el: unknown) => { mailsRefs[mailKey(mail)] = el as Element | null }"
+      :data-mail-key="mailKey(mail)"
     >
       <div
         class="p-4 sm:px-6 text-sm cursor-pointer border-l-2 transition-colors"

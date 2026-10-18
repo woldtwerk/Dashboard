@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MailConversation, MailSummary } from '../shared/types/mail'
-import { isSelectedMail, mailConversationFromQuery, mailConversationToQuery, mailListFromQuery, mailListToQuery, mailSearchFromQuery, mailSearchToApiQuery, mailSearchToQuery, mailSelectionFromQuery, mailSelectionToQuery, mailViewFromQuery, mailViewToQuery, mergeConversations, mergePage, nextPageState } from '../app/utils/mail-query'
+import { isSelectedMail, mailConversationFromQuery, mailConversationToQuery, mailListFromQuery, mailListToQuery, mailSearchFromQuery, mailSearchToApiQuery, mailSearchToQuery, mailSelectionFromQuery, mailSelectionToQuery, mailViewFromQuery, mailViewToQuery, mergeConversations, mergePage, nextPageState, restoreRequests } from '../app/utils/mail-query'
 
 const today = new Date('2026-10-16T12:00:00Z')
 
@@ -128,6 +128,18 @@ describe('nextPageState', () => {
   it('is done when the page was short', () => {
     expect(nextPageState({ offset: 50, done: false }, 30, 50)).toEqual({ offset: 80, done: true })
     expect(nextPageState({ offset: 0, done: false }, 0, 50)).toEqual({ offset: 0, done: true })
+  })
+})
+
+describe('restoreRequests', () => {
+  it('lists one offset per page, in order', () => {
+    expect(restoreRequests(1, 50)).toEqual([0])
+    expect(restoreRequests(5, 50)).toEqual([0, 50, 100, 150, 200])
+  })
+
+  it('is empty without pages', () => {
+    expect(restoreRequests(0, 50)).toEqual([])
+    expect(restoreRequests(-3, 50)).toEqual([])
   })
 })
 
