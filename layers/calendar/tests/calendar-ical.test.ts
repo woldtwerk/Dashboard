@@ -3,6 +3,8 @@ import { applyOccurrenceDelete, applyOccurrenceEdit, applySeriesEdit, expandEven
 
 const source = { calendar: 'http://dav/cal/', url: 'http://dav/cal/a.ics', etag: 'W/"1"' }
 const window = { start: new Date('2026-10-01T00:00:00Z'), end: new Date('2026-10-08T00:00:00Z') }
+// The fallback zone, matching the layer's runtime config
+const ZONE = 'Europe/Berlin'
 
 const calendar = (body: string) => `BEGIN:VCALENDAR\r\nVERSION:2.0\r\n${body}\r\nEND:VCALENDAR\r\n`
 
@@ -16,7 +18,7 @@ describe('expandEvents', () => {
       'SUMMARY:Standup',
       'LOCATION:Office',
       'END:VEVENT'
-    ].join('\r\n')), source, window)
+    ].join('\r\n')), source, window, ZONE)
 
     expect(events).toEqual([{
       uid: 'meeting@example.com',
@@ -43,7 +45,7 @@ describe('expandEvents', () => {
       'DTEND:20261020T100000Z',
       'SUMMARY:Later',
       'END:VEVENT'
-    ].join('\r\n')), source, window)
+    ].join('\r\n')), source, window, ZONE)
 
     expect(events).toEqual([])
   })
@@ -56,7 +58,7 @@ describe('expandEvents', () => {
       'DTEND;VALUE=DATE:20261006',
       'SUMMARY:Holiday',
       'END:VEVENT'
-    ].join('\r\n')), source, window)
+    ].join('\r\n')), source, window, ZONE)
 
     expect(events[0]).toMatchObject({ allDay: true, start: '2026-10-05T00:00:00.000Z', end: '2026-10-06T00:00:00.000Z' })
   })
@@ -70,7 +72,7 @@ describe('expandEvents', () => {
       'RRULE:FREQ=DAILY;COUNT=10',
       'SUMMARY:Daily',
       'END:VEVENT'
-    ].join('\r\n')), source, { start: new Date('2026-10-03T00:00:00Z'), end: new Date('2026-10-05T00:00:00Z') })
+    ].join('\r\n')), source, { start: new Date('2026-10-03T00:00:00Z'), end: new Date('2026-10-05T00:00:00Z') }, ZONE)
 
     expect(events.map(event => event.start)).toEqual(['2026-10-03T09:00:00.000Z', '2026-10-04T09:00:00.000Z'])
     expect(events.every(event => event.recurring)).toBe(true)
@@ -87,7 +89,7 @@ describe('serializeEvent', () => {
       reminders: [15]
     }, 'lunch@example.com')
 
-    const [event] = expandEvents(ics, { calendar: 'x' }, window)
+    const [event] = expandEvents(ics, { calendar: 'x' }, window, ZONE)
 
     expect(event).toMatchObject({ uid: 'lunch@example.com', title: 'Lunch', location: 'Café', reminders: [15] })
     expect(event).toMatchObject({ start: '2026-10-05T12:00:00.000Z', end: '2026-10-05T13:00:00.000Z' })
@@ -104,7 +106,7 @@ describe('serializeEvent', () => {
     expect(ics).toContain('DTSTART;VALUE=DATE:20261005')
     expect(ics).toContain('DTEND;VALUE=DATE:20261006')
 
-    const [event] = expandEvents(ics, { calendar: 'x' }, window)
+    const [event] = expandEvents(ics, { calendar: 'x' }, window, ZONE)
     expect(event).toMatchObject({ allDay: true, start: '2026-10-05T00:00:00.000Z', end: '2026-10-06T00:00:00.000Z' })
   })
 
@@ -116,7 +118,7 @@ describe('serializeEvent', () => {
       recurrence: 'FREQ=DAILY;COUNT=3'
     }, 'standup@example.com')
 
-    const events = expandEvents(ics, { calendar: 'x' }, window)
+    const events = expandEvents(ics, { calendar: 'x' }, window, ZONE)
     expect(events).toHaveLength(3)
     expect(events[0]?.recurrence).toBe('FREQ=DAILY;COUNT=3')
   })
@@ -161,7 +163,7 @@ const edit = {
 
 describe('readEventUid', () => {
   it('reads the master UID, ignoring an override', () => {
-    const edited = applyOccurrenceEdit(SERIES, '2026-10-02T09:00:00.000Z', { ...edit, start: '2026-10-02T11:00:00.000Z', end: '2026-10-02T11:30:00.000Z' })
+    const edited = applyOccurrenceEdit(SERIES, '2026-10-02T09:00:00.000Z', { ...edit, start: '2026-10-02T11:00:00.000Z', end: '2026-10-02T11:30:00.000Z' }, ZONE)
     expect(readEventUid(SERIES)).toBe('series@example.com')
     expect(readEventUid(edited)).toBe('series@example.com')
   })
@@ -169,7 +171,7 @@ describe('readEventUid', () => {
 
 describe('applySeriesEdit', () => {
   it('moves the master by the delta and keeps every unmanaged property', () => {
-    const out = applySeriesEdit(SERIES, edit, '2026-10-03T09:00:00.000Z', new Date('2026-10-10T00:00:00Z'))
+    const out = applySeriesEdit(SERIES, edit, ZONE, '2026-10-03T09:00:00.000Z', new Date('2026-10-10T00:00:00Z'))
 
     expect(masterComponent(out)).toContain('DTSTART:20261001T100000Z')
     expect(masterComponent(out)).toContain('DTEND:20261001T103000Z')
@@ -183,20 +185,20 @@ describe('applySeriesEdit', () => {
 
   it('sets the master absolutely for a plain event', () => {
     const plain = SERIES.replace('RRULE:FREQ=DAILY;COUNT=5\r\n', '')
-    const out = applySeriesEdit(plain, { ...edit, title: 'Moved', start: '2026-10-03T10:00:00.000Z', end: '2026-10-03T10:30:00.000Z' })
+    const out = applySeriesEdit(plain, { ...edit, title: 'Moved', start: '2026-10-03T10:00:00.000Z', end: '2026-10-03T10:30:00.000Z' }, ZONE)
 
     expect(masterComponent(out)).toContain('DTSTART:20261003T100000Z')
   })
 
   it('removes the recurrence when the rule is emptied', () => {
-    const out = applySeriesEdit(SERIES, { title: 'One off', start: '2026-10-01T09:00:00.000Z', end: '2026-10-01T09:30:00.000Z', recurrence: '' }, '2026-10-01T09:00:00.000Z')
+    const out = applySeriesEdit(SERIES, { title: 'One off', start: '2026-10-01T09:00:00.000Z', end: '2026-10-01T09:30:00.000Z', recurrence: '' }, ZONE, '2026-10-01T09:00:00.000Z')
 
     expect(out).not.toContain('RRULE')
   })
 
   it('replaces relative alarms and keeps the other alarms', () => {
     const withAbsolute = SERIES.replace('TRIGGER:-PT15M', 'TRIGGER;VALUE=DATE-TIME:20261001T083000Z')
-    const out = applySeriesEdit(withAbsolute, { ...edit, reminders: [30] }, '2026-10-03T09:00:00.000Z')
+    const out = applySeriesEdit(withAbsolute, { ...edit, reminders: [30] }, ZONE, '2026-10-03T09:00:00.000Z')
 
     expect(out).toContain('TRIGGER;VALUE=DATE-TIME:20261001T083000Z')
     expect(out).toContain('TRIGGER:-PT30M')
@@ -206,7 +208,7 @@ describe('applySeriesEdit', () => {
 
 describe('applyOccurrenceEdit', () => {
   it('adds an override without touching the master', () => {
-    const out = applyOccurrenceEdit(SERIES, '2026-10-03T09:00:00.000Z', edit, new Date('2026-10-10T00:00:00Z'))
+    const out = applyOccurrenceEdit(SERIES, '2026-10-03T09:00:00.000Z', edit, ZONE, new Date('2026-10-10T00:00:00Z'))
     const text = masterComponent(out)
 
     expect(text).toContain('DTSTART:20261001T090000Z')
@@ -219,8 +221,8 @@ describe('applyOccurrenceEdit', () => {
   })
 
   it('updates an existing override instead of adding a second one', () => {
-    const once = applyOccurrenceEdit(SERIES, '2026-10-03T09:00:00.000Z', edit)
-    const twice = applyOccurrenceEdit(once, '2026-10-03T09:00:00.000Z', { ...edit, title: 'Later' })
+    const once = applyOccurrenceEdit(SERIES, '2026-10-03T09:00:00.000Z', edit, ZONE)
+    const twice = applyOccurrenceEdit(once, '2026-10-03T09:00:00.000Z', { ...edit, title: 'Later' }, ZONE)
 
     expect(twice.match(/RECURRENCE-ID/g)).toHaveLength(1)
     expect(masterComponent(twice)).toContain('SUMMARY:Later')
@@ -229,7 +231,7 @@ describe('applyOccurrenceEdit', () => {
 
 describe('applyOccurrenceDelete', () => {
   it('cancels just one occurrence with an EXDATE', () => {
-    const out = masterComponent(applyOccurrenceDelete(SERIES, '2026-10-04T09:00:00.000Z'))
+    const out = masterComponent(applyOccurrenceDelete(SERIES, '2026-10-04T09:00:00.000Z', ZONE))
 
     expect(out).toContain('EXDATE:20261004T090000Z')
     // The rest of the series is untouched
@@ -238,8 +240,8 @@ describe('applyOccurrenceDelete', () => {
   })
 
   it('removes an override for the cancelled occurrence', () => {
-    const edited = applyOccurrenceEdit(SERIES, '2026-10-04T09:00:00.000Z', { title: 'Moved', start: '2026-10-04T12:00:00.000Z', end: '2026-10-04T12:30:00.000Z' })
-    const out = masterComponent(applyOccurrenceDelete(edited, '2026-10-04T09:00:00.000Z'))
+    const edited = applyOccurrenceEdit(SERIES, '2026-10-04T09:00:00.000Z', { title: 'Moved', start: '2026-10-04T12:00:00.000Z', end: '2026-10-04T12:30:00.000Z' }, ZONE)
+    const out = masterComponent(applyOccurrenceDelete(edited, '2026-10-04T09:00:00.000Z', ZONE))
 
     expect(out).not.toContain('RECURRENCE-ID')
     expect(out).toContain('EXDATE:20261004T090000Z')
@@ -248,8 +250,8 @@ describe('applyOccurrenceDelete', () => {
 
 describe('expandEvents with overrides', () => {
   it('lists each occurrence once and reports the recurrence id', () => {
-    const edited = applyOccurrenceEdit(SERIES, '2026-10-02T09:00:00.000Z', { ...edit, start: '2026-10-02T11:00:00.000Z', end: '2026-10-02T11:30:00.000Z' })
-    const events = expandEvents(edited, { calendar: 'x' }, { start: new Date('2026-10-01T00:00:00Z'), end: new Date('2026-10-05T00:00:00Z') })
+    const edited = applyOccurrenceEdit(SERIES, '2026-10-02T09:00:00.000Z', { ...edit, start: '2026-10-02T11:00:00.000Z', end: '2026-10-02T11:30:00.000Z' }, ZONE)
+    const events = expandEvents(edited, { calendar: 'x' }, { start: new Date('2026-10-01T00:00:00Z'), end: new Date('2026-10-05T00:00:00Z') }, ZONE)
 
     expect(events.map(event => event.start)).toEqual([
       '2026-10-01T09:00:00.000Z',

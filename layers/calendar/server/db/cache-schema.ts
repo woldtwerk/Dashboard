@@ -39,5 +39,7 @@ export const calendarObjects = sqliteTable('calendar_objects', {
 export const calendarSync = sqliteTable('calendar_sync', {
   service: text('service').primaryKey(),
   syncedAt: integer('synced_at', { mode: 'timestamp_ms' }),
-  error: text('error')
+  error: text('error'),
+  /** Version of the stored bounds; an older one makes the next sync refetch */
+  version: integer('version').notNull().default(0)
 })

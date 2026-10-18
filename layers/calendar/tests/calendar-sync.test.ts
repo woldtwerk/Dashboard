@@ -24,7 +24,7 @@ describe('objectBounds', () => {
       'UID:single@example.com',
       'DTSTART:20261005T090000Z',
       'DTEND:20261005T100000Z'
-    ]))
+    ]), 'Europe/Berlin')
 
     expect(bounds).toEqual({
       uid: 'single@example.com',
@@ -38,7 +38,7 @@ describe('objectBounds', () => {
       'UID:holiday@example.com',
       'DTSTART;VALUE=DATE:20261005',
       'DTEND;VALUE=DATE:20261006'
-    ]))
+    ]), 'Europe/Berlin')
 
     expect(bounds.firstStart).toEqual(new Date('2026-10-05T00:00:00.000Z'))
     expect(bounds.lastEnd).toEqual(new Date('2026-10-06T00:00:00.000Z'))
@@ -50,7 +50,7 @@ describe('objectBounds', () => {
       'DTSTART:20261001T090000Z',
       'DTEND:20261001T093000Z',
       'RRULE:FREQ=DAILY;UNTIL=20261003T090000Z'
-    ]))
+    ]), 'Europe/Berlin')
 
     expect(bounds.firstStart).toEqual(new Date('2026-10-01T09:00:00.000Z'))
     expect(bounds.lastEnd).toEqual(new Date('2026-10-03T09:30:00.000Z'))
@@ -62,7 +62,7 @@ describe('objectBounds', () => {
       'DTSTART:20261001T090000Z',
       'DTEND:20261001T093000Z',
       'RRULE:FREQ=DAILY;COUNT=5'
-    ]))
+    ]), 'Europe/Berlin')
 
     expect(bounds.lastEnd).toEqual(new Date('2026-10-05T09:30:00.000Z'))
   })
@@ -73,7 +73,7 @@ describe('objectBounds', () => {
       'DTSTART:20261001T090000Z',
       'DTEND:20261001T093000Z',
       'RRULE:FREQ=WEEKLY'
-    ]))
+    ]), 'Europe/Berlin')
 
     expect(bounds.lastEnd).toBeNull()
   })
@@ -92,7 +92,7 @@ describe('objectBounds', () => {
       'DTSTART:20261020T140000Z',
       'DTEND:20261020T150000Z',
       'END:VEVENT'
-    ].join('\r\n')))
+    ].join('\r\n')), 'Europe/Berlin')
 
     expect(bounds.firstStart).toEqual(new Date('2026-10-01T09:00:00.000Z'))
     expect(bounds.lastEnd).toEqual(new Date('2026-10-20T15:00:00.000Z'))
@@ -181,7 +181,7 @@ describe('cachedEvents', () => {
     const events = await cachedEvents('svc', ['https://dav.example/cal/'], {
       start: '2026-10-03T00:00:00.000Z',
       end: '2026-10-06T00:00:00.000Z'
-    }, db)
+    }, 'Europe/Berlin', db)
 
     expect(events.map(item => item.start).sort()).toEqual([
       '2026-10-03T09:00:00.000Z',
@@ -195,7 +195,7 @@ describe('cachedEvents', () => {
     const events = await cachedEvents('svc', ['https://dav.example/cal/'], {
       start: '2026-10-04T00:00:00.000Z',
       end: '2026-10-04T23:00:00.000Z'
-    }, db)
+    }, 'Europe/Berlin', db)
 
     expect(events.map(item => item.start)).toEqual(['2026-10-04T09:00:00.000Z'])
   })
