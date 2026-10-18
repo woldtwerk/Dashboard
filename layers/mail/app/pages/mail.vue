@@ -13,6 +13,8 @@ useSeoMeta({ title: 'Mail' })
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
+// Forwards the browser's cookies on the server; plain `$fetch` on the client
+const requestFetch = useRequestFetch()
 
 const { data: allServices } = await useServices()
 const services = computed(() => allServices.value.filter(item => item.domain === 'mail'))
@@ -178,7 +180,7 @@ const baseQuery = computed(() => ({
 
 const { data: baseResult, status, error, refresh } = await useAsyncData('mail-restore', async () => {
   const pages = Math.min(basePages.value, Math.ceil(MAIL_REQUEST_MAX / MAIL_PAGE_SIZE))
-  const results = await Promise.all(restoreRequests(pages, MAIL_PAGE_SIZE).map(offset => $fetch<MailSummary[]>('/api/mail/messages', {
+  const results = await Promise.all(restoreRequests(pages, MAIL_PAGE_SIZE).map(offset => requestFetch<MailSummary[]>('/api/mail/messages', {
     query: { ...baseQuery.value, limit: MAIL_PAGE_SIZE, offset }
   })))
 
@@ -527,7 +529,7 @@ const visibleList = computed(() => visibleMails(mails.value, retained.value, cri
 const { data: linkedMail } = await useAsyncData(
   () => `mail-linked:${service.value}:${selectionKey.value ?? ''}`,
   () => selection.value && !mails.value.some(mail => isSelectedMail(mail, selection.value))
-    ? $fetch(`/api/mail/messages/${selection.value.uid}`, { query: { service: service.value, mailbox: selection.value.mailbox } }).catch(() => null)
+    ? requestFetch(`/api/mail/messages/${selection.value.uid}`, { query: { service: service.value, mailbox: selection.value.mailbox } }).catch(() => null)
     : Promise.resolve(null)
 )
 

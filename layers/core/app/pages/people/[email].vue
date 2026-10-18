@@ -3,6 +3,8 @@ import type { EntityGraph } from '#layers/core/shared/types/entities'
 import { entityKey, normalizeEmail } from '#layers/core/shared/entities'
 
 const route = useRoute()
+// Forwards the browser's cookies on the server; plain `$fetch` on the client
+const requestFetch = useRequestFetch()
 
 const email = computed(() => normalizeEmail(String(route.params.email ?? '')) ?? String(route.params.email ?? ''))
 const entity = computed(() => ({ type: 'person', id: email.value }) as const)
@@ -12,7 +14,7 @@ useSeoMeta({ title: () => email.value })
 
 const { data: graph, status } = await useLazyAsyncData(
   graphKey,
-  () => $fetch<EntityGraph>('/api/entities/graph' as string, {
+  () => requestFetch<EntityGraph>('/api/entities/graph' as string, {
     query: { ref: entityKey(entity.value), depth: '1' }
   }),
   { default: () => ({ nodes: [], links: [], frontier: [] }) }

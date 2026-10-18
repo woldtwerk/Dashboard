@@ -9,6 +9,8 @@ useSeoMeta({ title: 'Graph' })
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
+// Forwards the browser's cookies on the server; plain `$fetch` on the client
+const requestFetch = useRequestFetch()
 
 const EMPTY: EntityGraph = { nodes: [], links: [], frontier: [] }
 
@@ -27,7 +29,7 @@ const { data, status, error, refresh } = await useLazyAsyncData(
     if (!entity.value) {
       return EMPTY
     }
-    return await $fetch<EntityGraph>('/api/entities/graph' as string, {
+    return await requestFetch<EntityGraph>('/api/entities/graph' as string, {
       query: { ref: entityKey(entity.value), depth: String(depth.value) }
     })
   },
