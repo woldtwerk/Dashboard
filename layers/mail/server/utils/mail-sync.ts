@@ -1,9 +1,10 @@
 import { and, count, eq, inArray, max } from 'drizzle-orm'
-import type { Mailbox } from '../../shared/types/mail'
+import type { Mailbox, MailMessage } from '../../shared/types/mail'
 import { mailIndexMailboxes, mailIndexMessages } from '../db/schema'
 import { diffMailboxState } from '../mail-index/diff'
 import { mailDocumentId, toMailDocument } from '../mail-index/document'
 import { mailIndexStateIsCurrent, MAIL_INDEX_SCHEMA_VERSION } from '../mail-index/version'
+import { newMailNotification } from './mail-notifications'
 import type { MailProvider } from './mail-provider'
 import type { MailSearchIndex } from './mail-search-index'
 
@@ -55,6 +56,7 @@ export async function syncMailService(service: string): Promise<boolean> {
         const provider = await useMailProvider(service)
         const db = await useDb()
         const mailboxes = (await provider.listMailboxes()).filter(mailbox => !SKIPPED_SPECIAL_USE.has(mailbox.specialUse ?? ''))
+        const newInbox: MailMessage[] = []
 
         // Folders deleted on the server
         const known = await db.select({ mailbox: mailIndexMailboxes.mailbox }).from(mailIndexMailboxes).where(eq(mailIndexMailboxes.service, service))
@@ -65,9 +67,18 @@ export async function syncMailService(service: string): Promise<boolean> {
         }
 
         for (const mailbox of mailboxes) {
-          changed += await syncMailbox({ service, mailbox, provider, index, renew, logger })
+          changed += await syncMailbox({
+            service,
+            mailbox,
+            provider,
+            index,
+            renew,
+            logger,
+            onNewInbox: messages => newInbox.push(...messages)
+          })
         }
 
+        await notifyNewMail(service, newInbox)
         await publishDomainEvent({ domain: 'mail', service, type: 'synced' })
         ok = true
         return true
@@ -87,6 +98,20 @@ export async function syncMailService(service: string): Promise<boolean> {
   }
 }
 
+/** Sends one notification for the INBOX messages this run added; never fails the sync. */
+async function notifyNewMail(service: string, messages: MailMessage[]): Promise<void> {
+  const notification = newMailNotification(service, messages)
+  if (!notification) {
+    return
+  }
+
+  try {
+    await notify(notification)
+  } catch (error) {
+    useServiceLogger('mail', service).warn('Could not send the new mail notification', { error: errorMessage(error) })
+  }
+}
+
 /** Drops every indexed message of a mailbox; returns how many rows were removed. */
 async function forgetMailbox(service: string, mailbox: string): Promise<number> {
   const db = await useDb()
@@ -100,13 +125,14 @@ async function forgetMailbox(service: string, mailbox: string): Promise<number> 
   return row?.count ?? 0
 }
 
-async function syncMailbox({ service, mailbox, provider, index, renew, logger }: {
+async function syncMailbox({ service, mailbox, provider, index, renew, logger, onNewInbox }: {
   service: string
   mailbox: Mailbox
   provider: MailProvider
   index: MailSearchIndex
   renew: () => Promise<boolean>
   logger: SyncLogger
+  onNewInbox: (messages: MailMessage[]) => void
 }): Promise<number> {
   const db = await useDb()
   const path = mailbox.path
@@ -115,6 +141,9 @@ async function syncMailbox({ service, mailbox, provider, index, renew, logger }:
   let changed = 0
 
   let row = await db.select().from(mailIndexMailboxes).where(where).get()
+  // Only a mailbox that was complete before this run can report "new" mail;
+  // the first full sync would otherwise announce the whole inbox.
+  const wasComplete = !!row?.complete && mailIndexStateIsCurrent(row, state.uidValidity)
 
   // A new UIDVALIDITY renumbers the mailbox, or an older schema version predates a document
   // field: either way the known UIDs/documents are void and the mailbox is rebuilt from scratch
@@ -155,6 +184,10 @@ async function syncMailbox({ service, mailbox, provider, index, renew, logger }:
     await db.insert(mailIndexMessages)
       .values(messages.map(({ uid, unread, flagged }) => ({ service, mailbox: path, uid, unread, flagged })))
       .onConflictDoNothing()
+
+    if (wasComplete && path === 'INBOX') {
+      onNewInbox(messages)
+    }
   }
 
   await db.update(mailIndexMailboxes).set({ complete: true, syncedAt: new Date() }).where(where)

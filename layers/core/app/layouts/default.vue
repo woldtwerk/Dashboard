@@ -64,16 +64,19 @@ function rename(key: string, label: string) {
       :ui="{ footer: 'lg:border-t lg:border-default' }"
     >
       <template #header="{ collapsed }">
-        <UButton
-          to="/"
-          icon="i-lucide-layout-dashboard"
-          :label="collapsed ? undefined : 'Allmight'"
-          color="neutral"
-          variant="ghost"
-          block
-          :square="collapsed"
-          :class="[!collapsed && 'justify-start py-2']"
-        />
+        <div class="flex w-full" :class="collapsed ? 'flex-col items-center gap-1' : 'items-center gap-2'">
+          <UButton
+            to="/"
+            icon="i-lucide-layout-dashboard"
+            :label="collapsed ? undefined : 'Allmight'"
+            color="neutral"
+            variant="ghost"
+            :square="collapsed"
+            class="min-w-0"
+            :class="[!collapsed && 'flex-1 justify-start py-2']"
+          />
+          <NotificationBell />
+        </div>
       </template>
 
       <template #default="{ collapsed }">

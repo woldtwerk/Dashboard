@@ -42,3 +42,29 @@ export const navigationPreferences = sqliteTable('navigation_preferences', {
   /** Position in the sidebar; lower comes first */
   position: integer('position').notNull()
 })
+
+/** One settings section, keyed by its registry id; `value` is the JSON encoded section */
+export const userSettings = sqliteTable('user_settings', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull()
+})
+
+/** Notifications delivered to the bell and (optionally) the desktop */
+export const notifications = sqliteTable('notifications', {
+  id: text('id').primaryKey(),
+  category: text('category').notNull(),
+  title: text('title').notNull(),
+  body: text('body'),
+  /** In-app route the notification opens */
+  to: text('to'),
+  domain: text('domain').notNull(),
+  service: text('service'),
+  /** Stable key for "this was already sent"; null means no deduplication */
+  dedupeKey: text('dedupe_key').unique(),
+  at: integer('at', { mode: 'timestamp_ms' }).notNull(),
+  readAt: integer('read_at', { mode: 'timestamp_ms' })
+}, table => [
+  index('notifications_at_idx').on(table.at),
+  index('notifications_read_at_idx').on(table.readAt)
+])

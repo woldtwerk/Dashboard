@@ -8,7 +8,7 @@ export const DAY_MINUTES = 24 * 60
 /** The grid opens here unless an earlier event pulls the scroll up */
 export const DEFAULT_SCROLL_HOUR = 7
 /** How many chips a month cell shows before the "+N more" button */
-export const MONTH_EVENT_LIMIT = 3
+export const MONTH_EVENT_LIMIT = 8
 /** A timed event at least this long is shown in the all-day lane, not the grid */
 const LONG_EVENT_MS = 24 * 60 * 60 * 1000
 

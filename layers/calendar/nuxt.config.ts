@@ -18,6 +18,14 @@ export default defineNuxtConfig({
   },
 
   nitro: {
+    experimental: {
+      tasks: true
+    },
+    // Reminders depend on the minute, not on a worker's lifetime; the task takes
+    // the `calendar-reminders` lock so only one cluster worker sends them.
+    scheduledTasks: {
+      '* * * * *': ['calendar:reminders']
+    },
     // Bundle the cache migrations, so the calendar cache database can apply them
     serverAssets: [{
       baseName: 'migrations-calendar',
