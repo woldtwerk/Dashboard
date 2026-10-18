@@ -14,6 +14,13 @@ export default defineAppConfig({
         shortcut: 'g-h',
         order: 0
       },
+      settings: {
+        label: 'Settings',
+        icon: 'i-lucide-settings',
+        to: '/settings',
+        shortcut: 'g-,',
+        order: 89
+      },
       services: {
         label: 'Services',
         icon: 'i-lucide-blocks',
