@@ -57,10 +57,14 @@ export function toMailToolSearch(input: z.infer<typeof mailSearchInput>): MailSe
 async function searchService(service: string, input: z.infer<typeof mailSearchInput>) {
   const criteria = toMailToolSearch(input)
   const index = useMailSearchIndex()
-  const mailbox = input.scope === 'folder' ? input.mailbox : undefined
+  const allFolders = input.scope === 'all'
+  const mailbox = allFolders ? undefined : input.mailbox
+  // A cross-folder search only covers real folders, so labels and virtual
+  // folders do not list the same mail twice
+  const mailboxes = index && allFolders ? searchableMailboxes(await (await useMailProvider(service)).listMailboxes()) : undefined
 
-  if (index && await isMailboxIndexed(service, mailbox)) {
-    const mails = await index.search({ services: [service], mailbox, search: criteria, limit: input.limit })
+  if (index && await isMailboxIndexed(service, allFolders ? mailboxes : mailbox)) {
+    const mails = await index.search({ services: [service], mailbox, mailboxes, search: criteria, limit: input.limit })
     return mails.map(mail => toMailSource(service, mail))
   }
 

@@ -2,6 +2,7 @@ import { and, count, eq } from 'drizzle-orm'
 import { fillBuckets } from '../../../core/server/utils/dashboard'
 import type { DashboardMetric, ServiceStatus } from '../../../core/shared/types/dashboard'
 import type { ServiceInfo } from '../../../core/shared/types/setup'
+import { indexProgress } from '../../shared/mail-index-progress'
 import { mailIndexMessages } from '../db/schema'
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -14,7 +15,8 @@ async function status(service: ServiceInfo): Promise<Omit<ServiceStatus, 'id' | 
 
   return {
     health: state.syncing ? 'syncing' : state.complete ? 'ok' : 'unknown',
-    syncedAt: state.syncedAt ?? null
+    syncedAt: state.syncedAt ?? null,
+    progress: state.complete ? undefined : indexProgress(state)
   }
 }
 

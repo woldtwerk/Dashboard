@@ -3,10 +3,12 @@ import type { TableColumn } from '@nuxt/ui'
 import type { NotificationCategoryInfo, NotificationStyle } from '#layers/core/shared/types/notifications'
 import type { NotificationSettings } from '#layers/core/shared/types/settings'
 import { desktopPermissionView, NOTIFICATION_STYLE_ITEMS } from '../../utils/notifications'
+import { pushStateView } from '../../utils/web-push'
 
 const toast = useToast()
 const { data, save } = useSettings<NotificationSettings>('notifications')
 const { permission, requestPermission } = useNotifications()
+const { state: pushState, busy: pushBusy, enable: enablePush, disable: disablePush } = usePushSubscription()
 
 const { data: categories } = await useFetch<NotificationCategoryInfo[]>('/api/notifications/categories', {
   key: 'notification-categories',
@@ -36,6 +38,16 @@ const columns: TableColumn<NotificationCategoryInfo>[] = [
 ]
 
 const desktopPermission = computed(() => desktopPermissionView(permission.value))
+
+const push = computed(() => pushStateView(pushState.value))
+
+async function togglePush(enabled: boolean) {
+  if (enabled) {
+    await enablePush()
+  } else {
+    await disablePush()
+  }
+}
 
 const testing = ref(false)
 
@@ -134,6 +146,24 @@ async function sendTest() {
           color="neutral"
           variant="outline"
           @click="requestPermission"
+        />
+      </div>
+
+      <div class="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-default pt-4">
+        <div class="text-sm">
+          <p class="font-medium text-highlighted">
+            Push notifications on this device
+          </p>
+          <p class="text-muted">
+            {{ push.label }}
+          </p>
+        </div>
+
+        <USwitch
+          :model-value="push.enabled"
+          :disabled="!push.toggleable"
+          :loading="pushBusy"
+          @update:model-value="togglePush"
         />
       </div>
 

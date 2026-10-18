@@ -47,6 +47,13 @@ const items = computed(() => props.services.map(service => ({
           />
           {{ item.label }}
         </span>
+
+        <div v-if="item.service.progress" class="mt-1.5 w-40 max-w-full space-y-1">
+          <p class="truncate text-xs text-muted">
+            {{ item.service.progress.label }} ({{ item.service.progress.percent }} %)
+          </p>
+          <UProgress :model-value="item.service.progress.percent" size="xs" />
+        </div>
       </div>
     </li>
   </ul>

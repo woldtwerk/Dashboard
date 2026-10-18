@@ -1,5 +1,6 @@
 import { and, count, eq, inArray, max } from 'drizzle-orm'
-import type { Mailbox, MailMessage } from '../../shared/types/mail'
+import { dashboardStorage } from '../../../core/server/utils/dashboard'
+import type { Mailbox, MailIndexStatus, MailMessage } from '../../shared/types/mail'
 import { mailIndexMailboxes, mailIndexMessages } from '../db/schema'
 import { diffMailboxState } from '../mail-index/diff'
 import { mailDocumentId, toMailDocument } from '../mail-index/document'
@@ -17,6 +18,63 @@ const SQL_CHUNK = 500
 const SKIPPED_SPECIAL_USE = new Set(['\\All', '\\Flagged'])
 
 const lockName = (service: string) => `mail-sync:${service}`
+
+/** Whether a folder only repeats mail stored elsewhere, so the sync does not index it */
+export function isSkippedMailbox(mailbox: Pick<Mailbox, 'specialUse'>): boolean {
+  return SKIPPED_SPECIAL_USE.has(mailbox.specialUse ?? '')
+}
+
+/** The folders the sync indexes; virtual folders are left to the folders they repeat */
+export function syncMailboxes(mailboxes: Mailbox[]): Mailbox[] {
+  return mailboxes.filter(mailbox => !isSkippedMailbox(mailbox))
+}
+
+/**
+ * The folders a cross-folder search covers: real folders only. Labels and the
+ * virtual folders repeat mail that a real folder already holds.
+ */
+export function searchableMailboxes(mailboxes: Mailbox[]): string[] {
+  return mailboxes
+    .filter(mailbox => !mailbox.label && !isSkippedMailbox(mailbox))
+    .map(mailbox => mailbox.path)
+}
+
+/**
+ * Indexed mailboxes the server no longer offers, or that are skipped now; the
+ * sync drops their rows, so a folder that became virtual is forgotten too.
+ */
+export function forgottenMailboxes(known: string[], mailboxes: Mailbox[]): string[] {
+  return known.filter(mailbox => !mailboxes.some(item => item.path === mailbox))
+}
+
+/** What the running sync is doing, shared with status requests through Nitro storage */
+interface MailSyncProgress {
+  /** Messages the provider reports for the folders this sync indexes */
+  total: number
+  /** Folder the sync is working on right now */
+  mailbox?: string
+  /** ISO time the run started */
+  startedAt: string
+}
+
+const progressKey = (service: string) => `mail-sync-progress:${service}`
+
+/** Progress is best effort: a storage failure must never fail a sync */
+async function writeSyncProgress(service: string, progress: MailSyncProgress): Promise<void> {
+  try {
+    await dashboardStorage().setItem(progressKey(service), progress)
+  } catch {
+    // Without the progress the status falls back to what the database holds
+  }
+}
+
+async function readSyncProgress(service: string): Promise<MailSyncProgress | undefined> {
+  try {
+    return await dashboardStorage().getItem<MailSyncProgress>(progressKey(service)) ?? undefined
+  } catch {
+    return undefined
+  }
+}
 
 const chunk = <T>(items: T[], size: number): T[][] =>
   Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, (index + 1) * size))
@@ -46,6 +104,7 @@ export async function syncMailService(service: string): Promise<boolean> {
   let changed = 0
   let ran = false
   let ok = false
+  let progress: MailSyncProgress | undefined
 
   try {
     const result = await withLock(lockName(service), LOCK_TTL_MS, async ({ renew }) => {
@@ -55,18 +114,26 @@ export async function syncMailService(service: string): Promise<boolean> {
       try {
         const provider = await useMailProvider(service)
         const db = await useDb()
-        const mailboxes = (await provider.listMailboxes()).filter(mailbox => !SKIPPED_SPECIAL_USE.has(mailbox.specialUse ?? ''))
+        const mailboxes = syncMailboxes(await provider.listMailboxes())
         const newInbox: MailMessage[] = []
 
-        // Folders deleted on the server
+        // The folders' message counts give the status a total to measure against
+        progress = { total: mailboxes.reduce((sum, mailbox) => sum + mailbox.total, 0), startedAt: startedAt.toISOString() }
+        await writeSyncProgress(service, progress)
+
+        // Folders the server no longer offers, and the ones that became
+        // virtual (Bridge's "All Mail"/"Starred"): drop their indexed rows
         const known = await db.select({ mailbox: mailIndexMailboxes.mailbox }).from(mailIndexMailboxes).where(eq(mailIndexMailboxes.service, service))
-        for (const { mailbox } of known.filter(row => !mailboxes.some(item => item.path === row.mailbox))) {
+        for (const mailbox of forgottenMailboxes(known.map(row => row.mailbox), mailboxes)) {
           await index.removeMailbox(service, mailbox)
           changed += await forgetMailbox(service, mailbox)
           await publishDomainEvent({ domain: 'mail', service, type: 'changed', resource: mailbox })
         }
 
         for (const mailbox of mailboxes) {
+          progress.mailbox = mailbox.path
+          await writeSyncProgress(service, progress)
+
           changed += await syncMailbox({
             service,
             mailbox,
@@ -94,6 +161,12 @@ export async function syncMailService(service: string): Promise<boolean> {
       const durationMs = Date.now() - startedAt.getTime()
       logger.info('Sync finished', { durationMs, changed })
       await recordSyncRun({ domain: 'mail', service, startedAt: startedAt.toISOString(), durationMs, ok, changed })
+
+      if (progress) {
+        // The run is over: keep the total for the next status, drop the folder
+        progress = { total: progress.total, startedAt: progress.startedAt }
+        await writeSyncProgress(service, progress)
+      }
     }
   }
 }
@@ -218,37 +291,49 @@ export async function requestMailSync(service: string) {
   }
 }
 
-/** Whether search for this mailbox can be answered by the index */
-export async function isMailboxIndexed(service: string, mailbox?: string): Promise<boolean> {
+/**
+ * Whether search can be answered by the index: for one mailbox, for a list of
+ * them (all have to be indexed and complete), or for every mailbox of the
+ * service when omitted.
+ */
+export async function isMailboxIndexed(service: string, mailboxes?: string | string[]): Promise<boolean> {
+  const list = typeof mailboxes === 'string' ? [mailboxes] : mailboxes
+  if (list && !list.length) {
+    return false
+  }
+
   const db = await useDb()
   const rows = await db.select({ complete: mailIndexMailboxes.complete }).from(mailIndexMailboxes)
-    .where(mailbox ? and(eq(mailIndexMailboxes.service, service), eq(mailIndexMailboxes.mailbox, mailbox)) : eq(mailIndexMailboxes.service, service))
+    .where(list ? and(eq(mailIndexMailboxes.service, service), inArray(mailIndexMailboxes.mailbox, list)) : eq(mailIndexMailboxes.service, service))
 
-  return rows.length > 0 && rows.every(row => row.complete)
-}
-
-export interface MailIndexStatus {
-  service: string
-  messages: number
-  complete: boolean
-  syncing: boolean
-  syncedAt?: string
+  // A requested mailbox with no row yet is not indexed, so every list entry needs its row
+  return list
+    ? rows.length === list.length && rows.every(row => row.complete)
+    : rows.length > 0 && rows.every(row => row.complete)
 }
 
 export async function getMailIndexStatus(service: string): Promise<MailIndexStatus> {
   const db = await useDb()
-  const [messages, mailboxes, syncing] = await Promise.all([
+  const [messages, indexed, mailboxes, syncing, progress] = await Promise.all([
     db.select({ count: count() }).from(mailIndexMessages).where(eq(mailIndexMessages.service, service)).get(),
+    // Only folders with a sync state row count; the sync writes one per indexed folder
+    db.select({ count: count() }).from(mailIndexMessages)
+      .innerJoin(mailIndexMailboxes, and(eq(mailIndexMessages.service, mailIndexMailboxes.service), eq(mailIndexMessages.mailbox, mailIndexMailboxes.mailbox)))
+      .where(eq(mailIndexMessages.service, service)).get(),
     db.select({ complete: mailIndexMailboxes.complete, syncedAt: mailIndexMailboxes.syncedAt }).from(mailIndexMailboxes).where(eq(mailIndexMailboxes.service, service)),
-    isLockHeld(lockName(service))
+    isLockHeld(lockName(service)),
+    readSyncProgress(service)
   ])
   const syncedAt = mailboxes.map(row => row.syncedAt?.getTime() ?? 0).reduce((a, b) => Math.max(a, b), 0)
 
   return {
     service,
     messages: messages?.count ?? 0,
+    indexed: indexed?.count ?? 0,
+    total: progress?.total ?? null,
     complete: mailboxes.length > 0 && mailboxes.every(row => row.complete),
     syncing,
+    mailbox: syncing ? progress?.mailbox : undefined,
     syncedAt: syncedAt ? new Date(syncedAt).toISOString() : undefined
   }
 }
