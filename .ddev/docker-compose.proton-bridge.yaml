@@ -10,16 +10,17 @@ services:
       com.ddev.site-name: ${DDEV_SITENAME}
       com.ddev.approot: ${DDEV_APPROOT}
     restart: "no"
-    # 1144: IMAP, 8080: control API; only reachable inside the project network
+    # 1144: IMAP, 1026: SMTP, 8080: control API; only reachable inside the project network
     expose:
       - 1144
+      - 1026
       - 8080
     volumes:
       # Signed-in accounts, the vault and its key: as sensitive as the mailbox itself
       - "proton-bridge:/home/bridge"
     x-ddev:
       describe-info: |
-        IMAP proton-bridge:1144, control API :8080
+        IMAP proton-bridge:1144, SMTP proton-bridge:1026, control API :8080
 
 volumes:
   proton-bridge:

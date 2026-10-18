@@ -68,3 +68,25 @@ export const notifications = sqliteTable('notifications', {
   index('notifications_at_idx').on(table.at),
   index('notifications_read_at_idx').on(table.readAt)
 ])
+
+/** Dashboard accounts; the login layer authenticates against them */
+export const users = sqliteTable('users', {
+  id: text('id').primaryKey(),
+  /** Stored lower-case */
+  email: text('email').notNull().unique(),
+  name: text('name').notNull(),
+  passwordHash: text('password_hash').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+})
+
+/** Browser Push API subscriptions, one per browser or device */
+export const pushSubscriptions = sqliteTable('push_subscriptions', {
+  id: text('id').primaryKey(),
+  endpoint: text('endpoint').notNull().unique(),
+  p256dh: text('p256dh').notNull(),
+  auth: text('auth').notNull(),
+  /** Null while nobody is signed in on that browser */
+  userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  userAgent: text('user_agent'),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+})

@@ -9,8 +9,9 @@ POST /login            {username, password, totp?, mailboxPassword?} -> account
 GET  /accounts/<name>  -> account
 GET  /health           -> {ready}
 
-An account is {account, imap: {username, password, port}, cert}. Every call but
-/health needs `Authorization: Bearer $BRIDGE_CONTROL_TOKEN`.
+An account is {account, imap: {username, password, port}, smtp: {port}, cert};
+SMTP uses the same username and password as IMAP. Every call but /health needs
+`Authorization: Bearer $BRIDGE_CONTROL_TOKEN`.
 """
 
 import fcntl
@@ -34,6 +35,9 @@ CONTROL_PORT = int(os.environ.get('BRIDGE_CONTROL_PORT', '8080'))
 # Port socat forwards to Bridge's own IMAP port
 IMAP_PORT = int(os.environ.get('BRIDGE_IMAP_PORT', '1144'))
 BRIDGE_IMAP_PORT = 1143
+# Port socat forwards to Bridge's own SMTP port (STARTTLS)
+SMTP_PORT = int(os.environ.get('BRIDGE_SMTP_PORT', '1026'))
+BRIDGE_SMTP_PORT = 1025
 
 ANSI = re.compile(r'\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[()][A-Za-z0-9]|\x1b[=>]|[\r\x08]')
 SHELL_PROMPT = re.compile(r'>>>\s*$')
@@ -45,6 +49,9 @@ SECURITY_KEY_QUESTION = re.compile(r'security key[^\n]*\?[^\n]*$', re.I)
 ADDED = re.compile(r'Account (\S+) was added successfully')
 IMAP_INFO = re.compile(
     r'IMAP Settings\s+Address:\s*\S+\s+IMAP port:\s*(\d+)\s+Username:\s*(\S+)\s+Password:\s*(\S+)')
+# Only the port is needed; SMTP uses the IMAP username and password
+SMTP_INFO = re.compile(
+    r'SMTP Settings\s+Address:\s*\S+\s+SMTP port:\s*(\d+)')
 API_ERROR = re.compile(r'\d{3} [A-Z]+ https?://\S+: (.+?)(?: \(Code=.*)?$')
 
 # Typed into the shell, so a line break would start another command
@@ -185,9 +192,14 @@ class BridgeShell:
         if int(port) != BRIDGE_IMAP_PORT:
             raise BridgeError(500, f'Bridge listens on IMAP port {port}, the container forwards {BRIDGE_IMAP_PORT}')
 
+        smtp = SMTP_INFO.search(before)
+        if smtp and int(smtp.group(1)) != BRIDGE_SMTP_PORT:
+            raise BridgeError(500, f'Bridge listens on SMTP port {smtp.group(1)}, the container forwards {BRIDGE_SMTP_PORT}')
+
         return {
             'account': name,
             'imap': {'username': username, 'password': password, 'port': IMAP_PORT},
+            'smtp': {'port': SMTP_PORT},
             'cert': bridge_certificate()
         }
 

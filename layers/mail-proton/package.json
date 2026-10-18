@@ -9,10 +9,12 @@
     "@allmight/mail": "workspace:*",
     "imapflow": "catalog:",
     "mailparser": "catalog:",
+    "nodemailer": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@types/mailparser": "catalog:"
+    "@types/mailparser": "catalog:",
+    "@types/nodemailer": "catalog:"
   },
   "peerDependencies": {
     "nuxt": "catalog:"

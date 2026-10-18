@@ -12,5 +12,7 @@ fi
 
 # Bridge only listens on 127.0.0.1; socat makes IMAP reachable for the web container
 socat TCP-LISTEN:1144,fork,reuseaddr TCP:127.0.0.1:1143 &
+# The same for SMTP, which the mail-proton layer sends through (STARTTLS)
+socat TCP-LISTEN:1026,fork,reuseaddr TCP:127.0.0.1:1025 &
 
 exec python3 /opt/bridge-control/control.py

@@ -13,9 +13,15 @@ describe('toBridgeValues', () => {
       account: 'alice',
       host: 'proton-bridge',
       port: 1144,
+      smtpPort: 1026,
       user: 'alice@proton.me',
       tlsCert: '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----'
     })
+  })
+
+  it('uses the SMTP port Bridge reports', () => {
+    const withSmtp = { ...account, smtp: { port: 1587 } }
+    expect(toBridgeValues(withSmtp, 'http://proton-bridge:8080').smtpPort).toBe(1587)
   })
 
   it('leaves the IMAP password out', () => {

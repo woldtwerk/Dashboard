@@ -16,8 +16,13 @@
     "drizzle-orm": "catalog:",
     "h3": "catalog:",
     "hookable": "catalog:",
+    "nuxt-auth-utils": "catalog:",
     "tailwindcss": "catalog:",
+    "web-push": "catalog:",
     "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/web-push": "catalog:"
   },
   "peerDependencies": {
     "nuxt": "catalog:"

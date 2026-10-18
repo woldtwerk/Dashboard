@@ -5,16 +5,19 @@ export interface BridgeAccount {
   /** Bridge's name for the account, used to look it up again */
   account: string
   imap: { username: string, password: string, port: number }
+  /** SMTP port Bridge exposes next to IMAP; the credentials are the same */
+  smtp?: { port: number }
   /** PEM certificate of Bridge's IMAP server */
   cert: string
 }
 
 /** Service values for an account; the IMAP password is left out, the server fetches it on save */
-export function toBridgeValues({ account, imap, cert }: BridgeAccount, controlUrl: string): SetupValues {
+export function toBridgeValues({ account, imap, smtp, cert }: BridgeAccount, controlUrl: string): SetupValues {
   return {
     account,
     host: new URL(controlUrl).hostname,
     port: imap.port,
+    smtpPort: smtp?.port ?? 1026,
     user: imap.username,
     tlsCert: cert.trim()
   }
