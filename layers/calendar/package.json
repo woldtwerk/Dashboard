@@ -6,6 +6,7 @@
   "main": "./nuxt.config.ts",
   "dependencies": {
     "@allmight/core": "workspace:*",
+    "@date-fns/tz": "catalog:",
     "@nuxt/ui": "catalog:",
     "@vueuse/core": "catalog:",
     "date-fns": "catalog:",

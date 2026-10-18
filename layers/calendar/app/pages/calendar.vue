@@ -1,12 +1,17 @@
 <script setup lang="ts">
-import { addDays, addHours, format, isSameMonth, parseISO, setHours, startOfDay } from 'date-fns'
-import type { Calendar, CalendarEvent, CalendarEventInput, CalendarList, EventScope } from '#layers/calendar/shared/types/calendar'
+import { useIntervalFn, useNow } from '@vueuse/core'
+import { addDays, format, isSameMonth, startOfDay } from 'date-fns'
+import type { Calendar, CalendarEvent, CalendarEventInput, CalendarList, CalendarSyncStatus, EventScope } from '#layers/calendar/shared/types/calendar'
 
 useSeoMeta({ title: 'Calendar' })
 
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
+const nuxtApp = useNuxtApp()
+
+// The time zone every view renders in; see useCalendarTimeZone
+const timeZone = useCalendarTimeZone()
 
 const { data: allServices } = await useServices()
 const services = computed(() => allServices.value.filter(item => item.domain === 'calendar'))
@@ -15,9 +20,11 @@ if (!services.value.length) {
   await navigateTo('/services/new', { replace: true })
 }
 
-const { data: calendarLists } = await useFetch<CalendarList[]>('/api/calendar/calendars', { default: () => [] })
+const { data: calendarLists, refresh: refreshCalendars } = await useFetch<CalendarList[]>('/api/calendar/calendars', { default: () => [] })
 const calendars = computed<Calendar[]>(() => calendarLists.value.flatMap(list => list.calendars))
 const calendarByUrl = computed(() => new Map(calendars.value.map(calendar => [calendar.url, calendar])))
+// Visibility is persisted server side; a calendar is shown unless it is hidden
+const visibleCalendars = computed(() => calendars.value.filter(calendar => !calendar.hidden))
 
 // View and anchor date live in the URL, so views can be linked
 const queryString = (key: string) => typeof route.query[key] === 'string' ? route.query[key] as string : undefined
@@ -26,10 +33,10 @@ function updateQuery(patch: Record<string, string | null>) {
   router.replace({ query: Object.fromEntries(Object.entries({ ...route.query, ...patch }).filter(([, value]) => value)) })
 }
 
-const viewState = computed(() => viewFromQuery(route.query))
+const viewState = computed(() => viewFromQuery(route.query, timeZone.value))
 const view = computed(() => viewState.value.view)
 const anchor = computed(() => viewState.value.date)
-const window = computed(() => viewWindow(view.value, anchor.value))
+const window = computed(() => viewWindow(view.value, anchor.value, timeZone.value))
 
 const currentView = computed({
   get: () => view.value,
@@ -37,57 +44,190 @@ const currentView = computed({
 })
 
 function go(direction: number) {
-  updateQuery({ date: dateKey(shiftDate(view.value, anchor.value, direction)) })
+  updateQuery({ date: dateKey(shiftDate(view.value, anchor.value, direction, timeZone.value), timeZone.value) })
 }
 
 function goToday() {
-  updateQuery({ date: dateKey(new Date()) })
+  updateQuery({ date: dateKey(new Date(), timeZone.value) })
 }
 
-// Calendar selection lives in the URL; without it, every calendar is shown
-const selectedCalendars = computed<string[]>(() => {
-  const raw = queryString('calendars')
-  if (raw === '__none__') {
-    return []
-  }
-  return raw ? raw.split(',').filter(Boolean) : calendars.value.map(calendar => calendar.url)
-})
+// The events key is the window, so a window hovered over can be prefetched into
+// the same payload cache the fetch reads from
+const eventsKey = (start: Date, end: Date) => `calendar-events:${toIso(start)}:${toIso(end)}`
 
-const isCalendarOn = (url: string) => selectedCalendars.value.includes(url)
-
-function toggleCalendar(url: string) {
-  const current = new Set(selectedCalendars.value)
-  if (current.has(url)) {
-    current.delete(url)
-  } else {
-    current.add(url)
-  }
-  const all = calendars.value.map(calendar => calendar.url)
-  const kept = all.filter(item => current.has(item))
-  updateQuery({ calendars: kept.length === all.length ? null : kept.length ? kept.join(',') : '__none__' })
-}
-
-const { data: events, refresh } = await useFetch<CalendarEvent[]>('/api/calendar/events', {
-  query: computed(() => ({ start: window.value.start.toISOString(), end: window.value.end.toISOString() })),
+const { data: events, refresh: refreshEvents } = await useFetch<CalendarEvent[]>('/api/calendar/events', {
+  key: () => eventsKey(window.value.start, window.value.end),
+  query: computed(() => ({ start: toIso(window.value.start), end: toIso(window.value.end) })),
+  // A hovered window is served from the payload cache; a manual refresh
+  // bypasses `getCachedData` and still hits the network
+  getCachedData: key => nuxtApp.payload.data[key],
   default: () => []
 })
 
-const visibleEvents = computed(() => events.value.filter(event => selectedCalendars.value.includes(event.calendar)))
+const visibleUrls = computed(() => new Set(visibleCalendars.value.map(calendar => calendar.url)))
+const visibleEvents = computed(() => events.value.filter(event => visibleUrls.value.has(event.calendar)))
 
 const colorOf = (url: string) => calendarByUrl.value.get(url)?.color
 
-const weeks = computed(() => monthGrid(anchor.value))
+// --- Syncing ---
+
+const { data: syncStatus, refresh: refreshSyncStatus } = await useFetch<CalendarSyncStatus[]>('/api/calendar/sync-status', {
+  default: () => [],
+  lazy: true
+})
+
+const syncing = computed(() => syncStatus.value.some(status => status.syncing))
+const { pause, resume } = useIntervalFn(() => refreshSyncStatus(), 5000, { immediate: false })
+watch(syncing, value => value ? resume() : pause(), { immediate: true })
+
+// A changed stamp means a service finished a sync; pull the fresh events and
+// calendar list in
+const syncStamps = computed(() => syncStatus.value.map(status => `${status.service}:${status.syncedAt ?? ''}`).sort().join('|'))
+watch(syncStamps, (value, previous) => {
+  if (previous === undefined || value === previous) {
+    return
+  }
+  refreshEvents()
+  refreshCalendars()
+})
+
+// --- Views ---
+
+const now = useNow({ scheduler: update => useIntervalFn(update, 60_000) })
+const weeks = computed(() => monthGrid(anchor.value, timeZone.value))
 const columnDays = computed(() => {
   const days = view.value === 'day' ? 1 : 7
   return Array.from({ length: days }, (_, index) => addDays(window.value.start, index))
 })
-const agendaDays = computed(() => groupEventsByDay(
-  visibleEvents.value,
-  Array.from({ length: 30 }, (_, index) => addDays(startOfDay(anchor.value), index))
-).filter(group => group.events.length))
+const gridTemplate = computed(() => `3.5rem repeat(${columnDays.value.length}, minmax(0, 1fr))`)
+
+const agendaDays = computed(() => {
+  const start = startOfDay(zoned(anchor.value, timeZone.value))
+  return groupEventsByDay(
+    visibleEvents.value,
+    Array.from({ length: 30 }, (_, index) => addDays(start, index)),
+    timeZone.value
+  ).filter(group => group.events.length)
+})
+
+const monthCells = computed(() => {
+  const cells = new Map<string, { visible: CalendarEvent[], overflow: CalendarEvent[] }>()
+  for (const week of weeks.value) {
+    for (const day of week) {
+      cells.set(dateKey(day, timeZone.value), monthCell(visibleEvents.value, day, timeZone.value))
+    }
+  }
+  return cells
+})
+const cellFor = (day: Date) => monthCells.value.get(dateKey(day, timeZone.value))!
+
+const positionedByDay = computed(() => {
+  const positions = new Map<string, ReturnType<typeof layoutDay>>()
+  for (const day of columnDays.value) {
+    positions.set(dateKey(day, timeZone.value), layoutDay(visibleEvents.value, day, timeZone.value))
+  }
+  return positions
+})
+const positionedEvents = (day: Date) => positionedByDay.value.get(dateKey(day, timeZone.value)) ?? []
+
+const allDayByDay = computed(() => {
+  const byDay = new Map<string, CalendarEvent[]>()
+  for (const day of columnDays.value) {
+    byDay.set(dateKey(day, timeZone.value), eventsForDay(visibleEvents.value, day, timeZone.value).filter(event => event.allDay))
+  }
+  return byDay
+})
+const allDayEventsFor = (day: Date) => allDayByDay.value.get(dateKey(day, timeZone.value)) ?? []
+
+const isToday = (day: Date) => dateKey(day, timeZone.value) === dateKey(now.value, timeZone.value)
+const dayNumber = (day: Date) => zoned(day, timeZone.value).getDate()
+
+const nowTop = computed(() => {
+  const current = zoned(now.value, timeZone.value)
+  return (current.getHours() * 60 + current.getMinutes()) * (HOUR_HEIGHT / 60)
+})
+
+const HOURS = Array.from({ length: 23 }, (_, index) => index + 1)
+const formatHour = (hour: number) => `${String(hour).padStart(2, '0')}:00`
+
+function blockStyle(positioned: ReturnType<typeof layoutDay>[number]) {
+  const width = 100 / positioned.columns
+
+  return {
+    top: `${positioned.top + 1}px`,
+    height: `${Math.max(positioned.height - 2, 16)}px`,
+    insetInlineStart: `calc(${positioned.column * width}% + 1px)`,
+    width: `calc(${width}% - 2px)`,
+    borderInlineStartColor: colorOf(positioned.event.calendar) || undefined
+  }
+}
+
+function onColumnClick(pointer: MouseEvent, day: Date) {
+  const element = pointer.currentTarget as HTMLElement
+  const offset = pointer.clientY - element.getBoundingClientRect().top
+  newEventOn(day, Math.max(0, Math.min(23, Math.floor(offset / HOUR_HEIGHT))))
+}
+
+// Prefetch a window's events into the payload cache, so switching the view is
+// instant
+async function prefetchWindow(direction: number) {
+  const target = shiftDate(view.value, anchor.value, direction, timeZone.value)
+  const next = viewWindow(view.value, target, timeZone.value)
+  const key = eventsKey(next.start, next.end)
+  if (nuxtApp.payload.data[key] !== undefined) {
+    return
+  }
+
+  try {
+    nuxtApp.payload.data[key] = await $fetch<CalendarEvent[]>('/api/calendar/events', {
+      query: { start: toIso(next.start), end: toIso(next.end) }
+    })
+  } catch {
+    // A failed prefetch just means the navigation fetches for real
+  }
+}
+
+const gridEl = ref<HTMLElement>()
+
+function scrollToInitialHour() {
+  const hour = columnDays.value.reduce(
+    (earliest, day) => Math.min(earliest, initialScrollHour(visibleEvents.value, day, timeZone.value)),
+    DEFAULT_SCROLL_HOUR
+  )
+  nextTick(() => {
+    if (gridEl.value) {
+      gridEl.value.scrollTop = hour * HOUR_HEIGHT
+    }
+  })
+}
+
+onMounted(scrollToInitialHour)
+watch([view, () => toIso(window.value.start), timeZone], scrollToInitialHour)
+
+// --- Calendars ---
 
 const calendarItems = computed(() => calendars.value.map(calendar => ({ label: calendar.name, value: calendar.url })))
 const canCreate = computed(() => calendars.value.length > 0)
+
+// Optimistic: flip it locally, roll back and toast if the server rejects it
+async function toggleCalendar(calendar: Calendar) {
+  const hidden = !calendar.hidden
+  const snapshot = calendarLists.value
+  calendarLists.value = calendarLists.value.map(list => ({
+    ...list,
+    calendars: list.calendars.map(item => item.url === calendar.url && item.service === calendar.service ? { ...item, hidden } : item)
+  }))
+
+  try {
+    await $fetch('/api/calendar/calendars/visibility' as string, {
+      method: 'PATCH',
+      body: { service: calendar.service, url: calendar.url, hidden }
+    })
+  } catch {
+    calendarLists.value = snapshot
+    toast.add({ title: 'Could not update the calendar', color: 'error', icon: 'i-lucide-circle-alert' })
+  }
+}
 
 // --- Editor ---
 
@@ -111,8 +251,8 @@ const form = reactive<EventForm>({
   end: '',
   location: '',
   description: '',
-  recurrence: '',
-  reminder: ''
+  recurrence: RECURRENCE_NONE,
+  reminder: REMINDER_NONE
 })
 
 // An occurrence is addressed by its UID plus the original start time, since a
@@ -135,46 +275,48 @@ const scope = ref<EventScope>('one')
 const isOccurrenceEdit = computed(() => !!editingEvent.value?.recurring && scope.value === 'one')
 const saving = ref(false)
 
-function toLocalInput(date: Date): string {
-  return format(date, 'yyyy-MM-dd\'T\'HH:mm')
-}
+const recurrenceItems = computed(() => recurrenceSelectItems(editingEvent.value?.recurrence))
+const reminderItems = computed(() => reminderSelectItems(editingEvent.value?.reminders?.[0]))
 
-function fromEvent(event: CalendarEvent) {
+function fromEvent(event: CalendarEvent): EventForm {
   return {
     calendar: event.calendar,
     title: event.title,
     allDay: event.allDay,
-    start: event.allDay ? format(parseISO(event.start), 'yyyy-MM-dd') : toLocalInput(parseISO(event.start)),
-    end: event.allDay ? format(parseISO(event.end), 'yyyy-MM-dd') : toLocalInput(parseISO(event.end)),
+    start: toInputValue(event.start, event.allDay, timeZone.value),
+    end: toInputValue(event.end, event.allDay, timeZone.value),
     location: event.location ?? '',
     description: event.description ?? '',
-    recurrence: event.recurrence ?? '',
-    reminder: event.reminders?.[0] !== undefined ? String(event.reminders[0]) : ''
+    recurrence: toRecurrenceSelect(event.recurrence),
+    reminder: toReminderSelect(event.reminders?.[0])
   }
 }
 
 // The day a new event starts on; the URL watcher needs it once `event=new` lands
 const pendingDay = ref<Date>()
+const pendingHour = ref<number>()
 
-function resetForm(day?: Date) {
-  const start = setHours(startOfDay(day ?? anchor.value), 9)
+function resetForm(day?: Date, hour = 9) {
+  const start = zonedHour(day ?? anchor.value, hour, timeZone.value)
+  const end = new Date(start.getTime() + 60 * 60 * 1000)
   Object.assign(form, {
-    calendar: selectedCalendars.value[0] ?? calendars.value[0]?.url ?? '',
+    calendar: visibleCalendars.value[0]?.url ?? calendars.value[0]?.url ?? '',
     title: '',
     allDay: false,
-    start: toLocalInput(start),
-    end: toLocalInput(addHours(start, 1)),
+    start: toInputValue(toIso(start), false, timeZone.value),
+    end: toInputValue(toIso(end), false, timeZone.value),
     location: '',
     description: '',
-    recurrence: '',
-    reminder: ''
+    recurrence: RECURRENCE_NONE,
+    reminder: REMINDER_NONE
   })
 }
 
-function newEventOn(day?: Date) {
+function newEventOn(day?: Date, hour?: number) {
   pendingDay.value = day
+  pendingHour.value = hour
   if (editorKey.value === 'new') {
-    resetForm(day)
+    resetForm(day, hour)
   } else {
     updateQuery({ event: 'new', recurrence: null })
   }
@@ -187,7 +329,7 @@ function openEvent(event: CalendarEvent) {
 watch([editorKey, recurrenceKey], ([key, recurrence]) => {
   scope.value = 'one'
   if (key === 'new') {
-    resetForm(pendingDay.value)
+    resetForm(pendingDay.value, pendingHour.value)
     return
   }
   if (key) {
@@ -203,32 +345,20 @@ const SCOPE_ITEMS: { label: string, value: EventScope }[] = [
   { label: 'All events', value: 'all' }
 ]
 
-const REMINDERS = [
-  { label: 'None', value: '' },
-  { label: 'At start', value: '0' },
-  { label: '5 minutes before', value: '5' },
-  { label: '15 minutes before', value: '15' },
-  { label: '30 minutes before', value: '30' },
-  { label: '1 hour before', value: '60' },
-  { label: '1 day before', value: '1440' }
-]
-
-function toIso(value: string, allDay: boolean): string {
-  return allDay ? new Date(`${value}T00:00:00Z`).toISOString() : new Date(value).toISOString()
-}
-
 function toInput(): CalendarEventInput {
+  const reminder = fromReminderSelect(form.reminder)
+
   return {
     calendar: form.calendar,
     title: form.title.trim(),
-    start: toIso(form.start, form.allDay),
-    end: toIso(form.end, form.allDay),
+    start: fromInputValue(form.start, form.allDay, timeZone.value),
+    end: fromInputValue(form.end, form.allDay, timeZone.value),
     allDay: form.allDay,
     location: form.location.trim() || undefined,
     description: form.description.trim() || undefined,
     // An empty rule removes the recurrence; a single-occurrence edit ignores it
-    recurrence: form.recurrence,
-    reminders: form.reminder === '' ? [] : [Number(form.reminder)]
+    recurrence: fromRecurrenceSelect(form.recurrence),
+    reminders: reminder === undefined ? [] : [reminder]
   }
 }
 
@@ -263,7 +393,7 @@ async function save() {
             recurrenceId: existing.recurrenceId ?? existing.start
           }
         })
-        await refresh()
+        await refreshEvents()
       } catch {
         events.value = snapshot
         throw new Error('update')
@@ -287,7 +417,7 @@ async function save() {
       try {
         const created = await $fetch<CalendarEvent>('/api/calendar/events', { method: 'POST', body: { ...input, service } })
         events.value = events.value.map(event => event.uid === temp.uid ? created : event)
-        await refresh()
+        await refreshEvents()
       } catch {
         events.value = events.value.filter(event => event.uid !== temp.uid)
         throw new Error('create')
@@ -325,13 +455,15 @@ async function remove() {
         recurrenceId: event.recurrenceId ?? event.start
       }
     })
-    await refresh()
+    await refreshEvents()
     toast.add({ title: 'Event deleted', color: 'success', icon: 'i-lucide-trash-2' })
   } catch {
     events.value = snapshot
     toast.add({ title: 'Could not delete the event', color: 'error', icon: 'i-lucide-circle-alert' })
   }
 }
+
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 </script>
 
 <template>
@@ -342,12 +474,17 @@ async function remove() {
       </template>
 
       <template #right>
+        <UTooltip v-if="syncing" text="Syncing…">
+          <UIcon name="i-lucide-loader-circle" class="size-4 shrink-0 animate-spin text-dimmed" />
+        </UTooltip>
         <UButton
           icon="i-lucide-chevron-left"
           color="neutral"
           variant="ghost"
           size="sm"
           aria-label="Previous"
+          @pointerenter="prefetchWindow(-1)"
+          @focus="prefetchWindow(-1)"
           @click="go(-1)"
         />
         <UButton
@@ -363,6 +500,8 @@ async function remove() {
           variant="ghost"
           size="sm"
           aria-label="Next"
+          @pointerenter="prefetchWindow(1)"
+          @focus="prefetchWindow(1)"
           @click="go(1)"
         />
         <UTabs
@@ -388,9 +527,9 @@ async function remove() {
           :key="calendar.url"
           :label="calendar.name"
           size="xs"
-          :color="isCalendarOn(calendar.url) ? 'primary' : 'neutral'"
-          :variant="isCalendarOn(calendar.url) ? 'soft' : 'ghost'"
-          @click="toggleCalendar(calendar.url)"
+          :color="calendar.hidden ? 'neutral' : 'primary'"
+          :variant="calendar.hidden ? 'ghost' : 'soft'"
+          @click="toggleCalendar(calendar)"
         >
           <template #leading>
             <span class="size-2.5 rounded-full" :style="{ backgroundColor: calendar.color || 'currentColor' }" />
@@ -410,68 +549,156 @@ async function remove() {
     />
 
     <!-- Month -->
-    <div v-else-if="view === 'month'" class="flex-1 overflow-auto">
-      <div class="grid grid-cols-7 border-b border-default text-center text-xs font-medium text-muted">
-        <div v-for="label in ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']" :key="label" class="border-r border-default py-2 last:border-r-0">
+    <div v-else-if="view === 'month'" class="flex min-h-0 flex-1 flex-col">
+      <div class="grid shrink-0 grid-cols-7 border-b border-default text-center text-xs font-medium text-muted">
+        <div v-for="label in WEEKDAYS" :key="label" class="border-r border-default py-2 last:border-r-0">
           {{ label }}
         </div>
       </div>
-      <div class="grid grid-cols-7">
+      <div class="grid min-h-0 flex-1 grid-cols-7" style="grid-template-rows: repeat(6, minmax(0, 1fr))">
         <template v-for="(week, weekIndex) in weeks" :key="weekIndex">
           <div
             v-for="day in week"
             :key="day.toISOString()"
-            class="min-h-24 border-b border-r border-default p-1.5 last:border-r-0"
-            :class="!isSameMonth(day, anchor) && 'bg-elevated/30'"
+            class="flex min-h-0 flex-col gap-px overflow-hidden border-b border-r border-default p-1.5 last:border-r-0"
+            :class="!isSameMonth(zoned(day, timeZone), zoned(anchor, timeZone)) && 'bg-elevated/30'"
           >
             <button
-              class="mb-1 inline-flex size-6 items-center justify-center rounded-full text-xs hover:bg-elevated"
-              :class="dateKey(day) === dateKey(new Date()) && 'bg-primary text-inverted'"
+              class="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] leading-none hover:bg-elevated"
+              :class="isToday(day) && 'bg-primary text-inverted'"
               @click="newEventOn(day)"
             >
-              {{ day.getDate() }}
+              {{ dayNumber(day) }}
             </button>
-            <div class="space-y-0.5">
-              <button
-                v-for="event in eventsForDay(visibleEvents, day).slice(0, 4)"
-                :key="eventKey(event)"
-                class="flex w-full items-center gap-1 truncate rounded px-1 py-0.5 text-left text-xs hover:bg-elevated"
-                @click="openEvent(event)"
+            <button
+              v-for="event in cellFor(day).visible"
+              :key="eventKey(event)"
+              class="flex w-full shrink-0 items-center gap-1 truncate rounded px-1 py-px text-left text-[11px] leading-4 hover:bg-elevated"
+              @click="openEvent(event)"
+            >
+              <span class="size-2 shrink-0 rounded-full" :style="{ backgroundColor: colorOf(event.calendar) || 'currentColor' }" />
+              <span class="truncate">{{ event.allDay ? event.title : `${formatEventStart(event, timeZone)} ${event.title}` }}</span>
+            </button>
+            <UPopover v-if="cellFor(day).overflow.length" :content="{ align: 'start' }">
+              <UButton
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                class="w-full shrink-0 justify-start px-1 py-px text-[11px] leading-4 font-normal text-muted"
               >
-                <span class="size-2 shrink-0 rounded-full" :style="{ backgroundColor: colorOf(event.calendar) || 'currentColor' }" />
-                <span class="truncate">{{ event.allDay ? event.title : `${format(parseISO(event.start), 'HH:mm')} ${event.title}` }}</span>
-              </button>
-            </div>
+                +{{ cellFor(day).overflow.length }} more
+              </UButton>
+              <template #content>
+                <div class="w-64 space-y-0.5 p-2">
+                  <button
+                    v-for="event in cellFor(day).overflow"
+                    :key="eventKey(event)"
+                    class="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-sm hover:bg-elevated"
+                    @click="openEvent(event)"
+                  >
+                    <span class="size-2 shrink-0 rounded-full" :style="{ backgroundColor: colorOf(event.calendar) || 'currentColor' }" />
+                    <span class="w-24 shrink-0 text-xs text-muted">{{ event.allDay ? 'All day' : formatEventTime(event, timeZone) }}</span>
+                    <span class="truncate">{{ event.title }}</span>
+                  </button>
+                </div>
+              </template>
+            </UPopover>
           </div>
         </template>
       </div>
     </div>
 
     <!-- Week and day -->
-    <div v-else-if="view === 'week' || view === 'day'" class="flex-1 overflow-auto">
-      <div class="grid h-full" :class="view === 'week' ? 'grid-cols-7' : 'grid-cols-1'">
-        <div v-for="day in columnDays" :key="day.toISOString()" class="border-r border-default p-2 last:border-r-0">
-          <div class="mb-2 text-xs font-medium" :class="dateKey(day) === dateKey(new Date()) && 'text-primary'">
-            {{ format(day, 'EEE d MMM') }}
+    <div v-else-if="view === 'week' || view === 'day'" class="flex min-h-0 flex-1 flex-col">
+      <div class="shrink-0 overflow-hidden border-b border-default [scrollbar-gutter:stable]">
+        <div class="grid" :style="{ gridTemplateColumns: gridTemplate }">
+          <div />
+          <div
+            v-for="day in columnDays"
+            :key="day.toISOString()"
+            class="border-l border-default px-2 py-1.5 text-center text-xs font-medium"
+            :class="isToday(day) && 'text-primary'"
+          >
+            {{ format(zoned(day, timeZone), 'EEE d MMM') }}
           </div>
-          <div class="space-y-1">
+        </div>
+        <div class="grid border-t border-default" :style="{ gridTemplateColumns: gridTemplate }">
+          <div class="px-1 py-1 text-end text-[10px] text-dimmed">
+            all-day
+          </div>
+          <div
+            v-for="day in columnDays"
+            :key="`all-day-${day.toISOString()}`"
+            class="flex min-h-6 flex-col gap-0.5 border-l border-default p-0.5"
+            @click="newEventOn(day)"
+          >
             <button
-              v-for="event in eventsForDay(visibleEvents, day)"
+              v-for="event in allDayEventsFor(day)"
               :key="eventKey(event)"
-              class="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-sm hover:bg-elevated"
-              @click="openEvent(event)"
+              class="flex w-full items-center gap-1 truncate rounded px-1 py-0.5 text-left text-xs hover:bg-elevated"
+              @click.stop="openEvent(event)"
             >
-              <span class="size-2.5 shrink-0 rounded-full" :style="{ backgroundColor: colorOf(event.calendar) || 'currentColor' }" />
-              <span class="shrink-0 text-xs text-muted">{{ formatEventTime(event) }}</span>
+              <span class="size-2 shrink-0 rounded-full" :style="{ backgroundColor: colorOf(event.calendar) || 'currentColor' }" />
               <span class="truncate">{{ event.title }}</span>
             </button>
+          </div>
+        </div>
+      </div>
+
+      <div ref="gridEl" class="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+        <div class="grid" :style="{ gridTemplateColumns: gridTemplate }">
+          <div
+            class="sticky left-0 z-10 bg-default"
+            :style="{ height: `${DAY_MINUTES / 60 * HOUR_HEIGHT}px` }"
+          >
+            <span
+              v-for="hour in HOURS"
+              :key="hour"
+              class="absolute end-2 -translate-y-1/2 text-[11px] text-dimmed tabular-nums"
+              :style="{ top: `${hour * HOUR_HEIGHT}px` }"
+            >
+              {{ formatHour(hour) }}
+            </span>
+          </div>
+          <div
+            v-for="day in columnDays"
+            :key="day.toISOString()"
+            class="relative border-l border-default"
+            :style="{ height: `${DAY_MINUTES / 60 * HOUR_HEIGHT}px` }"
+            @click="onColumnClick($event, day)"
+          >
+            <div
+              v-for="hour in HOURS"
+              :key="hour"
+              class="pointer-events-none absolute inset-x-0 border-t border-default"
+              :style="{ top: `${hour * HOUR_HEIGHT}px` }"
+            />
+            <button
+              v-for="positioned in positionedEvents(day)"
+              :key="eventKey(positioned.event)"
+              class="absolute overflow-hidden rounded border border-default bg-default px-1.5 py-0.5 text-left text-xs hover:z-10 hover:bg-elevated"
+              :style="blockStyle(positioned)"
+              @click.stop="openEvent(positioned.event)"
+            >
+              <span class="block truncate font-medium">{{ positioned.event.title }}</span>
+              <span class="block truncate text-[10px] text-muted">{{ formatEventTime(positioned.event, timeZone) }}</span>
+            </button>
+            <ClientOnly>
+              <div
+                v-if="isToday(day)"
+                class="pointer-events-none absolute inset-x-0 z-20 border-t-2 border-error"
+                :style="{ top: `${nowTop}px` }"
+              >
+                <div class="absolute -top-[5px] -start-1 size-2 rounded-full bg-error" />
+              </div>
+            </ClientOnly>
           </div>
         </div>
       </div>
     </div>
 
     <!-- Agenda -->
-    <div v-else class="flex-1 overflow-auto divide-y divide-default">
+    <div v-else class="min-h-0 flex-1 divide-y divide-default overflow-y-auto">
       <UEmpty
         v-if="!agendaDays.length"
         icon="i-lucide-calendar-x"
@@ -482,7 +709,7 @@ async function remove() {
       />
       <div v-for="group in agendaDays" :key="group.day.toISOString()" class="flex gap-4 p-4 sm:px-6">
         <div class="w-28 shrink-0 text-sm text-muted">
-          {{ format(group.day, 'EEE, d MMM') }}
+          {{ format(zoned(group.day, timeZone), 'EEE, d MMM') }}
         </div>
         <div class="min-w-0 flex-1 space-y-1">
           <button
@@ -492,7 +719,7 @@ async function remove() {
             @click="openEvent(event)"
           >
             <span class="size-2.5 shrink-0 rounded-full" :style="{ backgroundColor: colorOf(event.calendar) || 'currentColor' }" />
-            <span class="w-24 shrink-0 text-xs text-muted">{{ formatEventTime(event) }}</span>
+            <span class="w-24 shrink-0 text-xs text-muted">{{ event.allDay ? 'All day' : formatEventTime(event, timeZone) }}</span>
             <span class="truncate font-medium">{{ event.title }}</span>
             <span v-if="event.location" class="truncate text-sm text-dimmed">{{ event.location }}</span>
           </button>
@@ -541,11 +768,11 @@ async function remove() {
         </UFormField>
 
         <UFormField v-if="!isOccurrenceEdit" label="Repeats">
-          <USelect v-model="form.recurrence" :items="RECURRENCE_PRESETS" class="w-full" />
+          <USelect v-model="form.recurrence" :items="recurrenceItems" class="w-full" />
         </UFormField>
 
         <UFormField label="Reminder">
-          <USelect v-model="form.reminder" :items="REMINDERS" class="w-full" />
+          <USelect v-model="form.reminder" :items="reminderItems" class="w-full" />
         </UFormField>
       </form>
     </template>
