@@ -103,7 +103,13 @@ export function previewKind(entry: Pick<DriveEntry, 'type' | 'mediaType' | 'name
 }
 
 /** The largest image whose whole file is worth fetching as a grid thumbnail. */
-export const THUMBNAIL_MAX_BYTES = 3 * 1024 * 1024
+export const THUMBNAIL_MAX_BYTES = 50 * 1024 * 1024
+
+/** Width of the 1x derivative for a grid tile; the 2x candidate is twice that. */
+export const THUMBNAIL_TILE_WIDTH = 256
+
+/** Width of the 1x derivative for a list row's icon; the 2x candidate is twice that. */
+export const THUMBNAIL_ICON_WIDTH = 64
 
 /**
  * Whether a tile shows the file itself instead of its icon. Only images small

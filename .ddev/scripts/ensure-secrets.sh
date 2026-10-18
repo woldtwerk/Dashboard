@@ -15,6 +15,7 @@ BRIDGE="$DDEV_DIR/.env.proton-bridge"
 CARBONATE="$DDEV_DIR/.env.carbonate"
 DRIVE="$DDEV_DIR/.env.proton-drive"
 PAPERLESS="$DDEV_DIR/.env.paperless"
+IMGPOPROXY="$DDEV_DIR/.env.imgproxy"
 
 random() {
   openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
@@ -114,6 +115,12 @@ ensure_pair "$MEILI" MEILI_MASTER_KEY "$WEB" NUXT_MEILISEARCH_API_KEY
 ensure_pair "$BRIDGE" BRIDGE_CONTROL_TOKEN "$WEB" NUXT_PROTON_BRIDGE_TOKEN
 ensure_pair "$CARBONATE" CARBONATE_CONTROL_TOKEN "$WEB" NUXT_CARBONATE_TOKEN
 ensure_pair "$DRIVE" PROTON_DRIVE_CONTROL_TOKEN "$WEB" NUXT_PROTON_DRIVE_TOKEN
+
+# imgproxy signing pair (hex, see the imgproxy service) and the HMAC secret of
+# the source endpoint (only ever read by the app)
+ensure_pair "$IMGPOPROXY" IMGPROXY_KEY "$WEB" NUXT_IMGPROXY_KEY
+ensure_pair "$IMGPOPROXY" IMGPROXY_SALT "$WEB" NUXT_IMGPROXY_SALT
+ensure "$WEB" NUXT_IMAGE_SOURCE_SECRET
 
 # Paperless-ngx admin, secret key and initial superuser (injected into the paperless service)
 ensure_default "$PAPERLESS" PAPERLESS_ADMIN_USER admin

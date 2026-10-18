@@ -540,6 +540,9 @@ importers:
       '@allmight/core':
         specifier: workspace:*
         version: link:../core
+      '@allmight/image':
+        specifier: workspace:*
+        version: link:../image
       '@nuxt/ui':
         specifier: 'catalog:'
         version: 4.11.3(e7c810f2319f4cba3b2245243452f0d3)
@@ -570,6 +573,18 @@ importers:
       zod:
         specifier: 'catalog:'
         version: 4.6.7
+
+  layers/image:
+    dependencies:
+      '@allmight/core':
+        specifier: workspace:*
+        version: link:../core
+      h3:
+        specifier: 'catalog:'
+        version: 1.15.11
+      nuxt:
+        specifier: 'catalog:'
+        version: 4.6.1(f8ab6371222f92aa2ed2a0cab6123ae7)
 
   layers/mail:
     dependencies:

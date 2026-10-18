@@ -1,0 +1,85 @@
+# Custom (NOT ddev-generated) services.
+#
+# Purpose: render every image derivative this app serves. Nothing in the app
+# resizes an image itself — a thumbnail or a preview is an imgproxy URL, built
+# and signed by layers/image.
+#
+# Two containers, because imgproxy has no cache of its own: `imgproxy-cache` is
+# the one the app talks to and caches what `imgproxy` renders. Neither is routed:
+# there is no VIRTUAL_HOST, no browser reaches them, and the app's `/api/img`
+# endpoint (behind the login) is the only door. imgproxy itself is reachable on
+# the project network only, so nothing can bypass the cache.
+#
+# The key and the salt are shared with the app through .ddev/.env.imgproxy and
+# .ddev/.env.web; .ddev/scripts/ensure-secrets.sh creates the pair. imgproxy is
+# MIT (ghcr.io/imgproxy/imgproxy), nginx is BSD-2; both are used unmodified.
+services:
+  imgproxy:
+    container_name: ddev-${DDEV_SITENAME}-imgproxy
+    image: ${IMGPROXY_DOCKER_IMAGE:-ghcr.io/imgproxy/imgproxy:v3.30}
+    hostname: imgproxy
+    labels:
+      com.ddev.site-name: ${DDEV_SITENAME}
+      com.ddev.approot: ${DDEV_APPROOT}
+    restart: "no"
+    expose:
+      - 8080
+    environment:
+      # URL signing. The key and the salt are hex encoded and have to match
+      # NUXT_IMGPROXY_KEY / NUXT_IMGPROXY_SALT in .ddev/.env.web — a differing
+      # pair means every signed path is rejected with a 403.
+      - IMGPROXY_KEY=${IMGPROXY_KEY:-}
+      - IMGPROXY_SALT=${IMGPROXY_SALT:-}
+      # The only source imgproxy may read: the app's session-less source
+      # endpoint. `web` is the ddev web container; Nuxt listens on 3000 there
+      # (see .ddev/config.imgproxy.yaml), and the prefix is the whole origin, so
+      # nothing else in the project network can be pointed at.
+      - IMGPROXY_ALLOWED_SOURCES=http://web:3000/
+      # Answer with AVIF or WebP when the client's Accept header allows it, and
+      # with the source format when it does not.
+      - IMGPROXY_AUTO_AVIF=true
+      - IMGPROXY_AUTO_WEBP=true
+      # 50 megapixels / 50 MB per original. The drive source accepts images up
+      # to the same file size, so a large photo is still rendered instead of
+      # being refused; anything above this is beyond what a browser preview
+      # needs.
+      - IMGPROXY_MAX_SRC_RESOLUTION=50
+      - IMGPROXY_MAX_SRC_FILE_SIZE=52428800
+      # Derivatives never change under their URL, so imgproxy may say so.
+      - IMGPROXY_TTL=31536000
+      # A Drive download goes through the CLI and can take a while; the default
+      # would time out on a large original.
+      - IMGPROXY_DOWNLOAD_TIMEOUT=60
+
+  imgproxy-cache:
+    container_name: ddev-${DDEV_SITENAME}-imgproxy-cache
+    image: ${IMGPROXY_CACHE_DOCKER_IMAGE:-docker.io/library/nginx:1.29-alpine}
+    hostname: imgproxy-cache
+    # These labels ensure this service is discoverable by ddev.
+    labels:
+      com.ddev.site-name: ${DDEV_SITENAME}
+      com.ddev.approot: ${DDEV_APPROOT}
+    restart: "no"
+    expose:
+      - 80
+    environment:
+      # The cache budget, read by .ddev/imgproxy-cache/default.conf.template.
+      # `size` is what nginx keeps on disk before evicting the least recently
+      # used entries, `inactive` how long an untouched entry survives regardless,
+      # and `keys_zone` the shared memory for the keys (~8000 keys per megabyte).
+      - IMGPROXY_CACHE_SIZE=${IMGPROXY_CACHE_SIZE:-1g}
+      - IMGPROXY_CACHE_INACTIVE=${IMGPROXY_CACHE_INACTIVE:-30d}
+      - IMGPROXY_CACHE_KEYS_ZONE=${IMGPROXY_CACHE_KEYS_ZONE:-10m}
+      # Where the cache listens and what it proxies.
+      - IMGPROXY_CACHE_PORT=80
+      - IMGPROXY_UPSTREAM=imgproxy:8080
+      # Keeps the entrypoint's envsubst off nginx's own $$variables.
+      - NGINX_ENVSUBST_FILTER=^IMGPROXY_
+    volumes:
+      - "./imgproxy-cache/default.conf.template:/etc/nginx/templates/default.conf.template:ro"
+      - "imgproxy-cache:/var/cache/imgproxy"
+    depends_on:
+      - imgproxy
+
+volumes:
+  imgproxy-cache:
