@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AppNotification } from '../shared/types/notifications'
 import type { DomainEvent } from '../shared/types/domain-events'
 import type { NotificationSettings } from '../shared/types/settings'
-import { deliveryFor } from '../app/utils/notifications'
+import { deliveryFor, desktopPermissionView } from '../app/utils/notifications'
 import { syncFailedNotification } from '../server/utils/notification-events'
 import { notificationSettingsDefaults, registerNotificationCategory } from '../server/utils/notifications'
 
@@ -49,6 +49,46 @@ describe('deliveryFor', () => {
 
   it('falls back to in-app for an unknown category', () => {
     expect(deliveryFor(notification('unknown'), settings({}), 'granted', true)).toEqual({ toast: true, desktop: false })
+  })
+})
+
+describe('desktopPermissionView', () => {
+  it('offers the request button only while the permission is undecided', () => {
+    expect(desktopPermissionView('default')).toEqual({
+      status: 'default',
+      label: 'Not requested yet',
+      showButton: true,
+      showBadge: false
+    })
+  })
+
+  it('shows a success badge without a button once granted', () => {
+    expect(desktopPermissionView('granted')).toEqual({
+      status: 'granted',
+      label: 'Allowed',
+      showButton: false,
+      showBadge: true
+    })
+  })
+
+  it('explains the site settings when denied, with no button', () => {
+    const view = desktopPermissionView('denied')
+
+    expect(view.status).toBe('denied')
+    expect(view.showButton).toBe(false)
+    expect(view.showBadge).toBe(false)
+    expect(view.hint).toContain('will not ask again')
+    expect(view.hint).toContain('site settings')
+  })
+
+  it('says so when the Notification API is unavailable', () => {
+    const view = desktopPermissionView('unsupported')
+
+    expect(view.status).toBe('unsupported')
+    expect(view.showButton).toBe(false)
+    expect(view.showBadge).toBe(false)
+    expect(view.label).toContain('Not supported')
+    expect(view.hint).toContain('Notification API')
   })
 })
 

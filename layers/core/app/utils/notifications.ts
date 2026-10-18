@@ -38,3 +38,43 @@ export function deliveryFor(
 
   return { toast, desktop }
 }
+
+export type DesktopPermissionStatus = 'default' | 'granted' | 'denied' | 'unsupported'
+
+export interface DesktopPermissionView {
+  status: DesktopPermissionStatus
+  /** Short state text, shown next to "Permission:" */
+  label: string
+  /** Only the `default` state may ask the browser; the others must hide the button */
+  showButton: boolean
+  /** The `granted` state is shown as a success badge instead of plain text */
+  showBadge: boolean
+  /** Longer explanation for the states that need one */
+  hint?: string
+}
+
+/** Maps the browser's permission state to what the settings card shows. */
+export function desktopPermissionView(permission: NotificationPermissionState): DesktopPermissionView {
+  switch (permission) {
+    case 'granted':
+      return { status: 'granted', label: 'Allowed', showButton: false, showBadge: true }
+    case 'denied':
+      return {
+        status: 'denied',
+        label: 'Blocked',
+        showButton: false,
+        showBadge: false,
+        hint: 'Your browser will not ask again. Allow notifications for this site in the browser\'s site settings, then reload the page.'
+      }
+    case 'unsupported':
+      return {
+        status: 'unsupported',
+        label: 'Not supported by this browser',
+        showButton: false,
+        showBadge: false,
+        hint: 'This browser does not offer the Notification API, so desktop notifications cannot be used here.'
+      }
+    default:
+      return { status: 'default', label: 'Not requested yet', showButton: true, showBadge: false }
+  }
+}

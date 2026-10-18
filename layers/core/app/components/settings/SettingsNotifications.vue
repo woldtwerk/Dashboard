@@ -2,7 +2,7 @@
 import type { TableColumn } from '@nuxt/ui'
 import type { NotificationCategoryInfo, NotificationStyle } from '#layers/core/shared/types/notifications'
 import type { NotificationSettings } from '#layers/core/shared/types/settings'
-import { NOTIFICATION_STYLE_ITEMS } from '../../utils/notifications'
+import { desktopPermissionView, NOTIFICATION_STYLE_ITEMS } from '../../utils/notifications'
 
 const toast = useToast()
 const { data, save } = useSettings<NotificationSettings>('notifications')
@@ -35,18 +35,7 @@ const columns: TableColumn<NotificationCategoryInfo>[] = [
   { id: 'style', header: 'Delivery' }
 ]
 
-const permissionLabel = computed(() => {
-  switch (permission.value) {
-    case 'granted':
-      return 'Allowed'
-    case 'denied':
-      return 'Blocked'
-    case 'unsupported':
-      return 'Not supported by this browser'
-    default:
-      return 'Not requested yet'
-  }
-})
+const desktopPermission = computed(() => desktopPermissionView(permission.value))
 
 const testing = ref(false)
 
@@ -129,27 +118,33 @@ async function sendTest() {
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="text-sm">
           <span class="text-muted">Permission: </span>
-          <span class="font-medium text-highlighted">{{ permissionLabel }}</span>
+          <UBadge
+            v-if="desktopPermission.showBadge"
+            color="success"
+            variant="subtle"
+            label="Allowed"
+          />
+          <span v-else class="font-medium text-highlighted">{{ desktopPermission.label }}</span>
         </div>
 
         <UButton
+          v-if="desktopPermission.showButton"
           label="Allow desktop notifications"
           icon="i-lucide-monitor-check"
           color="neutral"
           variant="outline"
-          :disabled="permission === 'granted' || permission === 'denied' || permission === 'unsupported'"
           @click="requestPermission"
         />
       </div>
 
       <UAlert
-        v-if="permission === 'denied'"
+        v-if="desktopPermission.hint"
         class="mt-4"
-        color="warning"
+        :color="desktopPermission.status === 'denied' ? 'warning' : 'neutral'"
         variant="subtle"
         icon="i-lucide-info"
-        title="Desktop notifications are blocked"
-        description="Allow them for this site in your browser settings, then reload the page."
+        :title="desktopPermission.status === 'denied' ? 'Desktop notifications are blocked' : 'Desktop notifications unavailable'"
+        :description="desktopPermission.hint"
       />
 
       <template #footer>
