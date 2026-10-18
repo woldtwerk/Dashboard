@@ -41,6 +41,13 @@ async function remove() {
           <UDashboardSidebarCollapse />
         </template>
         <template #right>
+          <UButton
+            to="/services/mcp"
+            icon="i-lucide-key-round"
+            label="MCP access"
+            color="neutral"
+            variant="outline"
+          />
           <UButton to="/services/new" icon="i-lucide-plus" label="Add service" />
         </template>
       </UDashboardNavbar>

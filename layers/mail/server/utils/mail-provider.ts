@@ -9,6 +9,9 @@ export interface MailProvider {
   listMessages(mailbox: string, options: { limit: number, search?: MailSearch }): Promise<MailSummary[]>
   getMessage(mailbox: string, uid: number): Promise<MailMessage | null>
   setSeen(mailbox: string, uid: number, seen: boolean): Promise<void>
+  setFlagged(mailbox: string, uid: number, flagged: boolean): Promise<void>
+  /** Moves one message to another mailbox; the target must already exist */
+  moveMessage(mailbox: string, uid: number, target: string): Promise<void>
 
   // --- Search index sync ---
   /** All messages of a mailbox with their flags; a new `uidValidity` invalidates all known UIDs */

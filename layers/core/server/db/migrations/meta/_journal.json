@@ -43,6 +43,13 @@
       "when": 1792336087678,
       "tag": "0005_nervous_guardian",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1792339734961,
+      "tag": "0006_pretty_mercury",
+      "breakpoints": true
     }
   ]
 }

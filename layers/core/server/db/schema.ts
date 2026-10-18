@@ -22,6 +22,18 @@ export const locks = sqliteTable('locks', {
   expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull()
 })
 
+/** Bearer tokens for MCP clients; only the hash is stored, the token is shown once */
+export const mcpTokens = sqliteTable('mcp_tokens', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  /** Lower-case hex SHA-256 of the token */
+  tokenHash: text('token_hash').notNull().unique(),
+  scope: text('scope', { enum: ['read', 'write'] }).notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  lastUsedAt: integer('last_used_at', { mode: 'timestamp_ms' }),
+  revokedAt: integer('revoked_at', { mode: 'timestamp_ms' })
+})
+
 /** User order and renaming of the sidebar entries; a missing row means the layer's default */
 export const navigationPreferences = sqliteTable('navigation_preferences', {
   key: text('key').primaryKey(),

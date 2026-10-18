@@ -25,7 +25,7 @@ const asTool = (part: unknown) => part as ToolPart
         {{ part.text }}
       </p>
 
-      <template v-else-if="part.type === 'tool-searchMail'">
+      <template v-else-if="part.type === 'tool-mail_search'">
         <UChatTool
           v-if="asTool(part).state !== 'output-available'"
           :text="asTool(part).state === 'output-error' ? 'Search failed' : 'Searching mail…'"
@@ -48,7 +48,7 @@ const asTool = (part: unknown) => part as ToolPart
         <span v-else class="text-xs text-dimmed">No matching mails</span>
       </template>
 
-      <template v-else-if="part.type === 'tool-readMail'">
+      <template v-else-if="part.type === 'tool-mail_read'">
         <UChatTool
           v-if="asTool(part).state !== 'output-available'"
           :text="asTool(part).state === 'output-error' ? 'Could not read the mail' : 'Reading mail…'"

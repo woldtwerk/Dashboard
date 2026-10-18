@@ -140,6 +140,22 @@ export function createProtonMailProvider(values: SetupValues): MailProvider {
           await client.messageFlagsRemove(String(uid), ['\\Seen'], { uid: true })
         }
       })
+    },
+
+    setFlagged(mailbox, uid, flagged) {
+      return withProtonMailbox(settings, mailbox, async (client) => {
+        if (flagged) {
+          await client.messageFlagsAdd(String(uid), ['\\Flagged'], { uid: true })
+        } else {
+          await client.messageFlagsRemove(String(uid), ['\\Flagged'], { uid: true })
+        }
+      })
+    },
+
+    moveMessage(mailbox, uid, target) {
+      return withProtonMailbox(settings, mailbox, async (client) => {
+        await client.messageMove(String(uid), target, { uid: true })
+      })
     }
   }
 }

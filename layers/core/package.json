@@ -5,6 +5,7 @@
   "description": "Dashboard shell, services, setup wizard and database",
   "main": "./nuxt.config.ts",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "catalog:",
     "@nuxt/ui": "catalog:",
     "@unovis/ts": "catalog:",
     "@unovis/vue": "catalog:",

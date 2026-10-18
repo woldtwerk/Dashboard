@@ -8,6 +8,7 @@ catalog:
   '@ai-sdk/openai': 4.0.96
   '@ai-sdk/openai-compatible': 3.0.62
   '@ai-sdk/vue': 4.0.127
+  '@modelcontextprotocol/sdk': 1.32.1
   '@nuxt/kit': ^4.6.1
   '@iconify-json/lucide': ^1.2.142
   '@iconify-json/simple-icons': ^1.2.99
