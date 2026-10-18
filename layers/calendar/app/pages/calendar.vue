@@ -208,8 +208,36 @@ function scrollToInitialHour() {
   })
 }
 
+// The month opens on the week holding today, so a tall month does not start
+// scrolled away from it; another month opens at its first week
+const monthEl = ref<HTMLElement>()
+
+function scrollToCurrentWeek() {
+  nextTick(() => {
+    const container = monthEl.value
+    if (!container) {
+      return
+    }
+
+    const today = zoned(now.value, timeZone.value)
+    const index = isSameMonth(today, zoned(anchor.value, timeZone.value))
+      ? weeks.value.findIndex(week => week.some(day => isToday(day)))
+      : -1
+    const row = index > 0 ? container.querySelector<HTMLElement>(`[data-week="${index}"]`) : undefined
+    const header = container.querySelector<HTMLElement>('[data-month-header]')
+
+    container.scrollTop = row
+      ? Math.max(0, row.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - (header?.offsetHeight ?? 0))
+      : 0
+  })
+}
+
 onMounted(scrollToInitialHour)
-watch([view, () => toIso(window.value.start), timeZone], scrollToInitialHour)
+onMounted(scrollToCurrentWeek)
+watch([view, () => toIso(window.value.start), timeZone], () => {
+  scrollToInitialHour()
+  scrollToCurrentWeek()
+})
 
 // --- Calendars ---
 
@@ -557,61 +585,67 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
     <!-- Month -->
     <div v-else-if="view === 'month'" class="flex min-h-0 flex-1 flex-col">
-      <div class="grid shrink-0 grid-cols-7 border-b border-default text-center text-xs font-medium text-muted">
-        <div v-for="label in WEEKDAYS" :key="label" class="border-r border-default py-2 last:border-r-0">
-          {{ label }}
-        </div>
-      </div>
-      <div class="grid min-h-0 flex-1 grid-cols-7" style="grid-template-rows: repeat(6, minmax(0, 1fr))">
-        <template v-for="(week, weekIndex) in weeks" :key="weekIndex">
-          <div
-            v-for="day in week"
-            :key="day.toISOString()"
-            class="flex min-h-0 flex-col gap-px overflow-hidden border-b border-r border-default p-1.5 last:border-r-0"
-            :class="!isSameMonth(zoned(day, timeZone), zoned(anchor, timeZone)) && 'bg-elevated/30'"
-          >
-            <button
-              class="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] leading-none hover:bg-elevated"
-              :class="isToday(day) && 'bg-primary text-inverted'"
-              @click="newEventOn(day)"
-            >
-              {{ dayNumber(day) }}
-            </button>
-            <button
-              v-for="event in cellFor(day).visible"
-              :key="eventKey(event)"
-              class="flex w-full shrink-0 items-center gap-1 truncate rounded px-1 py-px text-left text-[11px] leading-4 hover:bg-elevated"
-              @click="openEvent(event)"
-            >
-              <span class="size-2 shrink-0 rounded-full" :style="{ backgroundColor: colorOf(event.calendar) || 'currentColor' }" />
-              <span class="truncate">{{ event.allDay ? event.title : `${formatEventStart(event, timeZone)} ${event.title}` }}</span>
-            </button>
-            <UPopover v-if="cellFor(day).overflow.length" :content="{ align: 'start' }">
-              <UButton
-                color="neutral"
-                variant="ghost"
-                size="xs"
-                class="w-full shrink-0 justify-start px-1 py-px text-[11px] leading-4 font-normal text-muted"
-              >
-                +{{ cellFor(day).overflow.length }} more
-              </UButton>
-              <template #content>
-                <div class="w-64 space-y-0.5 p-2">
-                  <button
-                    v-for="event in cellFor(day).overflow"
-                    :key="eventKey(event)"
-                    class="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-sm hover:bg-elevated"
-                    @click="openEvent(event)"
-                  >
-                    <span class="size-2 shrink-0 rounded-full" :style="{ backgroundColor: colorOf(event.calendar) || 'currentColor' }" />
-                    <span class="w-24 shrink-0 text-xs text-muted">{{ event.allDay ? 'All day' : formatEventTime(event, timeZone) }}</span>
-                    <span class="truncate">{{ event.title }}</span>
-                  </button>
-                </div>
-              </template>
-            </UPopover>
+      <div ref="monthEl" class="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+        <div
+          data-month-header
+          class="sticky top-0 z-10 grid grid-cols-7 border-b border-default bg-default text-center text-xs font-medium text-muted"
+        >
+          <div v-for="label in WEEKDAYS" :key="label" class="border-r border-default py-2 last:border-r-0">
+            {{ label }}
           </div>
-        </template>
+        </div>
+        <div class="grid grid-cols-7" style="grid-auto-rows: minmax(8rem, auto)">
+          <template v-for="(week, weekIndex) in weeks" :key="weekIndex">
+            <div
+              v-for="day in week"
+              :key="day.toISOString()"
+              :data-week="weekIndex"
+              class="flex flex-col gap-px border-b border-r border-default p-1.5 last:border-r-0"
+              :class="!isSameMonth(zoned(day, timeZone), zoned(anchor, timeZone)) && 'bg-elevated/30'"
+            >
+              <button
+                class="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] leading-none hover:bg-elevated"
+                :class="isToday(day) && 'bg-primary text-inverted'"
+                @click="newEventOn(day)"
+              >
+                {{ dayNumber(day) }}
+              </button>
+              <button
+                v-for="event in cellFor(day).visible"
+                :key="eventKey(event)"
+                class="flex w-full shrink-0 items-center gap-1 truncate rounded px-1 py-px text-left text-[11px] leading-4 hover:bg-elevated"
+                @click="openEvent(event)"
+              >
+                <span class="size-2 shrink-0 rounded-full" :style="{ backgroundColor: colorOf(event.calendar) || 'currentColor' }" />
+                <span class="truncate">{{ event.allDay ? event.title : `${formatEventStart(event, timeZone)} ${event.title}` }}</span>
+              </button>
+              <UPopover v-if="cellFor(day).overflow.length" :content="{ align: 'start' }">
+                <UButton
+                  color="neutral"
+                  variant="ghost"
+                  size="xs"
+                  class="w-full shrink-0 justify-start px-1 py-px text-[11px] leading-4 font-normal text-muted"
+                >
+                  +{{ cellFor(day).overflow.length }} more
+                </UButton>
+                <template #content>
+                  <div class="w-64 space-y-0.5 p-2">
+                    <button
+                      v-for="event in cellFor(day).overflow"
+                      :key="eventKey(event)"
+                      class="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-sm hover:bg-elevated"
+                      @click="openEvent(event)"
+                    >
+                      <span class="size-2 shrink-0 rounded-full" :style="{ backgroundColor: colorOf(event.calendar) || 'currentColor' }" />
+                      <span class="w-24 shrink-0 text-xs text-muted">{{ event.allDay ? 'All day' : formatEventTime(event, timeZone) }}</span>
+                      <span class="truncate">{{ event.title }}</span>
+                    </button>
+                  </div>
+                </template>
+              </UPopover>
+            </div>
+          </template>
+        </div>
       </div>
     </div>
 
