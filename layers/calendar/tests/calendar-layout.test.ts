@@ -128,20 +128,24 @@ describe('initialScrollHour', () => {
 })
 
 describe('monthCell', () => {
-  const events = [
-    event('2026-10-16T07:00:00.000Z', '2026-10-16T08:00:00.000Z'),
-    event('2026-10-16T08:00:00.000Z', '2026-10-16T09:00:00.000Z'),
-    event('2026-10-16T09:00:00.000Z', '2026-10-16T10:00:00.000Z'),
-    event('2026-10-16T10:00:00.000Z', '2026-10-16T11:00:00.000Z')
-  ]
-
-  it('shows everything while it fits', () => {
-    expect(monthCell(events.slice(0, 2), day(16), TZ).overflow).toEqual([])
+  const events = Array.from({ length: 10 }, (_, index) => {
+    const hour = String(index + 7).padStart(2, '0')
+    return event(`2026-10-16T${hour}:00:00.000Z`, `2026-10-16T${hour}:30:00.000Z`)
   })
 
-  it('folds the rest behind the more button', () => {
+  it('shows everything while it fits', () => {
+    expect(monthCell(events.slice(0, 8), day(16), TZ).overflow).toEqual([])
+  })
+
+  it('shows up to eight chips and folds the rest behind the more button', () => {
     const cell = monthCell(events, day(16), TZ)
+    expect(cell.visible).toHaveLength(8)
+    expect(cell.overflow).toHaveLength(2)
+  })
+
+  it('takes a custom limit', () => {
+    const cell = monthCell(events, day(16), TZ, 3)
     expect(cell.visible).toHaveLength(3)
-    expect(cell.overflow).toHaveLength(1)
+    expect(cell.overflow).toHaveLength(7)
   })
 })

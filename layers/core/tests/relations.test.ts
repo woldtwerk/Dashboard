@@ -5,6 +5,7 @@ import {
   GRAPH_RELATIONS_PER_NODE,
   groupRelations,
   invalidateRelationDomain,
+  knownAddresses,
   registerRelationProvider,
   relatedTo,
   resetRelationProviders,
@@ -210,5 +211,28 @@ describe('relatedTo', () => {
     registerRelationProvider('empty', { label: 'Empty', related: async () => [] })
 
     expect(await relatedTo(person, 20)).toEqual([])
+  })
+})
+
+describe('knownAddresses', () => {
+  beforeEach(() => {
+    resetRelationProviders()
+    warn.mockReset()
+  })
+
+  it('unites every provider, normalized and deduplicated', async () => {
+    registerRelationProvider('contacts', { label: 'Contacts', related: async () => [], addresses: async () => ['Alice@Example.com', 'bob@example.com'] })
+    registerRelationProvider('calendar', { label: 'Calendar', related: async () => [], addresses: async () => ['ALICE@example.com'] })
+    registerRelationProvider('mail', { label: 'Mail', related: async () => [] })
+
+    expect(await knownAddresses()).toEqual(['alice@example.com', 'bob@example.com'])
+  })
+
+  it('leaves out a provider that exceeds its timeout', async () => {
+    registerRelationProvider('contacts', { label: 'Contacts', related: async () => [], addresses: async () => new Promise<string[]>(() => {}) })
+    registerRelationProvider('other', { label: 'Other', related: async () => [], addresses: async () => ['ok@example.com'] })
+
+    expect(await knownAddresses(5)).toEqual(['ok@example.com'])
+    expect(warn).toHaveBeenCalledWith('Addresses of "contacts" are unavailable', expect.objectContaining({ error: expect.any(String) }))
   })
 })
