@@ -4,7 +4,9 @@ import {
   activityDates,
   activityDomains,
   domainColor,
+  domainLabel,
   hasSeriesPoints,
+  integerTicks,
   rangeFromQuery,
   seriesTableRows,
   statusColor,
@@ -36,6 +38,34 @@ describe('domainColor', () => {
 
   it('maps the core domain to the core token', () => {
     expect(domainColor('core')).toBe('var(--chart-core)')
+  })
+})
+
+describe('domainLabel', () => {
+  it('capitalises the first letter', () => {
+    expect(domainLabel('mail')).toBe('Mail')
+    expect(domainLabel('calendar')).toBe('Calendar')
+    expect(domainLabel('documents')).toBe('Documents')
+    expect(domainLabel('')).toBe('')
+  })
+})
+
+describe('integerTicks', () => {
+  it('shows every integer up to five', () => {
+    expect(integerTicks(0)).toEqual([0])
+    expect(integerTicks(3)).toEqual([0, 1, 2, 3])
+    expect(integerTicks(5)).toEqual([0, 1, 2, 3, 4, 5])
+  })
+
+  it('uses an integer step above five', () => {
+    expect(integerTicks(6)).toEqual([0, 2, 4, 6])
+    expect(integerTicks(23)).toEqual([0, 5, 10, 15, 20])
+    expect(integerTicks(100)).toEqual([0, 20, 40, 60, 80, 100])
+  })
+
+  it('handles a missing maximum', () => {
+    expect(integerTicks(Number.NaN)).toEqual([0])
+    expect(integerTicks(-4)).toEqual([0])
   })
 })
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { LogEntry } from '../shared/types/logs'
 import {
+  LOG_ALL_SERVICES,
   logFetchQuery,
   logLevelMeta,
   logQueryFromRoute,
@@ -35,6 +36,11 @@ describe('logQueryFromRoute', () => {
     expect(filters.levels).toEqual(['warn', 'error'])
     expect(filters.live).toBe(true)
   })
+
+  it('treats the all-services sentinel as no filter', () => {
+    expect(logQueryFromRoute({ service: LOG_ALL_SERVICES }).services).toEqual([])
+    expect(logQueryFromRoute({ service: [LOG_ALL_SERVICES, 'acc'] }).services).toEqual(['acc'])
+  })
 })
 
 describe('logQueryToRoute', () => {
@@ -46,6 +52,10 @@ describe('logQueryToRoute', () => {
       q: 'boom',
       live: '0'
     })
+  })
+
+  it('omits the all-services sentinel', () => {
+    expect(logQueryToRoute({ domains: [], services: [LOG_ALL_SERVICES], levels: [], q: '', live: true })).toEqual({})
   })
 
   it('round-trips the filters', () => {

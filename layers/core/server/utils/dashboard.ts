@@ -5,6 +5,7 @@ import type {
   ServiceStatus
 } from '../../shared/types/dashboard'
 import type { ServiceInfo } from '../../shared/types/setup'
+import { useServiceLogger } from './service-logger'
 
 export interface DashboardSeriesSource {
   info: Omit<DashboardSeriesInfo, 'id' | 'domain'>
@@ -38,6 +39,9 @@ const METRICS_TTL_SECONDS = 2 * 60
 const SERIES_TTL_SECONDS = 10 * 60
 
 export const SERVICE_STATUS_TIMEOUT_MS = 3_000
+
+/** A broken service may log its failing health check once per this interval. */
+export const STATUS_LOG_INTERVAL_MS = 5 * 60_000
 
 // Redis when mounted (shared by every cluster worker), else the default Nitro storage
 export function dashboardStorage() {
@@ -171,6 +175,36 @@ export async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T
   }
 }
 
+/** Whether a failure may be logged again, given when it was last logged. */
+export function shouldLogAgain(lastAt: number | null | undefined, now: number, intervalMs: number): boolean {
+  return lastAt == null || now - lastAt >= intervalMs
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Logs a failing health check at most once per interval and service. The last
+ * time lives in the shared Nitro storage, so every cluster worker agrees.
+ */
+async function logStatusFailure(service: ServiceInfo, error: string): Promise<void> {
+  try {
+    const key = `dashboard:status-log:${service.id}`
+    const now = Date.now()
+    const lastAt = await readCache<number>(key)
+
+    if (!shouldLogAgain(lastAt, now, STATUS_LOG_INTERVAL_MS)) {
+      return
+    }
+
+    await writeCache(key, now, STATUS_LOG_INTERVAL_MS / 1_000)
+    useServiceLogger(service.domain, service.id).warn('Health check failed', { error })
+  } catch {
+    // Logging a health check must never break the services endpoint
+  }
+}
+
 /** One service with the health its domain reports; unknown without a source or after a timeout */
 export async function dashboardServiceStatus(service: ServiceInfo, timeoutMs = SERVICE_STATUS_TIMEOUT_MS): Promise<ServiceStatus> {
   const source = sources.get(service.domain)
@@ -179,8 +213,13 @@ export async function dashboardServiceStatus(service: ServiceInfo, timeoutMs = S
   if (source?.status) {
     try {
       status = await withTimeout(source.status(service), timeoutMs)
-    } catch {
+
+      if (status.health === 'error') {
+        await logStatusFailure(service, status.error ?? 'The service reported an error')
+      }
+    } catch (error) {
       status = { health: 'unknown', syncedAt: null }
+      await logStatusFailure(service, errorText(error))
     }
   }
 

@@ -111,7 +111,8 @@ export function createPaperlessProvider(values: SetupValues, serviceId?: string)
     },
 
     async ping() {
-      await client.request('/api/')
+      // `/api/` answers 406 to the versioned Accept header; the documents list does not
+      await client.request('/api/documents/', { query: { page_size: 1, fields: 'id' } })
     },
 
     thumbnail: id => client.stream(`/api/documents/${id}/thumb/`),

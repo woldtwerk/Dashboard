@@ -2,16 +2,19 @@
 import { VisAxis, VisCrosshair, VisStackedBar, VisTooltip, VisXYContainer } from '@unovis/vue'
 import { useElementSize } from '@vueuse/core'
 import type { StackedChartRow, StackedChartSeries } from '../utils/chart'
+import { integerTicks } from '../utils/chart'
 
 const props = withDefaults(defineProps<{
   rows: StackedChartRow[]
   series: StackedChartSeries[]
   label: string
   tickEvery?: number
+  integerY?: boolean
   formatTick: (date: string) => string
   formatTooltip: (row: StackedChartRow) => string
 }>(), {
-  tickEvery: 7
+  tickEvery: 7,
+  integerY: false
 })
 
 const chartRef = useTemplateRef<HTMLElement>('chartRef')
@@ -32,6 +35,18 @@ function tickFormat(tick: number): string {
   const row = props.rows[Math.round(tick)]
   return row ? props.formatTick(row.date) : ''
 }
+
+// Counts only: explicit integer ticks, every integer up to five
+const yTickValues = computed(() => {
+  if (!props.integerY) {
+    return undefined
+  }
+  const max = props.rows.reduce((highest, row) => {
+    const total = props.series.reduce((sum, series) => sum + (row.values[series.key] ?? 0), 0)
+    return Math.max(highest, total)
+  }, 0)
+  return integerTicks(max)
+})
 
 const barPadding = computed(() => {
   const step = width.value / Math.max(1, props.rows.length)
@@ -69,6 +84,7 @@ function template(row?: StackedChartRow): string {
         :y="yAccessors"
         :color="colors"
         :bar-padding="barPadding"
+        :bar-max-width="24"
         :rounded-corners="4"
       />
 
@@ -86,10 +102,16 @@ function template(row?: StackedChartRow): string {
         :grid-line="true"
         :tick-line="false"
         :domain-line="false"
+        :tick-values="yTickValues"
         :num-ticks="4"
       />
 
-      <VisCrosshair :y="yAccessors" :color="colors" :template="template" />
+      <VisCrosshair
+        :x="x"
+        :y="yAccessors"
+        :color="colors"
+        :template="template"
+      />
       <VisTooltip />
     </VisXYContainer>
   </div>
