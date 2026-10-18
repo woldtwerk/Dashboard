@@ -3,7 +3,9 @@ import type { UIMessage } from 'ai'
 import { defineEventHandler, readValidatedBody } from 'nuxt/server'
 import { z } from 'zod'
 import { listDomainTools } from '../../../../../core/server/utils/domain-tools'
-import { assistantInstructions, parseAssistantDomains } from '../../../mail-ai/assistant'
+import { getSettings } from '../../../../../core/server/utils/settings'
+import type { AssistantSettings } from '../../../../shared/types/assistant'
+import { assistantInstructions, resolveAssistantDomains } from '../../../mail-ai/assistant'
 import { toAiSdkTools } from '../../../mail-ai/tools'
 
 // Chat with the assistant; streams UI messages (AI SDK protocol)
@@ -17,7 +19,9 @@ export default defineEventHandler(async (event) => {
 
   // One provider session per conversation; the client may pick the service and model
   const aiModel = await useAiModel({ session: id, service, model })
-  const domains = parseAssistantDomains(useRuntimeConfig().assistant.domains)
+  // The user picks the readable domains per domain; the runtime config is the fallback
+  const settings = await getSettings<AssistantSettings>('assistant')
+  const domains = resolveAssistantDomains(settings.domains, useRuntimeConfig().assistant.domains)
   // Write tools are never handed to the assistant: it may only read
   const tools = toAiSdkTools(listDomainTools({ scope: 'read', domains }), { scope: 'read', caller: 'assistant' })
 
