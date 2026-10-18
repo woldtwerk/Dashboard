@@ -302,12 +302,18 @@ importers:
       '@allmight/core':
         specifier: workspace:*
         version: link:../core
+      '@nuxt/ui':
+        specifier: 'catalog:'
+        version: 4.11.3(c33e7b9ea8d2921466bb7b53476c153c)
       ai:
         specifier: 'catalog:'
         version: 7.0.127(zod@4.6.7)
       nuxt:
         specifier: 'catalog:'
         version: 4.6.1(77eba58fd1fbc6c7fc8df3be8a606621)
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
 
   layers/ai-openai-compatible:
     dependencies:

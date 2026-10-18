@@ -6,7 +6,9 @@
   "main": "./nuxt.config.ts",
   "dependencies": {
     "@allmight/core": "workspace:*",
-    "ai": "catalog:"
+    "@nuxt/ui": "catalog:",
+    "ai": "catalog:",
+    "zod": "catalog:"
   },
   "peerDependencies": {
     "nuxt": "catalog:"

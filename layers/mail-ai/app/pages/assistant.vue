@@ -1,14 +1,56 @@
 <script setup lang="ts">
 import { useChat } from '@ai-sdk/vue'
 import { DefaultChatTransport } from 'ai'
+import { parseModelParam, resolveModelSelection, serializeModelParam } from '#layers/ai/shared/ai-model'
+import type { AiModelSelection, AiServiceModels } from '#layers/ai/shared/types/ai'
 
 useSeoMeta({ title: 'Assistant' })
 
 const aiAvailable = useAiAvailable()
 
+const route = useRoute()
+const router = useRouter()
+
+// The model list loads after the page, so the chat is usable while the provider answers
+const { data: aiServices, status: modelsStatus } = useLazyFetch<AiServiceModels[]>('/api/ai/models', { default: () => [] })
+
+// The selected model lives in the URL as `?model=<serviceId>:<modelId>`
+const requestedModel = computed(() => parseModelParam(route.query.model))
+const selection = computed(() => resolveModelSelection(aiServices.value, requestedModel.value))
+const selectedModel = computed(() => serializeModelParam(selection.value) ?? '')
+
+function isDefault(candidate?: AiModelSelection): boolean {
+  const first = aiServices.value[0]
+  return !!candidate && !!first && candidate.serviceId === first.service.id && candidate.modelId === first.defaultModel
+}
+
+function setModel(value?: string) {
+  const parsed = parseModelParam(value)
+  const current = typeof route.query.model === 'string' ? route.query.model : undefined
+  const next = parsed && !isDefault(parsed) ? serializeModelParam(parsed) : undefined
+  if (next !== current) {
+    router.replace({ query: { ...route.query, model: next } })
+  }
+}
+
+// Drop a model the service does not offer from the URL; the select falls back to the default
+watch(aiServices, (services) => {
+  const raw = route.query.model
+  if (!services.length || typeof raw !== 'string' || !raw) {
+    return
+  }
+  if (serializeModelParam(resolveModelSelection(services, parseModelParam(raw))) !== raw) {
+    setModel(undefined)
+  }
+}, { immediate: true })
+
 const input = ref('')
 const { messages, status, error, sendMessage, stop, regenerate } = useChat({
-  transport: new DefaultChatTransport({ api: '/api/mail/ai/chat' })
+  // Read at send time, so a new selection applies to the next message
+  transport: new DefaultChatTransport({
+    api: '/api/mail/ai/chat',
+    body: () => ({ service: selection.value?.serviceId, model: selection.value?.modelId })
+  })
 })
 
 const suggestions = [
@@ -95,11 +137,20 @@ function submit(text = input.value) {
             class="sticky bottom-0"
             @submit="submit()"
           >
-            <UChatPromptSubmit
-              :status="status"
-              @stop="stop()"
-              @reload="regenerate()"
-            />
+            <template #footer>
+              <AiModelSelect
+                :model-value="selectedModel"
+                :services="aiServices"
+                :loading="modelsStatus === 'pending'"
+                :disabled="status === 'streaming' || status === 'submitted'"
+                @update:model-value="setModel"
+              />
+              <UChatPromptSubmit
+                :status="status"
+                @stop="stop()"
+                @reload="regenerate()"
+              />
+            </template>
           </UChatPrompt>
 
           <p class="text-center text-xs text-dimmed">

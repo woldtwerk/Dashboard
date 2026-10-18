@@ -7,18 +7,20 @@ import { assistantInstructions, createAssistantTools } from '../../../mail-ai/as
 
 // Chat with the mail assistant; streams UI messages (AI SDK protocol)
 export default defineEventHandler(async (event) => {
-  const { id, messages } = await readValidatedBody(event, z.object({
+  const { id, messages, service, model } = await readValidatedBody(event, z.object({
     id: z.string().max(100),
-    messages: z.array(z.custom<UIMessage>(message => typeof message === 'object' && message !== null)).min(1).max(100)
+    messages: z.array(z.custom<UIMessage>(message => typeof message === 'object' && message !== null)).min(1).max(100),
+    service: z.string().max(100).optional(),
+    model: aiModelIdSchema.optional()
   }))
 
-  // One provider session per conversation
-  const { model, headers } = await useAiModel({ session: id })
+  // One provider session per conversation; the client may pick the service and model
+  const aiModel = await useAiModel({ session: id, service, model })
   const tools = createAssistantTools(createMailAccess())
 
   const result = streamText({
-    model,
-    headers,
+    model: aiModel.model,
+    headers: aiModel.headers,
     system: assistantInstructions(new Date().toISOString().slice(0, 10)),
     messages: await convertToModelMessages(messages, { tools }),
     tools,
