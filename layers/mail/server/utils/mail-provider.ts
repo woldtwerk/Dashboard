@@ -1,7 +1,7 @@
 import { createError } from 'nuxt/server'
 import type { SetupValues } from '../../../core/shared/types/setup'
 import type { OutgoingMail } from '../../shared/mail-compose'
-import type { MailAddress, Mailbox, MailMessage, MailMessageState, MailSearch, MailSummary } from '../../shared/types/mail'
+import type { MailAddress, Mailbox, MailMessage, MailMessageState, MailSearch, MailStreamHeader, MailSummary } from '../../shared/types/mail'
 
 /** Port every mail provider adapter implements. */
 export interface MailProvider {
@@ -39,6 +39,11 @@ export interface MailProvider {
   listMessageStates(mailbox: string): Promise<{ uidValidity: string, messages: MailMessageState[] }>
   /** Messages including their text, for indexing */
   getMessages(mailbox: string, uids: number[]): Promise<MailMessage[]>
+  /**
+   * The list and bulk headers of the given messages, without their bodies. Used
+   * by the one-time stream backfill, which must not refetch every mail.
+   */
+  getStreamHeaders(mailbox: string, uids: number[]): Promise<MailStreamHeader[]>
 }
 
 /** Creates a provider from the settings of one service instance */

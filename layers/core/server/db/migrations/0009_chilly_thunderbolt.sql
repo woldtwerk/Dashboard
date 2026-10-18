@@ -1,0 +1,1 @@
+ALTER TABLE `mail_index_mailboxes` ADD `streams_backfilled` integer DEFAULT 0 NOT NULL;

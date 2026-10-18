@@ -12,6 +12,10 @@ export interface MailThreadSource {
   inReplyTo?: string
   references?: string[]
   conversationKeys?: string[]
+  /** Normalized List-Id; a mailing list mail carries it */
+  listId?: string
+  /** Whether the mail is bulk or notification mail rather than correspondence */
+  bulk?: boolean
 }
 
 /** Reply and forward markers, with an optional count such as `Re[2]:` */
@@ -62,27 +66,197 @@ export function normalizeMessageId(messageId?: string): string | undefined {
 }
 
 /**
+ * The stream headers a mail may carry; a provider reads them from the message
+ * (mailparser's `parsed.headers`, or the raw header block of a light fetch).
+ * Values stay `unknown` because the header APIs differ between sources.
+ */
+export interface MailStreamHeaderValues {
+  listId?: unknown
+  listUnsubscribe?: unknown
+  precedence?: unknown
+  autoSubmitted?: unknown
+}
+
+export interface MailStreamFlags {
+  /** Normalized List-Id (the part in `<>`, lower-cased) */
+  listId?: string
+  /** Human readable description in front of the List-Id, when it has one */
+  listName?: string
+  bulk: boolean
+}
+
+/** Sender local parts that mark automated bulk mail rather than a person */
+const BULK_SENDER = /^(?:no-?reply|notifications?|newsletter|news|mailer-daemon|updates?|alerts?|info)$/i
+
+/** A header value from mailparser or a raw block, as trimmed text */
+function headerText(value: unknown): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined
+  }
+
+  const text = Array.isArray(value)
+    ? value.map(item => String(item)).join(', ')
+    : typeof value === 'object' && 'text' in (value as Record<string, unknown>)
+      ? String((value as { text?: unknown }).text ?? '')
+      : String(value)
+
+  return text.trim() || undefined
+}
+
+/** The part of a `List-Id` in angle brackets, lower-cased (`security-news.drupal.org`) */
+export function normalizeListId(value?: unknown): string | undefined {
+  const text = headerText(value)
+  if (!text) {
+    return undefined
+  }
+
+  const id = (/<([^>]*)>/.exec(text)?.[1] ?? text).trim().toLowerCase()
+  return id || undefined
+}
+
+/** The description in front of the List-Id brackets, e.g. "Drupal Security News" */
+export function listIdName(value?: unknown): string | undefined {
+  const text = headerText(value)
+  const match = text && /^(.*?)<[^>]*>\s*$/.exec(text)
+  const name = match?.[1]?.replace(/^"(.*)"$/, '$1').trim()
+
+  return name || undefined
+}
+
+/**
+ * Reads the stream headers out of a raw header block, e.g. the `headers` Buffer
+ * a light IMAP fetch returns. Folded continuation lines are joined, so a header
+ * split across lines is read whole.
+ */
+export function parseRawStreamHeaders(raw: string): MailStreamHeaderValues {
+  const collected = new Map<string, string>()
+  let name: string | undefined
+
+  for (const line of raw.replace(/\r\n?/g, '\n').split('\n')) {
+    if (/^[ \t]/.test(line) && name) {
+      collected.set(name, `${collected.get(name) ?? ''} ${line.trim()}`)
+      continue
+    }
+
+    const match = /^([^:\s]+):[ \t]?(.*)$/.exec(line)
+    if (!match) {
+      name = undefined
+      continue
+    }
+
+    name = match[1]!.toLowerCase()
+    collected.set(name, match[2] ?? '')
+  }
+
+  return {
+    listId: collected.get('list-id'),
+    listUnsubscribe: collected.get('list-unsubscribe'),
+    precedence: collected.get('precedence'),
+    autoSubmitted: collected.get('auto-submitted')
+  }
+}
+
+/**
+ * The stream headers of a mail: the list it belongs to, and whether it looks
+ * like bulk mail. A mailing list mail is known by its `List-Id`; without one, a
+ * newsletter is recognized by `List-Unsubscribe`, a bulk `Precedence`, an
+ * `Auto-Submitted` other than `no`, or a machine sender address.
+ */
+export function mailStreamFlags(from: MailAddress[], headers: MailStreamHeaderValues): MailStreamFlags {
+  const precedence = headerText(headers.precedence)?.toLowerCase()
+  const autoSubmitted = headerText(headers.autoSubmitted)?.toLowerCase()
+  const local = normalizeMailAddress(from[0]?.address)?.split('@')[0]
+
+  const bulk = headerText(headers.listUnsubscribe) !== undefined
+    || precedence === 'bulk' || precedence === 'list' || precedence === 'junk'
+    || (autoSubmitted !== undefined && autoSubmitted !== 'no')
+    || (!!local && BULK_SENDER.test(local))
+
+  return {
+    listId: normalizeListId(headers.listId),
+    listName: listIdName(headers.listId),
+    bulk
+  }
+}
+
+/**
+ * The stream key of a mail: `list:<List-Id>` when it belongs to a mailing list,
+ * otherwise `from:<sender>` when it is bulk mail. A personal mail has none, so
+ * normal correspondence is never merged per person.
+ */
+export function streamConversationKey(message: Pick<MailThreadSource, 'from' | 'listId' | 'bulk'>): string | undefined {
+  const listId = normalizeListId(message.listId)
+  if (listId) {
+    return `list:${listId}`
+  }
+
+  if (!message.bulk) {
+    return undefined
+  }
+
+  const sender = normalizeMailAddress(message.from[0]?.address)
+  return sender ? `from:${sender}` : undefined
+}
+
+/** Whether a conversation key identifies a stream rather than a reply thread */
+export function isStreamKey(key: string): boolean {
+  return key.startsWith('list:') || key.startsWith('from:')
+}
+
+/**
+ * The display name of a stream conversation: the List-Id description when the
+ * provider kept one, otherwise the sender's display name or address.
+ */
+export function streamLabel(message: Pick<MailThreadSource, 'from'> & { listName?: string }): string {
+  return message.listName?.trim() || message.from[0]?.name?.trim() || message.from[0]?.address || 'Unknown'
+}
+
+/** How an opened conversation is shown: as chat bubbles or as a list of cards */
+export function conversationKind(group: Pick<MailConversationGroup, 'key'>): 'thread' | 'stream' {
+  return isStreamKey(group.key) ? 'stream' : 'thread'
+}
+
+/**
  * The keys a message belongs to. A reply carries `id:<root Message-ID>` of the
  * thread's first reference; a mail that starts a thread carries the subject key
  * (which groups recurring notifications of one sender) plus `id:<own Message-ID>`,
- * so the replies that point at it join the same conversation.
+ * so the replies that point at it join the same conversation. A mailing list or
+ * bulk mail also carries its stream key, which groups a whole list into one thread.
  */
 export function conversationKeys(message: MailThreadSource): string[] {
   const rootId = normalizeMessageId(message.references?.[0]) ?? normalizeMessageId(message.inReplyTo)
+  const keys: string[] = []
 
   if (rootId) {
-    return [`id:${rootId}`]
+    keys.push(`id:${rootId}`)
+  } else {
+    const sender = normalizeMailAddress(message.from[0]?.address) ?? ''
+    keys.push(`subj:${sender}:${normalizeSubject(message.subject)}`)
+
+    const ownId = normalizeMessageId(message.messageId)
+    if (ownId) {
+      keys.push(`id:${ownId}`)
+    }
   }
 
-  const sender = normalizeMailAddress(message.from[0]?.address) ?? ''
-  const keys = [`subj:${sender}:${normalizeSubject(message.subject)}`]
-  const ownId = normalizeMessageId(message.messageId)
-
-  if (ownId) {
-    keys.push(`id:${ownId}`)
+  const streamKey = streamConversationKey(message)
+  if (streamKey) {
+    keys.push(streamKey)
   }
 
   return keys
+}
+
+/**
+ * The stored keys plus the mail's stream key, or `undefined` when the key is
+ * already there (so a resumed backfill does no work twice).
+ */
+export function mergeStreamKeys(keys: string[], streamKey?: string): string[] | undefined {
+  if (!streamKey || keys.includes(streamKey)) {
+    return undefined
+  }
+
+  return [...keys, streamKey]
 }
 
 /** The keys of a search hit; the index stored them, provider results derive them */
@@ -113,8 +287,9 @@ function participantsOf(mails: MailSummary[]): MailAddress[] {
 
 /**
  * Groups mails into conversations by uniting every pair that shares a key
- * (union-find). The group key is the smallest shared key, so it stays stable
- * whichever mail is seen first.
+ * (union-find). The group key is the smallest shared key, or the smallest
+ * stream key when the group is a mailing list or a bulk stream, so it stays
+ * stable whichever mail is seen first.
  */
 export function groupConversations(mails: MailSummary[]): MailConversationGroup[] {
   const parent = new Map<string, string>()
@@ -169,9 +344,12 @@ export function groupConversations(mails: MailSummary[]): MailConversationGroup[
     .map(({ keys, mails: groupMails }) => {
       const sorted = [...groupMails].sort(byDate)
       const latest = sorted[sorted.length - 1]!
+      const sortedKeys = [...keys].sort()
 
       return {
-        key: [...keys].sort()[0]!,
+        // A stream key wins, so a list thread stays one conversation even when a
+        // reply only joins it through its root id
+        key: sortedKeys.find(isStreamKey) ?? sortedKeys[0]!,
         subject: stripSubjectPrefix(latest.subject) || '(no subject)',
         participants: participantsOf(sorted),
         mails: sorted,

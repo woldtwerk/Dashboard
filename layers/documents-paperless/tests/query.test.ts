@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { EMPTY_DOCUMENTS_FILTERS } from '../../documents/shared/types/documents'
 import type { DocumentsCustomField, DocumentsQuery } from '../../documents/shared/types/documents'
-import { customFieldQuery, toPaperlessParams } from '../server/paperless/query'
+import { customFieldQuery, toPaperlessFullText, toPaperlessParams } from '../server/paperless/query'
 
 function query(overrides: Partial<DocumentsQuery> = {}, filters: Partial<DocumentsQuery['filters']> = {}): DocumentsQuery {
   return {
@@ -20,7 +20,7 @@ describe('toPaperlessParams', () => {
       page: '2',
       page_size: '25',
       ordering: 'created',
-      query: 'invoice',
+      query: '(invoice OR *invoice*)',
       more_like_id: '7'
     })
     expect(toPaperlessParams(query())[`ordering`]).toBe('-added')
@@ -82,5 +82,32 @@ describe('customFieldQuery', () => {
   it('is undefined without a field or value', () => {
     expect(customFieldQuery(undefined, 'x')).toBeUndefined()
     expect(customFieldQuery({ id: 1, name: 'x', dataType: 'string', documentCount: 0 }, undefined)).toBeUndefined()
+  })
+})
+
+describe('toPaperlessFullText', () => {
+  it('matches a whole word and every word it is part of', () => {
+    expect(toPaperlessFullText('zeugnis')).toBe('(zeugnis OR *zeugnis*)')
+  })
+
+  it('ands the groups of a multi-term query', () => {
+    expect(toPaperlessFullText('drupal rechnung')).toBe('(drupal OR *drupal*) AND (rechnung OR *rechnung*)')
+  })
+
+  it('leaves a term shorter than its prefix search alone', () => {
+    expect(toPaperlessFullText('ab')).toBe('ab')
+  })
+
+  it('passes a query already written in Whoosh syntax through unchanged', () => {
+    expect(toPaperlessFullText('"exact phrase"')).toBe('"exact phrase"')
+    expect(toPaperlessFullText('title:foo')).toBe('title:foo')
+    expect(toPaperlessFullText('foo*')).toBe('foo*')
+    expect(toPaperlessFullText('(foo OR bar)')).toBe('(foo OR bar)')
+    expect(toPaperlessFullText('foo AND bar')).toBe('foo AND bar')
+  })
+
+  it('strips syntax characters from plain terms', () => {
+    expect(toPaperlessFullText('^zeug~nis!')).toBe('(zeugnis OR *zeugnis*)')
+    expect(toPaperlessFullText('-zeugnis')).toBe('(zeugnis OR *zeugnis*)')
   })
 })

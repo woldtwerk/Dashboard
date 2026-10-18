@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { useDebounceFn, useInfiniteScroll, useIntersectionObserver, useIntervalFn, useNow } from '@vueuse/core'
 import { addDays, addMonths, format, startOfDay, startOfMonth } from 'date-fns'
-import type { Calendar, CalendarEvent, CalendarEventInput, CalendarList, CalendarSyncStatus, EventScope } from '#layers/calendar/shared/types/calendar'
+import type { Calendar, CalendarEvent, CalendarEventInput, CalendarList, CalendarSearchResult, CalendarSyncStatus, EventScope } from '#layers/calendar/shared/types/calendar'
+import { parseEntityKey } from '#layers/core/shared/entities'
+import { highlightToHtml } from '#layers/core/shared/highlight'
 
 useSeoMeta({ title: 'Calendar' })
 
@@ -37,6 +39,67 @@ const viewState = computed(() => viewFromQuery(route.query, timeZone.value))
 const view = computed(() => viewState.value.view)
 const anchor = computed(() => viewState.value.date)
 const window = computed(() => viewWindow(view.value, anchor.value, timeZone.value))
+
+// --- Search ---------------------------------------------------------------
+
+// The toolbar's search lives in the URL (`?q=`), so a result list can be linked
+const searchQuery = computed(() => queryString('q'))
+const searchInput = ref(searchQuery.value ?? '')
+
+watch(searchInput, useDebounceFn((value: string) => {
+  const q = value.trim()
+  if (q === (searchQuery.value ?? '')) {
+    return
+  }
+  updateQuery({ q: q || null })
+}, 250))
+
+watch(searchQuery, (value) => {
+  if ((value ?? '') !== searchInput.value.trim()) {
+    searchInput.value = value ?? ''
+  }
+})
+
+/** Esc and the clear button leave the result list at once, without the debounce */
+function clearSearch() {
+  searchInput.value = ''
+  if (searchQuery.value) {
+    updateQuery({ q: null })
+  }
+}
+
+const { data: searchResults, status: searchStatus } = await useFetch<CalendarSearchResult[]>('/api/calendar/search', {
+  key: 'calendar-search',
+  query: computed(() => ({ q: searchQuery.value ?? '' })),
+  default: () => []
+})
+
+function searchHitTime(hit: CalendarSearchResult): string {
+  const date = zoned(new Date(hit.start), timeZone.value)
+  return hit.allDay ? format(date, 'EEE d MMM') : `${format(date, 'EEE d MMM')}, ${format(date, 'HH:mm')}`
+}
+
+/** Jump to the occurrence's date and open the event; the editor fills once loaded */
+async function openSearchHit(hit: CalendarSearchResult) {
+  const ref = parseEntityKey(hit.ref)
+  const [, uid, recurrenceId] = (ref?.id ?? '').split('|')
+  if (!uid) {
+    return
+  }
+
+  const start = new Date(hit.start)
+  if (view.value === 'month') {
+    updateQuery({ q: null })
+    await revealMonth(startOfMonth(zoned(start, timeZone.value)), true)
+  } else {
+    updateQuery({ q: null, date: dateKey(start, timeZone.value) })
+    await nextTick()
+    await refreshEvents()
+  }
+
+  await nextTick()
+  updateQuery({ event: uid, recurrence: recurrenceId || null })
+}
 
 // The month view scrolls through weeks continuously, so its grid comes from a
 // loaded range rather than from the anchor date
@@ -695,17 +758,37 @@ function openEvent(event: CalendarEvent) {
   updateQuery({ event: event.uid, recurrence: event.recurrenceId ?? null })
 }
 
+// The key the form was last filled for; a deep link or a search hit sets
+// `event` before its window has loaded, so the fill happens when it arrives.
+const loadedEditorKey = ref<string | null>(null)
+
+function fillEditor(uid: string, recurrence: string | null | undefined): boolean {
+  const event = events.value.find(item => isSelectedEvent(item, uid, recurrence ?? undefined))
+  if (!event) {
+    return false
+  }
+
+  Object.assign(form, fromEvent(event))
+  loadedEditorKey.value = `${uid}@${recurrence ?? ''}`
+  return true
+}
+
 watch([editorKey, recurrenceKey], ([key, recurrence]) => {
   scope.value = 'one'
+  loadedEditorKey.value = null
   if (key === 'new') {
     resetForm(pendingDay.value, pendingHour.value)
     return
   }
   if (key) {
-    const event = events.value.find(item => isSelectedEvent(item, key, recurrence))
-    if (event) {
-      Object.assign(form, fromEvent(event))
-    }
+    fillEditor(key, recurrence)
+  }
+})
+
+watch(events, () => {
+  const key = editorKey.value
+  if (key && key !== 'new' && loadedEditorKey.value !== `${key}@${recurrenceKey.value ?? ''}`) {
+    fillEditor(key, recurrenceKey.value)
   }
 })
 
@@ -889,21 +972,43 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
       </template>
     </UDashboardNavbar>
 
-    <UDashboardToolbar v-if="calendars.length > 1">
+    <UDashboardToolbar>
       <div class="flex flex-wrap items-center gap-2">
-        <UButton
-          v-for="calendar in calendars"
-          :key="calendar.url"
-          :label="calendar.name"
+        <UInput
+          v-model="searchInput"
+          icon="i-lucide-search"
+          placeholder="Search events…"
           size="xs"
-          :color="calendar.hidden ? 'neutral' : 'primary'"
-          :variant="calendar.hidden ? 'ghost' : 'soft'"
-          @click="toggleCalendar(calendar)"
+          class="min-w-40 flex-1 sm:max-w-72"
+          @keydown.esc="clearSearch"
         >
-          <template #leading>
-            <span class="size-2.5 rounded-full" :style="{ backgroundColor: calendar.color || 'currentColor' }" />
+          <template v-if="searchInput" #trailing>
+            <UButton
+              icon="i-lucide-x"
+              color="neutral"
+              variant="link"
+              size="xs"
+              aria-label="Clear search"
+              @click="clearSearch"
+            />
           </template>
-        </UButton>
+        </UInput>
+
+        <template v-if="calendars.length > 1">
+          <UButton
+            v-for="calendar in calendars"
+            :key="calendar.url"
+            :label="calendar.name"
+            size="xs"
+            :color="calendar.hidden ? 'neutral' : 'primary'"
+            :variant="calendar.hidden ? 'ghost' : 'soft'"
+            @click="toggleCalendar(calendar)"
+          >
+            <template #leading>
+              <span class="size-2.5 rounded-full" :style="{ backgroundColor: calendar.color || 'currentColor' }" />
+            </template>
+          </UButton>
+        </template>
       </div>
     </UDashboardToolbar>
 
@@ -916,6 +1021,42 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
       variant="naked"
       class="py-12"
     />
+
+    <!-- Search results replace the grid while a query is set -->
+    <div v-else-if="searchQuery" class="min-h-0 flex-1 overflow-y-auto">
+      <div v-if="searchStatus === 'pending' && !searchResults.length" class="flex items-center justify-center p-10">
+        <UIcon name="i-lucide-loader-circle" class="size-6 animate-spin text-dimmed" />
+      </div>
+
+      <UEmpty
+        v-else-if="!searchResults.length"
+        icon="i-lucide-search-x"
+        title="No matches"
+        :description="`Nothing matches “${searchQuery}”.`"
+        variant="naked"
+        class="py-12"
+      />
+
+      <ul v-else class="divide-y divide-default">
+        <li v-for="hit in searchResults" :key="hit.ref">
+          <button
+            type="button"
+            class="flex w-full items-start gap-3 px-4 py-2 text-left hover:bg-elevated"
+            @click="openSearchHit(hit)"
+          >
+            <span class="mt-1.5 size-2.5 shrink-0 rounded-full" :style="{ backgroundColor: colorOf(hit.calendar) || 'currentColor' }" />
+            <span class="w-36 shrink-0 pt-0.5 text-xs text-muted">{{ searchHitTime(hit) }}</span>
+            <span class="min-w-0 flex-1">
+              <!-- eslint-disable-next-line vue/no-v-html -- highlightToHtml escapes the summary -->
+              <span class="block truncate font-medium" v-html="highlightToHtml(hit.summaryHighlight ?? hit.summary)" />
+              <!-- eslint-disable-next-line vue/no-v-html -- highlightToHtml escapes the excerpt -->
+              <span v-if="hit.snippet" class="block truncate text-xs text-muted" v-html="highlightToHtml(hit.snippet)" />
+              <span v-if="hit.location" class="block truncate text-xs text-dimmed">{{ hit.location }}</span>
+            </span>
+          </button>
+        </li>
+      </ul>
+    </div>
 
     <!-- Month -->
     <div v-else-if="view === 'month'" class="flex min-h-0 flex-1 flex-col">

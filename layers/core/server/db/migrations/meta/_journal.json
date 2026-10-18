@@ -68,8 +68,15 @@
     {
       "idx": 9,
       "version": "6",
-      "when": 1792353038679,
-      "tag": "0009_parched_silvermane",
+      "when": 1792352930655,
+      "tag": "0009_chilly_thunderbolt",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1792353794202,
+      "tag": "0010_nifty_talos",
       "breakpoints": true
     }
   ]

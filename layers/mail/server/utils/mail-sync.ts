@@ -6,6 +6,7 @@ import { diffMailboxState } from '../mail-index/diff'
 import { mailDocumentId, toMailDocument } from '../mail-index/document'
 import { mailIndexStateIsCurrent, MAIL_INDEX_SCHEMA_VERSION } from '../mail-index/version'
 import { newMailNotification } from './mail-notifications'
+import { backfillMailboxStreamKeys } from './mail-stream-backfill'
 import type { MailProvider } from './mail-provider'
 import type { MailSearchIndex } from './mail-search-index'
 
@@ -164,6 +165,10 @@ export async function syncMailService(service: string): Promise<boolean> {
           })
         }
 
+        // Mail indexed before the stream keys existed is fixed up once per
+        // mailbox, still under the sync lock, before the run is reported done
+        changed += await backfillStreams({ service, provider, index, logger, renew })
+
         await notifyNewMail(service, newInbox)
         await publishDomainEvent({ domain: 'mail', service, type: 'synced' })
         ok = true
@@ -288,6 +293,49 @@ async function syncMailbox({ service, mailbox, provider, index, renew, logger, o
 
   if (diff.removed.length || diff.changed.length || diff.added.length) {
     await publishDomainEvent({ domain: 'mail', service, type: 'changed', resource: path })
+  }
+
+  return changed
+}
+
+/**
+ * Backfills the stream keys of mail indexed before the stream keys existed.
+ * One run per mailbox, tracked in `mail_index_mailboxes`, so an interrupted run
+ * resumes at the next sync without a full re-index. Never fails the sync: a
+ * mailbox that cannot be fetched is retried on the next run.
+ */
+async function backfillStreams({ service, provider, index, renew, logger }: {
+  service: string
+  provider: MailProvider
+  index: MailSearchIndex
+  renew: () => Promise<boolean>
+  logger: SyncLogger
+}): Promise<number> {
+  const db = await useDb()
+  const mailboxes = await db.select({ mailbox: mailIndexMailboxes.mailbox }).from(mailIndexMailboxes)
+    .where(and(eq(mailIndexMailboxes.service, service), eq(mailIndexMailboxes.streamsBackfilled, 0)))
+
+  let changed = 0
+
+  for (const { mailbox } of mailboxes) {
+    const uids = (await db.select({ uid: mailIndexMessages.uid }).from(mailIndexMessages)
+      .where(and(eq(mailIndexMessages.service, service), eq(mailIndexMessages.mailbox, mailbox))))
+      .map(row => row.uid)
+
+    try {
+      const result = await backfillMailboxStreamKeys({ service, mailbox, uids, provider, index, renew })
+      changed += result.updated
+
+      if (!result.complete) {
+        logger.warn('Stream backfill lost the sync lock', { mailbox })
+        break
+      }
+
+      await db.update(mailIndexMailboxes).set({ streamsBackfilled: 1 })
+        .where(and(eq(mailIndexMailboxes.service, service), eq(mailIndexMailboxes.mailbox, mailbox)))
+    } catch (error) {
+      logger.warn('Stream backfill failed', { mailbox, error: errorMessage(error) })
+    }
   }
 
   return changed

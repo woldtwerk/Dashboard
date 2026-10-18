@@ -10,6 +10,8 @@ export const mailIndexMailboxes = sqliteTable('mail_index_mailboxes', {
   complete: integer('complete', { mode: 'boolean' }).notNull().default(false),
   /** Index document shape last written for this mailbox; a lower one is rebuilt once */
   schemaVersion: integer('schema_version').notNull().default(0),
+  /** One-time stream-key header backfill done for this mailbox (0 until then) */
+  streamsBackfilled: integer('streams_backfilled').notNull().default(0),
   syncedAt: integer('synced_at', { mode: 'timestamp_ms' })
 }, table => [
   primaryKey({ columns: [table.service, table.mailbox] })

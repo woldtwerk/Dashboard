@@ -13,6 +13,10 @@ export interface MailDocument {
   messageId: string
   /** Conversation keys; mails sharing one belong to the same conversation */
   conversationKeys: string[]
+  /** Normalized List-Id; a mailing list mail carries it, for stream filters */
+  listId?: string
+  /** Human readable List-Id description, for the stream label */
+  listName?: string
   subject: string
   /** Searchable sender line, e.g. "Alice <alice@example.com>" */
   fromText: string
@@ -93,6 +97,8 @@ export function toMailDocument(service: string, mailbox: string, message: MailMe
     uid: message.uid,
     messageId: message.messageId || id,
     conversationKeys: conversationKeys(message),
+    listId: message.listId,
+    listName: message.listName,
     subject: message.subject,
     fromText: message.from.map(formatAddress).join(', '),
     fromTerms: senderTerms(message.from),

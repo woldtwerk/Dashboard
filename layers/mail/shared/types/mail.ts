@@ -39,6 +39,10 @@ export interface MailSummary {
    * conversation share at least one key, so grouping is engine-independent.
    */
   conversationKeys?: string[]
+  /** Normalized List-Id (the part in `<>`, lower-cased); groups a mailing list */
+  listId?: string
+  /** Human readable List-Id description, e.g. "Drupal Security News" */
+  listName?: string
 }
 
 export interface MailMessage extends MailSummary {
@@ -48,12 +52,39 @@ export interface MailMessage extends MailSummary {
   inReplyTo?: string
   /** Message-ID chain this mail belongs to, oldest first */
   references?: string[]
+  /** Normalized List-Id (the part in `<>`, lower-cased); groups a mailing list */
+  listId?: string
+  /** Human readable List-Id description, e.g. "Drupal Security News" */
+  listName?: string
+  /**
+   * Whether the mail looks like bulk or notification mail rather than personal
+   * correspondence: List-Unsubscribe, a bulk Precedence, an Auto-Submitted
+   * other than `no`, or a machine sender such as `no-reply@`.
+   */
+  bulk?: boolean
   to: MailAddress[]
   cc: MailAddress[]
   /** Reply-To header; a reply goes here instead of the From address */
   replyTo?: MailAddress[]
   text?: string
   html?: string
+}
+
+/**
+ * The stream headers of one message: enough to derive its `list:`/`from:`
+ * conversation key without parsing the body. A provider returns these for the
+ * backfill, which only needs the headers.
+ */
+export interface MailStreamHeader {
+  uid: number
+  /** Envelope senders; the `from:` key and the fallback label use them */
+  from: MailAddress[]
+  /** Normalized List-Id (the part in `<>`, lower-cased) */
+  listId?: string
+  /** Human readable List-Id description */
+  listName?: string
+  /** Whether the mail looks like bulk or notification mail */
+  bulk: boolean
 }
 
 /** One mail conversation as the list shows it, without the individual mails */

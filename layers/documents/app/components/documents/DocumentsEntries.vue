@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { DocumentsDocument } from '#layers/documents/shared/types/documents'
 import { documentIcon, formatDate } from '#layers/documents/shared/documents-format'
+import { highlightToHtml } from '#layers/core/shared/highlight'
 
 const props = defineProps<{
   documents: DocumentsDocument[]
@@ -71,6 +72,8 @@ function onSelect(document: DocumentsDocument, event: MouseEvent) {
         <p class="line-clamp-2 text-sm font-medium">
           {{ document.title }}
         </p>
+        <!-- eslint-disable-next-line vue/no-v-html -- highlightToHtml escapes the excerpt -->
+        <p v-if="document.snippet" class="line-clamp-2 text-xs text-muted" v-html="highlightToHtml(document.snippet)" />
         <p class="text-xs text-muted">
           {{ formatDate(document.created) }}
         </p>
@@ -136,9 +139,13 @@ function onSelect(document: DocumentsDocument, event: MouseEvent) {
             >
           </td>
           <td class="p-2">
-            <div class="flex items-center gap-2">
-              <UIcon :name="documentIcon(document)" class="size-4 shrink-0 text-muted" />
-              <span class="line-clamp-1 font-medium">{{ document.title }}</span>
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <UIcon :name="documentIcon(document)" class="size-4 shrink-0 text-muted" />
+                <span class="line-clamp-1 font-medium">{{ document.title }}</span>
+              </div>
+              <!-- eslint-disable-next-line vue/no-v-html -- highlightToHtml escapes the excerpt -->
+              <p v-if="document.snippet" class="line-clamp-2 text-xs text-muted" v-html="highlightToHtml(document.snippet)" />
             </div>
           </td>
           <td class="hidden p-2 text-muted lg:table-cell">
