@@ -263,8 +263,8 @@ function deleteFor(value: string) {
           </div>
         </div>
 
-        <div v-if="isPending(item.value)" class="overflow-y-auto rounded border border-default/60">
-          <MailBody :text="pending?.text" class="min-h-24" />
+        <div v-if="isPending(item.value)" class="rounded border border-default/60">
+          <MailBody :text="pending?.text" />
         </div>
 
         <div v-else-if="loading[item.value] && !messageFor(item.value)" class="flex items-center justify-center p-6">
@@ -289,7 +289,7 @@ function deleteFor(value: string) {
             :actions="[{ label: 'Load images', color: 'neutral', variant: 'outline', onClick: () => allowRemote(item.value) }]"
             orientation="horizontal"
           />
-          <div class="h-96 overflow-y-auto rounded border border-default/60">
+          <div class="rounded border border-default/60">
             <MailBody
               :html="messageFor(item.value)?.html"
               :text="messageFor(item.value)?.text"
