@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { addDays, format, parseISO, startOfDay } from 'date-fns'
-import { useDebounceFn, useIntervalFn, useNow } from '@vueuse/core'
+import { useDebounceFn } from '@vueuse/core'
 import type { TableColumn } from '@nuxt/ui'
 import type { ActivityDay, DashboardMetric, DashboardSeries, ServiceStatus } from '#layers/core/shared/types/dashboard'
 import type { LogEntry } from '#layers/core/shared/types/logs'
@@ -11,7 +11,7 @@ useSeoMeta({ title: 'Home' })
 
 const route = useRoute()
 const router = useRouter()
-const now = useNow({ scheduler: callback => useIntervalFn(callback, 30_000) })
+const now = useDashboardNow()
 
 // --- Range (URL state) ---
 
@@ -67,12 +67,17 @@ const { data: activity, refresh: refreshActivity } = useFetch<ActivityDay[]>('/a
   default: () => []
 })
 
-const sync = computed(() => syncDurationRows(activity.value))
+const activityDays = computed(() => {
+  const domains = activityDomains(activity.value)
+  return fillActivityDays(activity.value, days.value, now.value, domains)
+})
+
+const sync = computed(() => syncDurationRows(activityDays.value))
 const syncSeries = computed<LineChartSeries[]>(() => sync.value.domains
-  .map(domain => ({ key: domain, label: domain, color: domainColor(domain) })))
+  .map(domain => ({ key: domain, label: domainLabel(domain), color: domainColor(domain) })))
 const syncHasData = computed(() => sync.value.rows.some(row => Object.values(row.values).some(value => value != null)))
 
-const warningRows = computed(() => warningErrorRows(activity.value))
+const warningRows = computed(() => warningErrorRows(activityDays.value))
 const warningSeries: StackedChartSeries[] = [
   { key: 'warnings', label: 'Warnings', color: statusColor('warning'), icon: 'i-lucide-triangle-alert' },
   { key: 'errors', label: 'Errors', color: statusColor('critical'), icon: 'i-lucide-circle-alert' }
@@ -128,7 +133,7 @@ const documentsRows = computed(() => seriesTableRows(documentsSeries.value).map(
 
 const syncColumns = computed<TableColumn<Record<string, unknown>>[]>(() => [
   { accessorKey: 'date', header: 'Date' },
-  ...sync.value.domains.map(domain => ({ accessorKey: domain, header: domain }))
+  ...sync.value.domains.map(domain => ({ accessorKey: domain, header: domainLabel(domain) }))
 ])
 const syncRows = computed(() => sync.value.rows.map(row => ({
   date: dayLabel(row.date),
@@ -253,6 +258,7 @@ useDomainEvents({}, (event) => {
                 :points="mailPoints"
                 color="var(--chart-mail)"
                 label="Mail received per day"
+                integer-y
                 :format-tick="dayLabel"
                 :format-tooltip="mailTooltip"
               />
@@ -274,6 +280,7 @@ useDomainEvents({}, (event) => {
                 :points="documentsPoints"
                 color="var(--chart-documents)"
                 label="Documents added per week"
+                integer-y
                 :tick-every="1"
                 :format-tick="dayLabel"
                 :format-tooltip="mailTooltip"
@@ -316,6 +323,7 @@ useDomainEvents({}, (event) => {
                 :rows="warningRows"
                 :series="warningSeries"
                 label="Warnings and errors per day"
+                integer-y
                 :tick-every="2"
                 :format-tick="dayLabel"
                 :format-tooltip="warningTooltip"

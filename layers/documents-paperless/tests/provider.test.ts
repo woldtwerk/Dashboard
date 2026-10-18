@@ -127,11 +127,14 @@ describe('createPaperlessProvider', () => {
     expect(added.url).toContain('page_size=1')
   })
 
-  it('pings the API root', async () => {
+  it('pings the documents list instead of the API root', async () => {
     const calls = setupFetch()
     const provider = createPaperlessProvider({ url: 'http://paperless:8000', token: 'secret' })
 
     await expect(provider.ping()).resolves.toBeUndefined()
-    expect(calls.some(call => call.url.endsWith('/api/'))).toBe(true)
+
+    const ping = calls.find(call => call.url.includes('/api/documents/?'))!
+    expect(ping.url).toContain('page_size=1')
+    expect(ping.url).toContain('fields=id')
   })
 })

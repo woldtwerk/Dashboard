@@ -5,6 +5,9 @@ export const LOG_CAP = 1000
 
 export const LOG_LEVELS: LogLevel[] = ['debug', 'info', 'warn', 'error']
 
+/** Select value standing in for "no service filter"; Reka rejects an empty one. */
+export const LOG_ALL_SERVICES = 'all'
+
 const LEVEL_SET = new Set<string>(LOG_LEVELS)
 
 /** URL state of the log view; `before` is the pagination cursor, not a filter. */
@@ -27,7 +30,7 @@ function asStringArray(value: unknown): string[] {
 export function logQueryFromRoute(query: Record<string, unknown>): LogFilters {
   return {
     domains: asStringArray(query.domain),
-    services: asStringArray(query.service),
+    services: asStringArray(query.service).filter(service => service !== LOG_ALL_SERVICES),
     levels: asStringArray(query.level).filter((level): level is LogLevel => LEVEL_SET.has(level)),
     q: typeof query.q === 'string' ? query.q : '',
     live: query.live !== '0'
@@ -37,11 +40,12 @@ export function logQueryFromRoute(query: Record<string, unknown>): LogFilters {
 /** Serialize the filters back into a route query; empty filters are omitted. */
 export function logQueryToRoute(filters: LogFilters): Record<string, string | string[]> {
   const query: Record<string, string | string[]> = {}
+  const services = filters.services.filter(service => service !== LOG_ALL_SERVICES)
   if (filters.domains.length) {
     query.domain = filters.domains
   }
-  if (filters.services.length) {
-    query.service = filters.services
+  if (services.length) {
+    query.service = services
   }
   if (filters.levels.length) {
     query.level = filters.levels

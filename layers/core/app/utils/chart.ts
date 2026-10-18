@@ -8,9 +8,49 @@ export function domainColor(domain: string): string {
   return `var(--chart-${DOMAIN_COLOR_TOKENS.has(domain) ? domain : 'core'})`
 }
 
+/** Display name of a domain, e.g. `mail` → `Mail`. */
+export function domainLabel(domain: string): string {
+  return domain ? domain.charAt(0).toUpperCase() + domain.slice(1) : ''
+}
+
 /** Status token color, e.g. for the service health row and log level badges. */
 export function statusColor(status: 'good' | 'warning' | 'serious' | 'critical'): string {
   return `var(--status-${status})`
+}
+
+/** A nice integer tick step, roughly `raw` wide, from the 1/2/5 ladder. */
+function niceIntegerStep(raw: number): number {
+  const power = 10 ** Math.floor(Math.log10(raw))
+  const normalized = raw / power
+
+  if (normalized <= 1) {
+    return power
+  }
+  if (normalized <= 2) {
+    return 2 * power
+  }
+  if (normalized <= 5) {
+    return 5 * power
+  }
+  return 10 * power
+}
+
+/**
+ * Explicit integer tick values for a count axis. Up to a maximum of 5 every
+ * integer gets its own tick; above that the ticks use a nice integer step.
+ */
+export function integerTicks(max: number): number[] {
+  const top = Number.isFinite(max) ? Math.max(0, Math.ceil(max)) : 0
+  if (top <= 5) {
+    return Array.from({ length: top + 1 }, (_, index) => index)
+  }
+
+  const step = niceIntegerStep(top / 5)
+  const ticks: number[] = []
+  for (let value = 0; value <= top; value += step) {
+    ticks.push(value)
+  }
+  return ticks
 }
 
 export const CHART_RANGES = [7, 30, 90] as const

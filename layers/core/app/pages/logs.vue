@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useDebounceFn, useIntervalFn, useNow } from '@vueuse/core'
+import { useDebounceFn } from '@vueuse/core'
 import type { TableColumn } from '@nuxt/ui'
 import type { LogEntry, LogLevel } from '#layers/core/shared/types/logs'
 import type { LogFilters } from '../utils/logs'
@@ -9,7 +9,7 @@ useSeoMeta({ title: 'Logs' })
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
-const now = useNow({ scheduler: callback => useIntervalFn(callback, 30_000) })
+const now = useDashboardNow()
 
 const PAGE_SIZE = 100
 
@@ -24,7 +24,7 @@ function update(patch: Partial<LogFilters>) {
 const { data: services } = await useServices()
 
 const domainItems = computed(() => [...new Set(services.value.map(service => service.domain))].map(domain => ({ label: domain, value: domain })))
-const serviceItems = computed(() => [{ label: 'All services', value: '' }, ...services.value.map(service => ({ label: service.name, value: service.id }))])
+const serviceItems = computed(() => [{ label: 'All services', value: LOG_ALL_SERVICES }, ...services.value.map(service => ({ label: service.name, value: service.id }))])
 const levelItems = LOG_LEVELS.map(level => ({ label: logLevelMeta(level).label, value: level }))
 
 const domainSelection = computed({
@@ -32,8 +32,8 @@ const domainSelection = computed({
   set: (value: string[]) => update({ domains: value })
 })
 const serviceSelection = computed({
-  get: () => filters.value.services[0] ?? '',
-  set: (value: string) => update({ services: value ? [value] : [] })
+  get: () => filters.value.services[0] ?? LOG_ALL_SERVICES,
+  set: (value: string) => update({ services: value === LOG_ALL_SERVICES ? [] : [value] })
 })
 const levelSelection = computed({
   get: () => filters.value.levels,

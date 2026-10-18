@@ -7,6 +7,7 @@ import {
   listDashboardSeries,
   registerDashboardSource,
   resetDashboardSources,
+  shouldLogAgain,
   weekStart
 } from '../server/utils/dashboard'
 import type { ServiceInfo } from '../shared/types/setup'
@@ -170,6 +171,21 @@ describe('getDashboardSeries', () => {
 
   it('returns undefined for an unknown id', async () => {
     expect(await getDashboardSeries('unknown', 30)).toBeUndefined()
+  })
+})
+
+describe('shouldLogAgain', () => {
+  const interval = 5 * 60_000
+
+  it('logs without a previous failure and after the interval', () => {
+    expect(shouldLogAgain(undefined, 1_000, interval)).toBe(true)
+    expect(shouldLogAgain(null, 1_000, interval)).toBe(true)
+    expect(shouldLogAgain(1_000, 1_000 + interval, interval)).toBe(true)
+  })
+
+  it('stays quiet within the interval', () => {
+    expect(shouldLogAgain(1_000, 1_000 + interval - 1, interval)).toBe(false)
+    expect(shouldLogAgain(1_000, 2_000, interval)).toBe(false)
   })
 })
 

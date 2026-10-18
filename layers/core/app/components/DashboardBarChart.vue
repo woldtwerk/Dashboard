@@ -2,16 +2,19 @@
 import { VisAxis, VisCrosshair, VisStackedBar, VisTooltip, VisXYContainer } from '@unovis/vue'
 import { useElementSize } from '@vueuse/core'
 import type { BarChartPoint } from '../utils/chart'
+import { integerTicks } from '../utils/chart'
 
 const props = withDefaults(defineProps<{
   points: BarChartPoint[]
   color: string
   label: string
   tickEvery?: number
+  integerY?: boolean
   formatTick: (date: string) => string
   formatTooltip: (point: BarChartPoint) => string
 }>(), {
-  tickEvery: 7
+  tickEvery: 7,
+  integerY: false
 })
 
 const chartRef = useTemplateRef<HTMLElement>('chartRef')
@@ -29,6 +32,15 @@ function tickFormat(tick: number): string {
   const point = props.points[Math.round(tick)]
   return point ? props.formatTick(point.date) : ''
 }
+
+// Counts only: explicit integer ticks, every integer up to five
+const yTickValues = computed(() => {
+  if (!props.integerY) {
+    return undefined
+  }
+  const max = props.points.reduce((highest, point) => Math.max(highest, point.value), 0)
+  return integerTicks(max)
+})
 
 // Unovis takes the gap as a fraction of a step; keep it at 2px for any width
 const barPadding = computed(() => {
@@ -55,6 +67,7 @@ function template(point?: BarChartPoint): string {
         :y="y"
         :color="color"
         :bar-padding="barPadding"
+        :bar-max-width="24"
         :rounded-corners="4"
       />
 
@@ -72,10 +85,16 @@ function template(point?: BarChartPoint): string {
         :grid-line="true"
         :tick-line="false"
         :domain-line="false"
+        :tick-values="yTickValues"
         :num-ticks="4"
       />
 
-      <VisCrosshair :color="color" :template="template" />
+      <VisCrosshair
+        :x="x"
+        :y="y"
+        :color="color"
+        :template="template"
+      />
       <VisTooltip />
     </VisXYContainer>
   </div>

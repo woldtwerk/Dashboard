@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { useIntervalFn, useNow } from '@vueuse/core'
 import type { ServiceStatus } from '#layers/core/shared/types/dashboard'
 import { serviceHealthMeta, serviceStatusLabel } from '../utils/dashboard'
 
 const props = defineProps<{ services: ServiceStatus[] }>()
 
-const now = useNow({ scheduler: callback => useIntervalFn(callback, 60_000) })
+const now = useDashboardNow()
 
 const items = computed(() => props.services.map(service => ({
   service,

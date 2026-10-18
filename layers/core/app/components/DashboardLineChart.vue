@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { VisAxis, VisCrosshair, VisLine, VisTooltip, VisXYContainer, VisXYLabels } from '@unovis/vue'
+import { VisAxis, VisCrosshair, VisLine, VisScatter, VisTooltip, VisXYContainer, VisXYLabels } from '@unovis/vue'
 import { useElementSize } from '@vueuse/core'
 import type { LineChartRow, LineChartSeries } from '../utils/chart'
 
@@ -95,6 +95,16 @@ function template(row?: LineChartRow): string {
         :y="yFor(item.key)"
         :color="item.color"
         :line-width="2"
+      />
+
+      <!-- A marker per day, so a single day and a gap stay visible -->
+      <VisScatter
+        v-for="item in series"
+        :key="`points-${item.key}`"
+        :x="x"
+        :y="yFor(item.key)"
+        :color="item.color"
+        :size="8"
       />
 
       <VisXYLabels
