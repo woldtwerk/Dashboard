@@ -5,7 +5,12 @@ defineProps<{
   collapsed?: boolean
 }>()
 
+const emit = defineEmits<{
+  customize: []
+}>()
+
 const { user, clear } = useUserSession()
+const themeItems = useThemeMenuItems()
 const signingOut = ref(false)
 
 const initials = computed(() => (user.value?.name ?? '')
@@ -32,13 +37,23 @@ async function signOut() {
   await navigateTo('/login')
 }
 
-const items = computed<DropdownMenuItem[][]>(() => [[{
-  label: 'Sign out',
-  icon: 'i-lucide-log-out',
-  onSelect: () => {
-    void signOut()
-  }
-}]])
+const items = computed<DropdownMenuItem[][]>(() => [
+  ...themeItems.value,
+  [{
+    label: 'Customize menu',
+    icon: 'i-lucide-pencil',
+    onSelect: () => {
+      emit('customize')
+    }
+  }],
+  [{
+    label: 'Sign out',
+    icon: 'i-lucide-log-out',
+    onSelect: () => {
+      void signOut()
+    }
+  }]
+])
 </script>
 
 <template>
@@ -68,6 +83,18 @@ const items = computed<DropdownMenuItem[][]>(() => [[{
         <p class="truncate text-xs text-muted">
           {{ user?.email }}
         </p>
+      </div>
+    </template>
+
+    <template #chip-leading="{ item }">
+      <div class="inline-flex items-center justify-center shrink-0 size-5">
+        <span
+          class="rounded-full ring ring-bg bg-(--chip-light) dark:bg-(--chip-dark) size-2"
+          :style="{
+            '--chip-light': `var(--color-${(item as any).chip}-500)`,
+            '--chip-dark': `var(--color-${(item as any).chip}-400)`
+          }"
+        />
       </div>
     </template>
   </UDropdownMenu>

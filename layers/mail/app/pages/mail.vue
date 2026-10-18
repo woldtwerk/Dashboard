@@ -918,21 +918,24 @@ const isMobile = breakpoints.smaller('lg')
           size="xs"
           @click="openCompose('new')"
         />
-        <UTabs
-          v-if="indexAvailable"
-          v-model="selectedView"
-          :items="viewItems"
-          :content="false"
-          size="xs"
-        />
-        <UTabs
-          v-model="selectedTab"
-          :items="tabItems"
-          :content="false"
-          size="xs"
-        />
       </template>
     </UDashboardNavbar>
+
+    <UDashboardToolbar class="justify-start">
+      <UTabs
+        v-if="indexAvailable"
+        v-model="selectedView"
+        :items="viewItems"
+        :content="false"
+        size="xs"
+      />
+      <UTabs
+        v-model="selectedTab"
+        :items="tabItems"
+        :content="false"
+        size="xs"
+      />
+    </UDashboardToolbar>
 
     <UDashboardToolbar>
       <UInput

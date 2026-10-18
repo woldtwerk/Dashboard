@@ -208,18 +208,7 @@ function rename(key: string, label: string) {
           </div>
         </template>
         <template v-else>
-          <UTooltip text="Customize menu">
-            <UButton
-              icon="i-lucide-pencil"
-              aria-label="Customize menu"
-              color="neutral"
-              variant="ghost"
-              square
-              @click="editing = true"
-            />
-          </UTooltip>
-          <ThemeMenu :collapsed="collapsed" class="flex-1 min-w-0" />
-          <UserMenu :collapsed="collapsed" />
+          <UserMenu :collapsed="collapsed" @customize="editing = true" />
         </template>
       </template>
     </UDashboardSidebar>
