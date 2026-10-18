@@ -29,6 +29,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const service = body.service ? await getService(body.service) : undefined
+  assertSameConnector(service, connector.id)
   const values = mergeStoredSecrets(connector, body.values as SetupValues, service)
 
   try {

@@ -104,6 +104,13 @@ export async function getService(id: string, domain?: string): Promise<Service> 
   }
 }
 
+/** Reject a loaded service that belongs to another connector than the request names */
+export function assertSameConnector(service: Service | undefined, connectorId: string) {
+  if (service && service.connector !== connectorId) {
+    throw createError({ status: 400, statusText: 'The service belongs to another connector' })
+  }
+}
+
 export async function saveService(input: { id?: string, connector: Connector, name: string, values: SetupValues }): Promise<ServiceInfo> {
   const row = await upsertService(await useDb(), {
     id: input.id ?? randomUUID(),

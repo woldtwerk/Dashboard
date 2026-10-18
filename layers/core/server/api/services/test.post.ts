@@ -9,6 +9,7 @@ export default defineEventHandler(async (event) => {
   }))
   const connector = getConnector(body.connector)
   const service = body.service ? await getService(body.service) : undefined
+  assertSameConnector(service, connector.id)
   const values = await resolveSetupValues(connector, body.values, service)
 
   await connector.test?.(values, { serviceId: body.service })

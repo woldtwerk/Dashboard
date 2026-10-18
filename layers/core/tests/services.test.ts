@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mergeStoredSecrets } from '../server/utils/services'
+import { assertSameConnector, mergeStoredSecrets } from '../server/utils/services'
 import type { Connector, Service } from '../server/utils/services'
 
 const connector: Connector = {
@@ -47,5 +47,16 @@ describe('mergeStoredSecrets', () => {
   it('fills nothing without a stored service', () => {
     expect(mergeStoredSecrets(connector, { baseUrl: 'https://api.example.com/v1', apiKey: '' }))
       .toEqual({ baseUrl: 'https://api.example.com/v1', apiKey: '' })
+  })
+})
+
+describe('assertSameConnector', () => {
+  it('accepts a service of the connector and no service at all', () => {
+    expect(() => assertSameConnector(service, 'demo')).not.toThrow()
+    expect(() => assertSameConnector(undefined, 'demo')).not.toThrow()
+  })
+
+  it('rejects a service of another connector', () => {
+    expect(() => assertSameConnector(service, 'other')).toThrow('The service belongs to another connector')
   })
 })
