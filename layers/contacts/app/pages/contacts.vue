@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { breakpointsTailwind, refDebounced, useDebounceFn } from '@vueuse/core'
-import type { Contact, ContactInput, ContactList } from '#layers/contacts/shared/types/contacts'
+import type { Contact, ContactList } from '#layers/contacts/shared/types/contacts'
+import { contactDisplayName } from '../utils/contact-form'
+import type { ContactDraft } from '../utils/contact-form'
 
 defineOptions({ name: 'ContactsPage' })
 
@@ -25,7 +27,6 @@ function updateQuery(patch: Record<string, string | null>) {
 
 const { data: contactLists } = await useFetch<ContactList[]>('/api/contacts/addressbooks', { default: () => [] })
 const addressBooks = computed(() => contactLists.value.flatMap(list => list.addressBooks))
-const bookItems = computed(() => addressBooks.value.map(book => ({ label: book.name, value: book.url })))
 
 const { data: contacts, refresh } = await useFetch<Contact[]>('/api/contacts', { default: () => [] })
 
@@ -68,109 +69,32 @@ const selected = computed(() => {
 })
 const saving = ref(false)
 
-interface ContactForm {
-  addressBook: string
-  firstName: string
-  lastName: string
-  organization: string
-  jobTitle: string
-  birthday: string
-  notes: string
-  emails: { value: string, label: string }[]
-  phones: { value: string, label: string }[]
-  addresses: { street: string, city: string, country: string, label: string }[]
-}
-
-const form = reactive<ContactForm>({
-  addressBook: '',
-  firstName: '',
-  lastName: '',
-  organization: '',
-  jobTitle: '',
-  birthday: '',
-  notes: '',
-  emails: [],
-  phones: [],
-  addresses: []
-})
-
-function reset(addressBook?: string) {
-  Object.assign(form, {
-    addressBook: addressBook ?? addressBooks.value[0]?.url ?? '',
-    firstName: '',
-    lastName: '',
-    organization: '',
-    jobTitle: '',
-    birthday: '',
-    notes: '',
-    emails: [{ value: '', label: '' }],
-    phones: [{ value: '', label: '' }],
-    addresses: []
-  })
-}
+const contactForm = useTemplateRef<{
+  toDraft: () => ContactDraft
+  canSave: boolean
+  submit: () => void
+}>('contactForm')
 
 function openContact(contact: Contact) {
   updateQuery({ contact: contact.uid })
 }
 
 function openNew() {
-  reset()
   updateQuery({ contact: 'new' })
 }
 
-watch(editorKey, (key) => {
-  if (key === 'new') {
-    reset()
+async function save() {
+  const draft = contactForm.value?.toDraft()
+  if (!draft) {
     return
   }
-  const contact = key ? contacts.value.find(item => item.uid === key) : undefined
-  if (contact) {
-    Object.assign(form, {
-      addressBook: contact.addressBook,
-      firstName: contact.firstName ?? '',
-      lastName: contact.lastName ?? '',
-      organization: contact.organization ?? '',
-      jobTitle: contact.jobTitle ?? '',
-      birthday: contact.birthday ?? '',
-      notes: contact.notes ?? '',
-      emails: contact.emails.length ? contact.emails.map(email => ({ value: email.value, label: email.label ?? '' })) : [{ value: '', label: '' }],
-      phones: contact.phones.length ? contact.phones.map(phone => ({ value: phone.value, label: phone.label ?? '' })) : [{ value: '', label: '' }],
-      addresses: contact.addresses.map(address => ({ street: address.street ?? '', city: address.city ?? '', country: address.country ?? '', label: address.label ?? '' }))
-    })
-  }
-})
-
-function toInput(): ContactInput {
-  return {
-    firstName: form.firstName.trim() || undefined,
-    lastName: form.lastName.trim() || undefined,
-    organization: form.organization.trim() || undefined,
-    jobTitle: form.jobTitle.trim() || undefined,
-    birthday: form.birthday || undefined,
-    notes: form.notes.trim() || undefined,
-    emails: form.emails.filter(email => email.value.trim()).map(email => ({ value: email.value.trim(), label: email.label.trim() || undefined })),
-    phones: form.phones.filter(phone => phone.value.trim()).map(phone => ({ value: phone.value.trim(), label: phone.label.trim() || undefined })),
-    addresses: form.addresses.filter(address => address.street || address.city || address.country).map(address => ({
-      street: address.street.trim() || undefined,
-      city: address.city.trim() || undefined,
-      country: address.country.trim() || undefined,
-      label: address.label.trim() || undefined
-    }))
-  }
-}
-
-function displayName(input: ContactInput): string {
-  return input.firstName || input.lastName ? [input.firstName, input.lastName].filter(Boolean).join(' ') : input.organization || 'Unnamed'
-}
-
-async function save() {
-  const input = toInput()
+  const input = draft.input
   saving.value = true
   try {
     const existing = selected.value
     if (existing) {
       const snapshot = { ...existing }
-      Object.assign(existing, input, { name: displayName(input) })
+      Object.assign(existing, input, { name: contactDisplayName(input) })
       try {
         await $fetch(`/api/contacts/${encodeURIComponent(existing.uid)}`, {
           method: 'PUT',
@@ -182,12 +106,12 @@ async function save() {
         throw new Error('update')
       }
     } else {
-      const service = addressBooks.value.find(book => book.url === form.addressBook)?.service
+      const service = addressBooks.value.find(book => book.url === draft.addressBook)?.service
       const temp: Contact = {
         uid: `temp-${Date.now()}`,
-        addressBook: form.addressBook,
+        addressBook: draft.addressBook,
         service,
-        name: displayName(input),
+        name: contactDisplayName(input),
         ...input,
         emails: input.emails,
         phones: input.phones,
@@ -195,7 +119,7 @@ async function save() {
       }
       contacts.value = [...contacts.value, temp]
       try {
-        const created = await $fetch<Contact>('/api/contacts', { method: 'POST', body: { ...input, service, addressBook: form.addressBook } })
+        const created = await $fetch<Contact>('/api/contacts', { method: 'POST', body: { ...input, service, addressBook: draft.addressBook } })
         contacts.value = contacts.value.map(contact => contact.uid === temp.uid ? created : contact)
         await refresh()
       } catch {
@@ -338,6 +262,7 @@ const isMobile = breakpoints.smaller('lg')
             {{ contactSubtitle(selected) }}
           </p>
         </div>
+        <GraphLinkButton :entity="{ type: 'contact', service: selected.service, id: selected.uid }" />
         <UButton
           label="Edit"
           icon="i-lucide-pencil"
@@ -398,117 +323,13 @@ const isMobile = breakpoints.smaller('lg')
 
   <USlideover v-model:open="isEditorOpen" :title="selected ? 'Edit contact' : 'New contact'">
     <template #body>
-      <div class="space-y-4">
-        <UFormField label="Address book" required>
-          <USelect v-model="form.addressBook" :items="bookItems" class="w-full" />
-        </UFormField>
-
-        <div class="grid grid-cols-2 gap-3">
-          <UFormField label="First name">
-            <UInput v-model="form.firstName" class="w-full" />
-          </UFormField>
-          <UFormField label="Last name">
-            <UInput v-model="form.lastName" class="w-full" />
-          </UFormField>
-        </div>
-
-        <div class="grid grid-cols-2 gap-3">
-          <UFormField label="Organization">
-            <UInput v-model="form.organization" class="w-full" />
-          </UFormField>
-          <UFormField label="Job title">
-            <UInput v-model="form.jobTitle" class="w-full" />
-          </UFormField>
-        </div>
-
-        <UFormField label="Birthday">
-          <UInput v-model="form.birthday" type="date" class="w-full" />
-        </UFormField>
-
-        <UFormField label="Email">
-          <div class="space-y-2">
-            <div v-for="(email, index) in form.emails" :key="index" class="flex gap-2">
-              <UInput
-                v-model="email.value"
-                type="email"
-                placeholder="name@example.com"
-                class="flex-1"
-              />
-              <UInput v-model="email.label" placeholder="label" class="w-24" />
-              <UButton
-                icon="i-lucide-x"
-                color="neutral"
-                variant="ghost"
-                aria-label="Remove email"
-                @click="form.emails.splice(index, 1)"
-              />
-            </div>
-            <UButton
-              label="Add email"
-              icon="i-lucide-plus"
-              size="xs"
-              color="neutral"
-              variant="ghost"
-              @click="form.emails.push({ value: '', label: '' })"
-            />
-          </div>
-        </UFormField>
-
-        <UFormField label="Phone">
-          <div class="space-y-2">
-            <div v-for="(phone, index) in form.phones" :key="index" class="flex gap-2">
-              <UInput v-model="phone.value" type="tel" class="flex-1" />
-              <UInput v-model="phone.label" placeholder="label" class="w-24" />
-              <UButton
-                icon="i-lucide-x"
-                color="neutral"
-                variant="ghost"
-                aria-label="Remove phone"
-                @click="form.phones.splice(index, 1)"
-              />
-            </div>
-            <UButton
-              label="Add phone"
-              icon="i-lucide-plus"
-              size="xs"
-              color="neutral"
-              variant="ghost"
-              @click="form.phones.push({ value: '', label: '' })"
-            />
-          </div>
-        </UFormField>
-
-        <UFormField label="Address">
-          <div class="space-y-2">
-            <div v-for="(address, index) in form.addresses" :key="index" class="space-y-2 rounded border border-default p-2">
-              <UInput v-model="address.street" placeholder="Street" class="w-full" />
-              <div class="flex gap-2">
-                <UInput v-model="address.city" placeholder="City" class="flex-1" />
-                <UInput v-model="address.country" placeholder="Country" class="flex-1" />
-                <UButton
-                  icon="i-lucide-x"
-                  color="neutral"
-                  variant="ghost"
-                  aria-label="Remove address"
-                  @click="form.addresses.splice(index, 1)"
-                />
-              </div>
-            </div>
-            <UButton
-              label="Add address"
-              icon="i-lucide-plus"
-              size="xs"
-              color="neutral"
-              variant="ghost"
-              @click="form.addresses.push({ street: '', city: '', country: '', label: '' })"
-            />
-          </div>
-        </UFormField>
-
-        <UFormField label="Notes">
-          <UTextarea v-model="form.notes" :rows="3" class="w-full" />
-        </UFormField>
-      </div>
+      <ContactForm
+        ref="contactForm"
+        :contact="selected"
+        :address-books="addressBooks"
+        :saving="saving"
+        :show-actions="false"
+      />
     </template>
 
     <template #footer>
@@ -532,7 +353,7 @@ const isMobile = breakpoints.smaller('lg')
           <UButton
             label="Save"
             :loading="saving"
-            :disabled="!form.addressBook || (!form.firstName && !form.lastName && !form.organization)"
+            :disabled="!contactForm?.canSave"
             @click="save"
           />
         </div>

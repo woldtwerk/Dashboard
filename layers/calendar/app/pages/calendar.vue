@@ -786,14 +786,22 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
     <template #footer>
       <div class="flex w-full items-center justify-between">
-        <UButton
-          v-if="editingEvent"
-          label="Delete"
-          icon="i-lucide-trash-2"
-          color="error"
-          variant="ghost"
-          @click="remove"
-        />
+        <div v-if="editingEvent" class="flex items-center gap-1">
+          <GraphLinkButton
+            :entity="{
+              type: 'event',
+              service: editingEvent.service,
+              id: `${editingEvent.calendar}|${editingEvent.uid}|${editingEvent.recurrenceId ?? ''}`
+            }"
+          />
+          <UButton
+            label="Delete"
+            icon="i-lucide-trash-2"
+            color="error"
+            variant="ghost"
+            @click="remove"
+          />
+        </div>
         <span v-else />
         <div class="flex gap-2">
           <UButton

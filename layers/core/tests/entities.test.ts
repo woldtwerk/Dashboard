@@ -92,9 +92,10 @@ describe('entityLink', () => {
       .toBe('/contacts?contact=card-123')
   })
 
-  it('opens a document by id', () => {
-    expect(entityLink({ type: 'document', service: 'paper', id: '42' })).toBe('/documents/42')
-    expect(entityLink({ type: 'document', service: 'paper', id: 'a/b' })).toBe('/documents/a%2Fb')
+  it('opens a document by id and passes its service', () => {
+    expect(entityLink({ type: 'document', service: 'paper', id: '42' })).toBe('/documents/42?service=paper')
+    expect(entityLink({ type: 'document', service: 'paper', id: 'a/b' })).toBe('/documents/a%2Fb?service=paper')
+    expect(entityLink({ type: 'document', id: '42' })).toBe('/documents/42?service=')
   })
 
   it('opens the folder that holds a drive file and selects it', () => {
