@@ -26,5 +26,10 @@ export default defineEventHandler(async (event) => {
 
   await provider.updateEvent(existing, edit, scope)
 
+  // Refetch the object, so the cache reflects the stored series or override
+  if (url) {
+    await refreshCalendarObject(service, calendar, url)
+  }
+
   return { ok: true }
 })

@@ -23,10 +23,11 @@ export default defineEventHandler(async (event) => {
   return results.flat().sort((a, b) => a.start.localeCompare(b.start))
 })
 
+// Reads never hit the CalDAV server once the service has synced; hidden
+// calendars are included, because the view decides which ones it draws.
 async function listServiceEvents(id: string, calendar: string | undefined, window: { start: string, end: string }): Promise<CalendarEvent[]> {
-  const provider = await useCalendarProvider(id)
-  const calendars = calendar ? [calendar] : (await provider.listCalendars()).map(item => item.url)
-  const lists = await Promise.all(calendars.map(url => provider.listEvents(url, window)))
+  await ensureCalendarSynced(id)
+  const calendars = calendar ? [calendar] : (await cachedCalendars(id)).map(item => item.url)
 
-  return lists.flat().map(item => ({ ...item, service: id }))
+  return cachedEvents(id, calendars, window)
 }

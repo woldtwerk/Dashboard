@@ -9,6 +9,10 @@ export interface Calendar {
   components?: string[]
   /** Hidden in the calendar view; persisted server side */
   hidden: boolean
+  /** Collection tag; changes whenever an object in the calendar changes */
+  ctag?: string
+  /** WebDAV sync token, when the server offers one */
+  syncToken?: string
   /** Service that owns the calendar */
   service: string
   serviceName?: string

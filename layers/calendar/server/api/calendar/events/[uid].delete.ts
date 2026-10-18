@@ -24,5 +24,14 @@ export default defineEventHandler(async (event) => {
 
   await provider.deleteEvent(existing, scope)
 
+  if (url) {
+    // Cancelling one occurrence leaves the object in place; deleting the series removes it
+    if (scope === 'one') {
+      await refreshCalendarObject(service, calendar, url)
+    } else {
+      await removeCachedObject(service, url)
+    }
+  }
+
   return { ok: true }
 })

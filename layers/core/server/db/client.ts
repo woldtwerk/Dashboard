@@ -3,9 +3,10 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { SQLInputValue } from 'node:sqlite'
 import { drizzle } from 'drizzle-orm/sqlite-proxy'
+import type { SqliteRemoteDatabase } from 'drizzle-orm/sqlite-proxy'
 import * as schema from './schema'
 
-export type Database = ReturnType<typeof createDatabase>
+export type Database = SqliteRemoteDatabase<typeof schema>
 
 /** Opens the SQLite file; call `enableWal()` when it's shared between cluster workers */
 export function openSqlite(path: string): DatabaseSync {
@@ -46,7 +47,10 @@ export function enableWal(sqlite: DatabaseSync): Promise<void> {
 }
 
 /** Drizzle on top of node:sqlite through the sqlite-proxy driver */
-export function createDatabase(sqlite: DatabaseSync) {
+export function createDatabase<TSchema extends Record<string, unknown> = typeof schema>(
+  sqlite: DatabaseSync,
+  dbSchema: TSchema = schema as unknown as TSchema
+) {
   return drizzle(async (query, params, method) => {
     const statement = sqlite.prepare(query)
     const args = params as SQLInputValue[]
@@ -64,5 +68,5 @@ export function createDatabase(sqlite: DatabaseSync) {
     }
 
     return { rows: statement.all(...args) as unknown as unknown[][] }
-  }, { schema })
+  }, { schema: dbSchema })
 }

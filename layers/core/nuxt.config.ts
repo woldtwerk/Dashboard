@@ -14,6 +14,10 @@ export default defineNuxtConfig({
     database: {
       // NUXT_DATABASE_PATH — SQLite file, relative to the working directory
       path: '.data/allmight.sqlite'
+    },
+    cache: {
+      // NUXT_CACHE_DIR — per-domain cache databases, rebuilt from their sources when deleted
+      dir: '.data/cache'
     }
   },
 

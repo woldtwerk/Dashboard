@@ -8,5 +8,10 @@ export default defineEventHandler(async (event) => {
   const provider = await useCalendarProvider(service)
   const created = await provider.createEvent(calendar, input)
 
+  // Refetch, so the next read sees exactly what the server stored
+  if (created.url) {
+    await refreshCalendarObject(service, calendar, created.url)
+  }
+
   return { ...created, service }
 })

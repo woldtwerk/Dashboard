@@ -5,6 +5,12 @@ export const calendarsQuerySchema = z.object({
   service: z.string().min(1).optional()
 })
 
+export const calendarVisibilitySchema = z.object({
+  service: z.string().min(1),
+  url: z.string().min(1),
+  hidden: z.boolean()
+})
+
 export const eventsQuerySchema = z.object({
   service: z.string().min(1).optional(),
   /** Calendar URL; without it every calendar of the service is listed */

@@ -25,11 +25,25 @@ function toDavSettings(values: SetupValues): DavSettings {
   }
 }
 
+/** One iCalendar object as the sync sees it; `data` is the raw object when fetched. */
+export interface RemoteCalendarObject {
+  url: string
+  etag?: string
+  data?: string
+}
+
 /** Port a calendar adapter implements; the generic CalDAV one is below. */
 export interface CalendarProvider {
   listCalendars(): Promise<Calendar[]>
   /** Events in the half-open window [start, end); recurrences are expanded */
   listEvents(calendarUrl: string, window: { start: string, end: string }): Promise<CalendarEvent[]>
+  /**
+   * Object hrefs and etags of a calendar, for the sync diff. Servers such as
+   * tsdav return the object data along with the etag, so it is passed on.
+   */
+  listObjectEtags(calendarUrl: string): Promise<RemoteCalendarObject[]>
+  /** Fetches the given objects in one multiget; used for changed objects only */
+  fetchObjects(calendarUrl: string, urls: string[]): Promise<RemoteCalendarObject[]>
   createEvent(calendarUrl: string, input: CalendarEventInput): Promise<CalendarEvent>
   /** Patch an existing object; `scope` picks the occurrence or the whole series */
   updateEvent(event: CalendarEvent, edit: EventEdit, scope: EventScope): Promise<void>
@@ -71,8 +85,19 @@ function toCalendar(collection: DAVCalendar, service: string): Calendar {
     color: collection.calendarColor,
     description: toText(collection.description),
     components: collection.components,
+    ctag: collection.ctag,
+    syncToken: collection.syncToken,
     hidden: false,
     service
+  }
+}
+
+/** tsdav returns the object data and etag together; keep both for the cache. */
+function toRemoteObject(object: { url: string, etag?: string, data?: unknown }): RemoteCalendarObject {
+  return {
+    url: object.url,
+    etag: object.etag,
+    data: object.data === undefined || object.data === null ? undefined : String(object.data)
   }
 }
 
@@ -164,6 +189,26 @@ export function createCalDavProvider(values: SetupValues, service = ''): Calenda
         etag: object.etag,
         calendar: calendar.url
       }, { start: new Date(window.start), end: new Date(window.end) }))
+    },
+
+    async listObjectEtags(calendarUrl) {
+      const client = await connect()
+      const calendar = await resolve(calendarUrl)
+      const objects = await client.fetchCalendarObjects({ calendar, urlFilter: () => true })
+
+      return objects.map(toRemoteObject)
+    },
+
+    async fetchObjects(calendarUrl, urls) {
+      if (!urls.length) {
+        return []
+      }
+
+      const client = await connect()
+      const calendar = await resolve(calendarUrl)
+      const objects = await client.fetchCalendarObjects({ calendar, objectUrls: urls, urlFilter: () => true })
+
+      return objects.map(toRemoteObject)
     },
 
     async createEvent(calendarUrl, input) {

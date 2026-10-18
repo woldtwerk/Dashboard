@@ -9,6 +9,7 @@
     "@nuxt/ui": "catalog:",
     "@vueuse/core": "catalog:",
     "date-fns": "catalog:",
+    "drizzle-orm": "catalog:",
     "ical.js": "catalog:",
     "tsdav": "catalog:",
     "zod": "catalog:"
