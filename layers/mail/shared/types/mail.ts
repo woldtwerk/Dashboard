@@ -9,6 +9,8 @@ export interface Mailbox {
   /** Hierarchy separator in `path`, e.g. "/" in "Folders/Work" */
   delimiter?: string
   specialUse?: string
+  /** A label repeats mail that is also filed in a real folder; not a folder of its own */
+  label?: boolean
   total: number
   unread: number
 }

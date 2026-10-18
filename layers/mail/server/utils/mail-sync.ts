@@ -18,6 +18,34 @@ const SKIPPED_SPECIAL_USE = new Set(['\\All', '\\Flagged'])
 
 const lockName = (service: string) => `mail-sync:${service}`
 
+/** Whether a folder only repeats mail stored elsewhere, so the sync does not index it */
+export function isSkippedMailbox(mailbox: Pick<Mailbox, 'specialUse'>): boolean {
+  return SKIPPED_SPECIAL_USE.has(mailbox.specialUse ?? '')
+}
+
+/** The folders the sync indexes; virtual folders are left to the folders they repeat */
+export function syncMailboxes(mailboxes: Mailbox[]): Mailbox[] {
+  return mailboxes.filter(mailbox => !isSkippedMailbox(mailbox))
+}
+
+/**
+ * The folders a cross-folder search covers: real folders only. Labels and the
+ * virtual folders repeat mail that a real folder already holds.
+ */
+export function searchableMailboxes(mailboxes: Mailbox[]): string[] {
+  return mailboxes
+    .filter(mailbox => !mailbox.label && !isSkippedMailbox(mailbox))
+    .map(mailbox => mailbox.path)
+}
+
+/**
+ * Indexed mailboxes the server no longer offers, or that are skipped now; the
+ * sync drops their rows, so a folder that became virtual is forgotten too.
+ */
+export function forgottenMailboxes(known: string[], mailboxes: Mailbox[]): string[] {
+  return known.filter(mailbox => !mailboxes.some(item => item.path === mailbox))
+}
+
 const chunk = <T>(items: T[], size: number): T[][] =>
   Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, (index + 1) * size))
 
@@ -55,12 +83,13 @@ export async function syncMailService(service: string): Promise<boolean> {
       try {
         const provider = await useMailProvider(service)
         const db = await useDb()
-        const mailboxes = (await provider.listMailboxes()).filter(mailbox => !SKIPPED_SPECIAL_USE.has(mailbox.specialUse ?? ''))
+        const mailboxes = syncMailboxes(await provider.listMailboxes())
         const newInbox: MailMessage[] = []
 
-        // Folders deleted on the server
+        // Folders the server no longer offers, and the ones that became
+        // virtual (Bridge's "All Mail"/"Starred"): drop their indexed rows
         const known = await db.select({ mailbox: mailIndexMailboxes.mailbox }).from(mailIndexMailboxes).where(eq(mailIndexMailboxes.service, service))
-        for (const { mailbox } of known.filter(row => !mailboxes.some(item => item.path === row.mailbox))) {
+        for (const mailbox of forgottenMailboxes(known.map(row => row.mailbox), mailboxes)) {
           await index.removeMailbox(service, mailbox)
           changed += await forgetMailbox(service, mailbox)
           await publishDomainEvent({ domain: 'mail', service, type: 'changed', resource: mailbox })
@@ -218,13 +247,25 @@ export async function requestMailSync(service: string) {
   }
 }
 
-/** Whether search for this mailbox can be answered by the index */
-export async function isMailboxIndexed(service: string, mailbox?: string): Promise<boolean> {
+/**
+ * Whether search can be answered by the index: for one mailbox, for a list of
+ * them (all have to be indexed and complete), or for every mailbox of the
+ * service when omitted.
+ */
+export async function isMailboxIndexed(service: string, mailboxes?: string | string[]): Promise<boolean> {
+  const list = typeof mailboxes === 'string' ? [mailboxes] : mailboxes
+  if (list && !list.length) {
+    return false
+  }
+
   const db = await useDb()
   const rows = await db.select({ complete: mailIndexMailboxes.complete }).from(mailIndexMailboxes)
-    .where(mailbox ? and(eq(mailIndexMailboxes.service, service), eq(mailIndexMailboxes.mailbox, mailbox)) : eq(mailIndexMailboxes.service, service))
+    .where(list ? and(eq(mailIndexMailboxes.service, service), inArray(mailIndexMailboxes.mailbox, list)) : eq(mailIndexMailboxes.service, service))
 
-  return rows.length > 0 && rows.every(row => row.complete)
+  // A requested mailbox with no row yet is not indexed, so every list entry needs its row
+  return list
+    ? rows.length === list.length && rows.every(row => row.complete)
+    : rows.length > 0 && rows.every(row => row.complete)
 }
 
 export interface MailIndexStatus {
