@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { breakpointsTailwind, refDebounced, useDebounceFn } from '@vueuse/core'
 import type { LocationQuery } from 'vue-router'
-import type { MailSummary } from '#layers/mail/shared/types/mail'
+import type { MailConversation, MailSummary } from '#layers/mail/shared/types/mail'
+import type { SetupState } from '#layers/core/shared/types/setup'
 
 useSeoMeta({ title: 'Mail' })
 
@@ -175,6 +176,73 @@ const currentIndex = computed(() => indexStatus.value?.find(item => item.service
 const indexAvailable = computed(() => !!indexStatus.value)
 const indexing = computed(() => !!currentIndex.value && (currentIndex.value.syncing || !currentIndex.value.complete))
 
+// Conversations view; the toggle only shows while a search index is configured
+const view = computed(() => mailViewFromQuery(route.query))
+const conversationKey = computed(() => mailConversationFromQuery(route.query))
+const showThreads = computed(() => indexAvailable.value && view.value === 'threads')
+
+const viewItems = [{
+  label: 'Mails',
+  value: 'mails'
+}, {
+  label: 'Conversations',
+  value: 'threads'
+}]
+
+const selectedView = computed({
+  get: () => view.value,
+  set: value => updateQuery(mailViewToQuery(value === 'threads' ? 'threads' : 'mails'))
+})
+
+// The account's own address, so a conversation can align own mails to the right
+const { data: serviceSetup } = await useFetch<SetupState>(() => `/api/services/${service.value}`, { lazy: true })
+const ownAddress = computed(() => String(serviceSetup.value?.values.user ?? '') || undefined)
+const sentMailboxes = computed(() => (folders.value.find(entry => entry.service.id === service.value)?.mailboxes ?? [])
+  .filter(item => item.specialUse === '\\Sent')
+  .map(item => item.path))
+
+const conversationParams = computed(() => ({
+  service: service.value,
+  mailbox: mailbox.value,
+  ...mailSearchToApiQuery(criteria.value),
+  limit: 50
+}))
+
+const { data: conversations, status: conversationsStatus, refresh: refreshConversations } = await useAsyncData<MailConversation[]>(
+  'mail-conversations',
+  // A mailbox that is not indexed yet answers 409 and has no conversations
+  () => $fetch<MailConversation[]>('/api/mail/conversations', { query: conversationParams.value }).catch(() => []),
+  { default: () => [], immediate: false }
+)
+
+// Fetch once the view is switched, and again whenever the filters change while it is open
+watch([showThreads, conversationParams], () => {
+  if (showThreads.value) {
+    refreshConversations()
+  }
+}, { immediate: true })
+
+function openConversation(key: string) {
+  updateQuery(mailConversationToQuery(key))
+}
+
+function closeConversation() {
+  updateQuery(mailConversationToQuery(null))
+}
+
+function prefetchConversation(key: string) {
+  $fetch(`/api/mail/conversations/${encodeURIComponent(key)}`, { query: { service: service.value } }).catch(() => {})
+}
+
+function openConversationMail(mail: MailSummary) {
+  updateQuery(mailSelectionToQuery({ uid: mail.uid, mailbox: mail.mailbox }, mailbox.value))
+}
+
+function onConversationSeen() {
+  refreshConversations()
+  refreshNuxtData('mail-folders')
+}
+
 const refreshListFromEvents = useDebounceFn(() => refresh(), 300)
 const refreshFoldersFromEvents = useDebounceFn(() => refreshNuxtData('mail-folders'), 300)
 
@@ -182,6 +250,9 @@ useDomainEvents({ domains: ['mail'] }, (event) => {
   const plan = mailRefreshFor(event, { service: service.value, mailbox: mailbox.value })
   if (plan.list) {
     refreshListFromEvents()
+    if (showThreads.value) {
+      refreshConversations()
+    }
   }
   if (plan.folders) {
     refreshFoldersFromEvents()
@@ -237,11 +308,11 @@ const selectedMail = computed<MailSummary | null>({
 
 const isMailPanelOpen = computed({
   get() {
-    return !!selectedMail.value
+    return !!selectedMail.value || (showThreads.value && !!conversationKey.value)
   },
   set(value: boolean) {
     if (!value) {
-      selectedMail.value = null
+      updateQuery({ uid: null, in: null, conversation: null })
     }
   }
 })
@@ -299,10 +370,17 @@ const isMobile = breakpoints.smaller('lg')
         <UDashboardSidebarCollapse />
       </template>
       <template #trailing>
-        <UBadge :label="mails.length" variant="subtle" />
+        <UBadge :label="showThreads ? conversations.length : mails.length" variant="subtle" />
       </template>
 
       <template #right>
+        <UTabs
+          v-if="indexAvailable"
+          v-model="selectedView"
+          :items="viewItems"
+          :content="false"
+          size="xs"
+        />
         <UTabs
           v-model="selectedTab"
           :items="tabItems"
@@ -470,43 +548,66 @@ const isMobile = breakpoints.smaller('lg')
       </UBadge>
     </div>
 
-    <UAlert
-      v-if="error"
-      color="error"
-      variant="subtle"
-      icon="i-lucide-circle-alert"
-      title="Could not load mail"
-      :description="error.statusMessage || error.message"
-      :actions="[{ label: 'Account settings', to: `/services/${service}`, color: 'error', variant: 'outline' }]"
-      class="m-4 w-auto"
-    />
-    <UEmpty
-      v-else-if="!mails.length && status !== 'pending'"
-      :icon="isFiltered ? 'i-lucide-search-x' : 'i-lucide-inbox'"
-      :title="isFiltered ? 'No matching messages' : 'No messages'"
-      :actions="isFiltered ? [{ label: 'Reset filters', color: 'neutral', variant: 'outline', onClick: resetFilters }] : undefined"
-      variant="naked"
-      class="py-12"
-    />
-    <MailList
-      v-else
-      v-model="selectedMail"
-      :mails="mails"
-      :show-mailbox="allFolders"
-      :mailbox-names="mailboxNames"
-    >
-      <template #more>
-        <div v-if="canLoadMore" class="p-4 text-center">
-          <UButton
-            label="Load more"
-            color="neutral"
-            variant="outline"
-            :loading="status === 'pending'"
-            @click="loadMore"
-          />
-        </div>
-      </template>
-    </MailList>
+    <template v-if="showThreads">
+      <div v-if="conversationsStatus === 'pending' && !conversations.length" class="flex items-center justify-center p-8">
+        <UIcon name="i-lucide-loader-circle" class="size-6 animate-spin text-dimmed" />
+      </div>
+      <UEmpty
+        v-else-if="!conversations.length"
+        icon="i-lucide-messages-square"
+        title="No conversations"
+        description="Nothing matches the current filters."
+        variant="naked"
+        class="py-12"
+      />
+      <MailConversationList
+        v-else
+        :conversations="conversations"
+        :selected-key="conversationKey"
+        :own-address="ownAddress"
+        @select="openConversation"
+        @prefetch="prefetchConversation"
+      />
+    </template>
+    <template v-else>
+      <UAlert
+        v-if="error"
+        color="error"
+        variant="subtle"
+        icon="i-lucide-circle-alert"
+        title="Could not load mail"
+        :description="error.statusMessage || error.message"
+        :actions="[{ label: 'Account settings', to: `/services/${service}`, color: 'error', variant: 'outline' }]"
+        class="m-4 w-auto"
+      />
+      <UEmpty
+        v-else-if="!mails.length && status !== 'pending'"
+        :icon="isFiltered ? 'i-lucide-search-x' : 'i-lucide-inbox'"
+        :title="isFiltered ? 'No matching messages' : 'No messages'"
+        :actions="isFiltered ? [{ label: 'Reset filters', color: 'neutral', variant: 'outline', onClick: resetFilters }] : undefined"
+        variant="naked"
+        class="py-12"
+      />
+      <MailList
+        v-else
+        v-model="selectedMail"
+        :mails="mails"
+        :show-mailbox="allFolders"
+        :mailbox-names="mailboxNames"
+      >
+        <template #more>
+          <div v-if="canLoadMore" class="p-4 text-center">
+            <UButton
+              label="Load more"
+              color="neutral"
+              variant="outline"
+              :loading="status === 'pending'"
+              @click="loadMore"
+            />
+          </div>
+        </template>
+      </MailList>
+    </template>
   </UDashboardPanel>
 
   <MailView
@@ -517,6 +618,17 @@ const isMobile = breakpoints.smaller('lg')
     @close="selectedMail = null"
     @mark-unread="markUnread"
   />
+  <MailConversation
+    v-else-if="showThreads && conversationKey && !isMobile"
+    :key="conversationKey"
+    :conversation-key="conversationKey"
+    :service="service"
+    :own-address="ownAddress"
+    :sent-mailboxes="sentMailboxes"
+    @open="openConversationMail"
+    @seen="onConversationSeen"
+    @close="closeConversation"
+  />
   <div v-else class="hidden lg:flex flex-1 items-center justify-center">
     <UIcon name="i-lucide-inbox" class="size-32 text-dimmed" />
   </div>
@@ -524,8 +636,19 @@ const isMobile = breakpoints.smaller('lg')
   <ClientOnly>
     <USlideover v-if="isMobile" v-model:open="isMailPanelOpen">
       <template #content>
+        <MailConversation
+          v-if="showThreads && conversationKey"
+          :key="conversationKey"
+          :conversation-key="conversationKey"
+          :service="service"
+          :own-address="ownAddress"
+          :sent-mailboxes="sentMailboxes"
+          @open="openConversationMail"
+          @seen="onConversationSeen"
+          @close="closeConversation"
+        />
         <MailView
-          v-if="selectedMail"
+          v-else-if="selectedMail"
           :key="selectedMail.uid"
           :mail="selectedMail"
           :service="service"

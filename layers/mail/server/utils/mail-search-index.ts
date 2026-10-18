@@ -9,6 +9,8 @@ export interface MailIndexQuery {
   mailbox?: string
   /** Normalized address that has to be on the mail as sender, recipient or in cc */
   participant?: string
+  /** Only mails filed under one of these conversation keys */
+  conversationKeys?: string[]
   search: MailSearch
   limit: number
   /** Skip this many best matches; for "load more" */

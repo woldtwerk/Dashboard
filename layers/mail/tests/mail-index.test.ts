@@ -45,6 +45,7 @@ describe('toMailDocument', () => {
       id: mailDocumentId('svc', 'INBOX', 42),
       service: 'svc',
       messageId: '<abc@stripe.com>',
+      conversationKeys: ['subj:receipts@mail.stripe.com:your receipt', 'id:abc@stripe.com'],
       fromText: 'Stripe, Inc. <Receipts@Mail.Stripe.com>',
       toText: 'Me <me@proton.me>, team@example.com',
       toList: message.to,

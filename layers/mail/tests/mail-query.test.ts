@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MailSummary } from '../shared/types/mail'
-import { isSelectedMail, mailListFromQuery, mailListToQuery, mailSearchFromQuery, mailSearchToApiQuery, mailSearchToQuery, mailSelectionFromQuery, mailSelectionToQuery } from '../app/utils/mail-query'
+import { isSelectedMail, mailConversationFromQuery, mailConversationToQuery, mailListFromQuery, mailListToQuery, mailSearchFromQuery, mailSearchToApiQuery, mailSearchToQuery, mailSelectionFromQuery, mailSelectionToQuery, mailViewFromQuery, mailViewToQuery } from '../app/utils/mail-query'
 
 const today = new Date('2026-10-16T12:00:00Z')
 
@@ -97,5 +97,24 @@ describe('mailSelection', () => {
     expect(isSelectedMail(mail(7, 'INBOX'), selection)).toBe(false)
     expect(isSelectedMail(mail(8, 'Folders/Work'), selection)).toBe(false)
     expect(isSelectedMail(mail(7, 'Folders/Work'), undefined)).toBe(false)
+  })
+})
+
+describe('mailView', () => {
+  it('reads and writes the conversations view', () => {
+    expect(mailViewFromQuery({})).toBe('mails')
+    expect(mailViewFromQuery({ view: 'threads' })).toBe('threads')
+    expect(mailViewFromQuery({ view: 'other' })).toBe('mails')
+    expect(mailViewToQuery('threads')).toEqual({ view: 'threads', conversation: null, uid: null, in: null })
+    expect(mailViewToQuery('mails')).toEqual({ view: null, conversation: null, uid: null, in: null })
+  })
+})
+
+describe('mailConversation', () => {
+  it('reads the open conversation and clears the mail selection when it changes', () => {
+    expect(mailConversationFromQuery({})).toBeUndefined()
+    expect(mailConversationFromQuery({ conversation: 'id:root@example.com' })).toBe('id:root@example.com')
+    expect(mailConversationToQuery('subj:a@b.com:hello world')).toEqual({ conversation: 'subj:a@b.com:hello world', uid: null, in: null })
+    expect(mailConversationToQuery(null)).toEqual({ conversation: null, uid: null, in: null })
   })
 })

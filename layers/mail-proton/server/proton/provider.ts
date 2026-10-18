@@ -14,12 +14,23 @@ async function toMailMessage(mailbox: string, message: FetchMessageObject): Prom
   return {
     ...toMailSummary(mailbox, message),
     messageId: parsed.messageId,
+    inReplyTo: parsed.inReplyTo?.trim() || undefined,
+    references: toMessageIds(parsed.references),
     to: toMailAddresses(parsed.to),
     cc: toMailAddresses(parsed.cc),
     text: parsed.text,
     html: parsed.html || undefined,
     hasAttachment: parsed.attachments.length > 0
   }
+}
+
+/** mailparser gives one reference as a string, several as a list; the index wants a list */
+function toMessageIds(references?: string[] | string): string[] | undefined {
+  const list = (Array.isArray(references) ? references : references ? [references] : [])
+    .map(reference => reference.trim())
+    .filter(Boolean)
+
+  return list.length ? list : undefined
 }
 
 function toSearchObject(search?: MailSearch): SearchObject | undefined {

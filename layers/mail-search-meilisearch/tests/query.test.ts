@@ -37,6 +37,15 @@ describe('buildMailFilter', () => {
     expect(buildMailFilter({ services: ['a'], participant: ' Jane@Example.COM ', search: {} }))
       .toEqual(['service IN ["a"]', 'participantTerms = "jane@example.com"'])
   })
+
+  it('filters by conversation keys and escapes them', () => {
+    expect(buildMailFilter({ services: ['a'], conversationKeys: ['id:root@example.com', 'subj:a@b.com:hello "world"'], search: {} }))
+      .toEqual(['service IN ["a"]', 'conversationKeys IN ["id:root@example.com", "subj:a@b.com:hello \\"world\\""]'])
+  })
+
+  it('omits empty conversation keys', () => {
+    expect(buildMailFilter({ services: ['a'], conversationKeys: [], search: {} })).toEqual(['service IN ["a"]'])
+  })
 })
 
 describe('dayCountQueries', () => {

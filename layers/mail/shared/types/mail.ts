@@ -32,15 +32,42 @@ export interface MailSummary {
   snippet?: string
   /** Only known for indexed mail; listing a mailbox does not parse the body */
   hasAttachment?: boolean
+  /**
+   * Keys this mail is filed under, from the search index. Messages of one
+   * conversation share at least one key, so grouping is engine-independent.
+   */
+  conversationKeys?: string[]
 }
 
 export interface MailMessage extends MailSummary {
   /** RFC 5322 Message-ID; identifies the same mail in several folders/labels */
   messageId?: string
+  /** Message-ID this mail answers; the root of a short thread */
+  inReplyTo?: string
+  /** Message-ID chain this mail belongs to, oldest first */
+  references?: string[]
   to: MailAddress[]
   cc: MailAddress[]
   text?: string
   html?: string
+}
+
+/** One mail conversation as the list shows it, without the individual mails */
+export interface MailConversation {
+  /** Stable key of the group; the smallest shared key */
+  key: string
+  /** Latest mail's subject, with reply and list prefixes stripped */
+  subject: string
+  /** Senders taking part, in the order they appeared */
+  participants: MailAddress[]
+  count: number
+  unread: boolean
+  latest: MailSummary
+}
+
+/** A conversation including its mails, oldest first */
+export interface MailConversationGroup extends MailConversation {
+  mails: MailSummary[]
 }
 
 /** Server-side search; all criteria are combined (AND) */

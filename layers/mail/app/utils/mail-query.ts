@@ -115,3 +115,25 @@ export function mailSelectionToQuery(selection: MailSelection | null, mailbox: s
 export function isSelectedMail(mail: MailSummary, selection?: MailSelection): boolean {
   return !!selection && mail.uid === selection.uid && mail.mailbox === selection.mailbox
 }
+
+/** How the mail page lays out its list: single mails or grouped conversations */
+export type MailView = 'mails' | 'threads'
+
+export function mailViewFromQuery(query: MailQuery): MailView {
+  return stringParam(query, 'view') === 'threads' ? 'threads' : 'mails'
+}
+
+/** URL patch for the view toggle; a conversation only exists in the conversations view */
+export function mailViewToQuery(view: MailView): Record<string, string | null> {
+  return { view: view === 'threads' ? 'threads' : null, conversation: null, uid: null, in: null }
+}
+
+/** The open conversation's key, from the URL */
+export function mailConversationFromQuery(query: MailQuery): string | undefined {
+  return stringParam(query, 'conversation')
+}
+
+/** URL patch for the open conversation; null closes it */
+export function mailConversationToQuery(key: string | null): Record<string, string | null> {
+  return { conversation: key, uid: null, in: null }
+}

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { normalizeEmail } from '../../../core/shared/entities'
+import { conversationKeys } from '../../shared/mail-thread'
 import type { MailAddress, MailMessage, MailSearch } from '../../shared/types/mail'
 
 /** Indexed form of a message; search engine agnostic */
@@ -10,6 +11,8 @@ export interface MailDocument {
   uid: number
   /** Same mail in several folders/labels shares it; used to deduplicate results */
   messageId: string
+  /** Conversation keys; mails sharing one belong to the same conversation */
+  conversationKeys: string[]
   subject: string
   /** Searchable sender line, e.g. "Alice <alice@example.com>" */
   fromText: string
@@ -89,6 +92,7 @@ export function toMailDocument(service: string, mailbox: string, message: MailMe
     mailbox,
     uid: message.uid,
     messageId: message.messageId || id,
+    conversationKeys: conversationKeys(message),
     subject: message.subject,
     fromText: message.from.map(formatAddress).join(', '),
     fromTerms: senderTerms(message.from),

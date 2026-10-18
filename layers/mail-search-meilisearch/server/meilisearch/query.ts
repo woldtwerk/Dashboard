@@ -46,11 +46,12 @@ export function dayCountQueries(since: string, until: string, services: string[]
 }
 
 /** Meilisearch filter for a mail query; all parts are combined with AND */
-export function buildMailFilter({ services, mailbox, participant, search }: Pick<MailIndexQuery, 'services' | 'mailbox' | 'participant' | 'search'>): string[] {
+export function buildMailFilter({ services, mailbox, participant, conversationKeys, search }: Pick<MailIndexQuery, 'services' | 'mailbox' | 'participant' | 'conversationKeys' | 'search'>): string[] {
   const filter = [`service IN [${services.map(filterValue).join(', ')}]`]
 
   if (mailbox) filter.push(`mailbox = ${filterValue(mailbox)}`)
   if (participant) filter.push(`participantTerms = ${filterValue(normalizeEmail(participant) ?? participant.trim().toLowerCase())}`)
+  if (conversationKeys?.length) filter.push(`conversationKeys IN [${conversationKeys.map(filterValue).join(', ')}]`)
   if (search.unread) filter.push('unread = true')
   if (search.flagged) filter.push('flagged = true')
   if (search.hasAttachment) filter.push('hasAttachment = true')
