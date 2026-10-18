@@ -54,6 +54,13 @@ export interface DocumentsProvider {
   update(id: number, patch: DocumentsDocumentPatch): Promise<DocumentsDocument>
   remove(id: number): Promise<void>
 
+  /** Number of documents currently in the inbox */
+  countInbox(): Promise<number>
+  /** Number of documents added in [since, until), dates as YYYY-MM-DD */
+  countAdded(since: string, until: string): Promise<number>
+  /** Verifies the provider answers, e.g. for the dashboard's service health */
+  ping(): Promise<void>
+
   /** Preview images. Guarded by {@link isInlinePreview} before rendering. */
   thumbnail(id: number): Promise<Response>
   preview(id: number): Promise<Response>
@@ -110,8 +117,8 @@ export interface DocumentsProvider {
   removeSavedView(id: number): Promise<void>
 }
 
-/** Creates a provider from the settings of one service instance */
-export type DocumentsProviderFactory = (values: SetupValues) => DocumentsProvider
+/** Creates a provider from the settings of one service instance, named for logs where known */
+export type DocumentsProviderFactory = (values: SetupValues, serviceId?: string) => DocumentsProvider
 
 const providers = new Map<string, DocumentsProviderFactory>()
 
@@ -127,5 +134,5 @@ export async function useDocumentsProvider(serviceId: string): Promise<Documents
     throw createError({ status: 503, statusText: `Documents provider "${service.connector}" is not available` })
   }
 
-  return factory(service.values)
+  return factory(service.values, serviceId)
 }

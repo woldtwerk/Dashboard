@@ -56,8 +56,12 @@ import type {
 /** The API lists are small enough to fetch in one big page for filter dropdowns. */
 const TAXONOMY_PAGE_SIZE = 1000
 
-export function createPaperlessProvider(values: SetupValues): DocumentsProvider {
-  const client: PaperlessClient = createPaperlessClient({ url: String(values.url ?? ''), token: String(values.token ?? '') })
+export function createPaperlessProvider(values: SetupValues, serviceId?: string): DocumentsProvider {
+  const client: PaperlessClient = createPaperlessClient({
+    url: String(values.url ?? ''),
+    token: String(values.token ?? ''),
+    serviceId
+  })
 
   const getCustomField = (id: number) => client.request<PaperlessCustomFieldDto>(`/api/custom_fields/${id}/`).then(toCustomField)
 
@@ -90,6 +94,24 @@ export function createPaperlessProvider(values: SetupValues): DocumentsProvider 
 
     async remove(id) {
       await client.request(`/api/documents/${id}/`, { method: 'DELETE' })
+    },
+
+    async countInbox() {
+      const page = await client.request<{ count: number }>('/api/documents/', {
+        query: { is_in_inbox: true, page_size: 1 }
+      })
+      return page.count
+    },
+
+    async countAdded(since, until) {
+      const page = await client.request<{ count: number }>('/api/documents/', {
+        query: { added__date__gte: since, added__date__lt: until, page_size: 1 }
+      })
+      return page.count
+    },
+
+    async ping() {
+      await client.request('/api/')
     },
 
     thumbnail: id => client.stream(`/api/documents/${id}/thumb/`),

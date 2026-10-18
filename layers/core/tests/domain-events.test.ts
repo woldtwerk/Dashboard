@@ -44,12 +44,26 @@ describe('in-process domain event bus', () => {
     expect(received).toHaveLength(1)
     expect(received[0]!.type).toBe('changed')
   })
+
+  it('keeps another channel separate from domain events', async () => {
+    const bus = createInProcessBus()
+    const events: DomainEvent[] = []
+    const logs: unknown[] = []
+    bus.subscribe(item => events.push(item))
+    bus.subscribeTo('logs', item => logs.push(item))
+
+    await bus.publishTo('logs', { id: 1 })
+    await bus.publish(event())
+
+    expect(logs).toEqual([{ id: 1 }])
+    expect(events).toHaveLength(1)
+  })
 })
 
 describe('publishDomainEvent', () => {
   it('stamps the event with the current ISO timestamp', async () => {
     const publish = vi.fn<(item: DomainEvent) => Promise<void>>().mockResolvedValue()
-    registerDomainEventBus(() => ({ publish, subscribe: () => () => {} }))
+    registerDomainEventBus(() => ({ publish, subscribe: () => () => {}, publishTo: async () => {}, subscribeTo: () => () => {} }))
 
     await publishDomainEvent({ domain: 'mail', service: 'account', type: 'synced' })
 
@@ -64,7 +78,9 @@ describe('publishDomainEvent', () => {
       publish: async () => {
         throw new Error('redis is down')
       },
-      subscribe: () => () => {}
+      subscribe: () => () => {},
+      publishTo: async () => {},
+      subscribeTo: () => () => {}
     }))
 
     await expect(publishDomainEvent({ domain: 'calendar', service: 'work', type: 'changed' })).resolves.toBeUndefined()

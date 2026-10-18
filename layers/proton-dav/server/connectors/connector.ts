@@ -43,7 +43,7 @@ export const carbonateCalendarConnector: Connector = {
   },
 
   complete: withDavPath('caldav'),
-  test: values => testCalDavConnection(values)
+  test: (values, context) => runLoggedTest('calendar', context?.serviceId, 'Calendar connection test failed', () => testCalDavConnection(values))
 }
 
 /** Proton Contacts via carbonate. */
@@ -68,7 +68,7 @@ export const carbonateContactsConnector: Connector = {
   },
 
   complete: withDavPath('carddav'),
-  test: values => testCardDavConnection(values)
+  test: (values, context) => runLoggedTest('contacts', context?.serviceId, 'Contacts connection test failed', () => testCardDavConnection(values))
 }
 
 const GENERIC_FIELDS = [
@@ -102,7 +102,7 @@ export const caldavConnector: Connector = {
     }]
   },
 
-  test: values => testCalDavConnection(values)
+  test: (values, context) => runLoggedTest('calendar', context?.serviceId, 'Calendar connection test failed', () => testCalDavConnection(values))
 }
 
 /** Any CardDAV server. */
@@ -124,5 +124,5 @@ export const carddavConnector: Connector = {
     }]
   },
 
-  test: values => testCardDavConnection(values)
+  test: (values, context) => runLoggedTest('contacts', context?.serviceId, 'Contacts connection test failed', () => testCardDavConnection(values))
 }

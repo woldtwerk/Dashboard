@@ -10,6 +10,7 @@
     "@unovis/vue": "catalog:",
     "@vueuse/core": "catalog:",
     "@vueuse/nuxt": "catalog:",
+    "consola": "catalog:",
     "date-fns": "catalog:",
     "drizzle-orm": "catalog:",
     "h3": "catalog:",

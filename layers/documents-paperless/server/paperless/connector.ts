@@ -104,6 +104,6 @@ export function createPaperlessConnector(options: { defaultUrl?: string } = {}):
       }
     },
 
-    test: values => testPaperlessConnection(values)
+    test: (values, context) => runLoggedTest('documents', context?.serviceId, 'Paperless-ngx connection test failed', () => testPaperlessConnection(values))
   }
 }

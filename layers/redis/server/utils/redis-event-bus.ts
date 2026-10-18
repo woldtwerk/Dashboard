@@ -1,84 +1,121 @@
 import Redis from 'ioredis'
-import { parseDomainEvent } from '../../../core/server/utils/domain-events'
+import {
+  CHANNEL_PREFIX,
+  DOMAIN_EVENTS_CHANNEL,
+  channelName,
+  parseDomainEventValue
+} from '../../../core/server/utils/domain-events'
 import type { DomainEventBus } from '../../../core/server/utils/domain-events'
-import type { DomainEvent } from '../../../core/shared/types/domain-events'
 
 /** Shared by every worker; subscribers fan the messages out to local SSE clients. */
-export const DOMAIN_EVENT_CHANNEL = 'allmight:domain-events'
+export const DOMAIN_EVENT_CHANNEL = channelName(DOMAIN_EVENTS_CHANNEL)
 
 export interface RedisEventBus extends DomainEventBus {
   close(): Promise<void>
 }
 
+type PayloadHandler = (payload: unknown) => void
+
 /**
  * One publisher and one subscriber connection per worker, both created on first
- * use. The subscriber holds the single Redis subscription for this worker; its
- * handlers live in a local Set.
+ * use. The subscriber holds one Redis subscription per channel in use; handlers
+ * live in a local Map, so a worker only subscribes to what it serves.
  */
 export function createRedisEventBus(url: string): RedisEventBus {
   let publisher: Redis | undefined
   let subscriber: Redis | undefined
-  let subscribed = false
-  const handlers = new Set<(event: DomainEvent) => void>()
+  const handlers = new Map<string, Set<PayloadHandler>>()
 
-  function connections() {
-    if (!publisher) {
-      publisher = new Redis(url)
+  function publishConnection() {
+    publisher ??= new Redis(url)
+    return publisher
+  }
+
+  function connectionName(channel: string) {
+    return channel.startsWith(CHANNEL_PREFIX) ? channel : channelName(channel)
+  }
+
+  function deliver(channel: string, payload: unknown) {
+    for (const handler of [...(handlers.get(channel) ?? [])]) {
+      try {
+        handler(payload)
+      } catch (error) {
+        console.error(`[events] A "${channel}" subscriber failed:`, error)
+      }
     }
+  }
 
+  function subscriberConnection() {
     if (!subscriber) {
       const connection = new Redis(url)
       connection.on('message', (channel, message) => {
-        if (channel !== DOMAIN_EVENT_CHANNEL) {
+        if (!channel.startsWith(CHANNEL_PREFIX)) {
           return
         }
 
-        const event = parseDomainEvent(message)
-        if (!event) {
+        let payload: unknown
+        try {
+          payload = JSON.parse(message)
+        } catch {
           return
         }
 
-        for (const handler of [...handlers]) {
-          try {
-            handler(event)
-          } catch (error) {
-            console.error('[events] A domain event subscriber failed:', error)
-          }
-        }
+        deliver(channel.slice(CHANNEL_PREFIX.length), payload)
       })
       subscriber = connection
     }
 
-    return { publisher, subscriber }
+    return subscriber
+  }
+
+  function subscribeTo(channel: string, handler: PayloadHandler): () => void {
+    const channelHandlers = handlers.get(channel) ?? new Set()
+    const isFirst = channelHandlers.size === 0
+    channelHandlers.add(handler)
+    handlers.set(channel, channelHandlers)
+
+    if (isFirst) {
+      subscriberConnection().subscribe(connectionName(channel)).catch((error) => {
+        console.error(`[events] Could not subscribe to "${channel}":`, error)
+      })
+    }
+
+    return () => {
+      channelHandlers.delete(handler)
+      if (channelHandlers.size) {
+        return
+      }
+
+      handlers.delete(channel)
+      subscriberConnection().unsubscribe(connectionName(channel)).catch((error) => {
+        console.error(`[events] Could not unsubscribe from "${channel}":`, error)
+      })
+    }
+  }
+
+  async function publishTo(channel: string, payload: unknown) {
+    await publishConnection().publish(connectionName(channel), JSON.stringify(payload))
   }
 
   return {
     async publish(event) {
-      const { publisher } = connections()
-      await publisher.publish(DOMAIN_EVENT_CHANNEL, JSON.stringify(event))
+      await publishTo(DOMAIN_EVENTS_CHANNEL, event)
     },
     subscribe(handler) {
-      const { subscriber } = connections()
-      handlers.add(handler)
-
-      if (!subscribed) {
-        subscribed = true
-        subscriber.subscribe(DOMAIN_EVENT_CHANNEL).catch((error) => {
-          subscribed = false
-          console.error('[events] Could not subscribe to domain events:', error)
-        })
-      }
-
-      return () => {
-        handlers.delete(handler)
-      }
+      return subscribeTo(DOMAIN_EVENTS_CHANNEL, (payload) => {
+        const event = parseDomainEventValue(payload)
+        if (event) {
+          handler(event)
+        }
+      })
     },
+    publishTo,
+    subscribeTo,
     async close() {
       handlers.clear()
       const open = [publisher, subscriber].filter((connection): connection is Redis => !!connection)
       publisher = undefined
       subscriber = undefined
-      subscribed = false
       await Promise.allSettled(open.map(connection => connection.quit()))
     }
   }

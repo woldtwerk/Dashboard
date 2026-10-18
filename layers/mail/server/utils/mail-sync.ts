@@ -20,6 +20,15 @@ const lockName = (service: string) => `mail-sync:${service}`
 const chunk = <T>(items: T[], size: number): T[][] =>
   Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, (index + 1) * size))
 
+/** Just the part of the consola instance the mailbox sync needs */
+interface SyncLogger {
+  warn: (message: string, meta?: Record<string, unknown>) => void
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 /**
  * Brings the search index of one mail service up to date.
  * Runs on at most one cluster worker per service at a time.
@@ -31,47 +40,79 @@ export async function syncMailService(service: string): Promise<boolean> {
     return false
   }
 
-  const result = await withLock(lockName(service), LOCK_TTL_MS, async ({ renew }) => {
-    const provider = await useMailProvider(service)
-    const db = await useDb()
-    const mailboxes = (await provider.listMailboxes()).filter(mailbox => !SKIPPED_SPECIAL_USE.has(mailbox.specialUse ?? ''))
+  const startedAt = new Date()
+  const logger = useServiceLogger('mail', service)
+  let changed = 0
+  let ran = false
+  let ok = false
 
-    // Folders deleted on the server
-    const known = await db.select({ mailbox: mailIndexMailboxes.mailbox }).from(mailIndexMailboxes).where(eq(mailIndexMailboxes.service, service))
-    for (const { mailbox } of known.filter(row => !mailboxes.some(item => item.path === row.mailbox))) {
-      await index.removeMailbox(service, mailbox)
-      await forgetMailbox(service, mailbox)
-      await publishDomainEvent({ domain: 'mail', service, type: 'changed', resource: mailbox })
+  try {
+    const result = await withLock(lockName(service), LOCK_TTL_MS, async ({ renew }) => {
+      ran = true
+      logger.info('Sync started')
+
+      try {
+        const provider = await useMailProvider(service)
+        const db = await useDb()
+        const mailboxes = (await provider.listMailboxes()).filter(mailbox => !SKIPPED_SPECIAL_USE.has(mailbox.specialUse ?? ''))
+
+        // Folders deleted on the server
+        const known = await db.select({ mailbox: mailIndexMailboxes.mailbox }).from(mailIndexMailboxes).where(eq(mailIndexMailboxes.service, service))
+        for (const { mailbox } of known.filter(row => !mailboxes.some(item => item.path === row.mailbox))) {
+          await index.removeMailbox(service, mailbox)
+          changed += await forgetMailbox(service, mailbox)
+          await publishDomainEvent({ domain: 'mail', service, type: 'changed', resource: mailbox })
+        }
+
+        for (const mailbox of mailboxes) {
+          changed += await syncMailbox({ service, mailbox, provider, index, renew, logger })
+        }
+
+        await publishDomainEvent({ domain: 'mail', service, type: 'synced' })
+        ok = true
+        return true
+      } catch (error) {
+        logger.error('Sync failed', { error: errorMessage(error) })
+        throw error
+      }
+    })
+
+    return result ?? false
+  } finally {
+    if (ran) {
+      const durationMs = Date.now() - startedAt.getTime()
+      logger.info('Sync finished', { durationMs, changed })
+      await recordSyncRun({ domain: 'mail', service, startedAt: startedAt.toISOString(), durationMs, ok, changed })
     }
-
-    for (const mailbox of mailboxes) {
-      await syncMailbox({ service, mailbox, provider, index, renew })
-    }
-
-    await publishDomainEvent({ domain: 'mail', service, type: 'synced' })
-    return true
-  })
-
-  return result ?? false
+  }
 }
 
-async function forgetMailbox(service: string, mailbox: string) {
+/** Drops every indexed message of a mailbox; returns how many rows were removed. */
+async function forgetMailbox(service: string, mailbox: string): Promise<number> {
   const db = await useDb()
+  const row = await db.select({ count: count() }).from(mailIndexMessages)
+    .where(and(eq(mailIndexMessages.service, service), eq(mailIndexMessages.mailbox, mailbox)))
+    .get()
+
   await db.delete(mailIndexMessages).where(and(eq(mailIndexMessages.service, service), eq(mailIndexMessages.mailbox, mailbox)))
   await db.delete(mailIndexMailboxes).where(and(eq(mailIndexMailboxes.service, service), eq(mailIndexMailboxes.mailbox, mailbox)))
+
+  return row?.count ?? 0
 }
 
-async function syncMailbox({ service, mailbox, provider, index, renew }: {
+async function syncMailbox({ service, mailbox, provider, index, renew, logger }: {
   service: string
   mailbox: Mailbox
   provider: MailProvider
   index: MailSearchIndex
   renew: () => Promise<boolean>
-}) {
+  logger: SyncLogger
+}): Promise<number> {
   const db = await useDb()
   const path = mailbox.path
   const where = and(eq(mailIndexMailboxes.service, service), eq(mailIndexMailboxes.mailbox, path))
   const state = await provider.listMessageStates(path)
+  let changed = 0
 
   let row = await db.select().from(mailIndexMailboxes).where(where).get()
 
@@ -79,7 +120,7 @@ async function syncMailbox({ service, mailbox, provider, index, renew }: {
   // field: either way the known UIDs/documents are void and the mailbox is rebuilt from scratch
   if (row && !mailIndexStateIsCurrent(row, state.uidValidity)) {
     await index.removeMailbox(service, path)
-    await forgetMailbox(service, path)
+    changed += await forgetMailbox(service, path)
     row = undefined
   }
   if (!row) {
@@ -105,6 +146,7 @@ async function syncMailbox({ service, mailbox, provider, index, renew }: {
 
   for (const uids of chunk(diff.added, FETCH_BATCH)) {
     if (!await renew()) {
+      logger.warn('Sync lock lost', { mailbox: path })
       throw new Error(`Lost sync lock for service ${service}`)
     }
     const messages = await provider.getMessages(path, uids)
@@ -117,9 +159,13 @@ async function syncMailbox({ service, mailbox, provider, index, renew }: {
 
   await db.update(mailIndexMailboxes).set({ complete: true, syncedAt: new Date() }).where(where)
 
+  changed += diff.removed.length + diff.changed.length + diff.added.length
+
   if (diff.removed.length || diff.changed.length || diff.added.length) {
     await publishDomainEvent({ domain: 'mail', service, type: 'changed', resource: path })
   }
+
+  return changed
 }
 
 /** Starts a background sync when the index of the service is stale; never waits for it */
@@ -134,7 +180,7 @@ export async function requestMailSync(service: string) {
 
   if (!last?.syncedAt || Date.now() - last.syncedAt.getTime() > STALE_MS) {
     syncMailService(service).catch((error) => {
-      console.error(`[mail] Index sync of ${service} failed:`, error)
+      useServiceLogger('mail', service).error('Background sync failed', { error: errorMessage(error) })
     })
   }
 }

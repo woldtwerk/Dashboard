@@ -2,7 +2,7 @@ import { Meilisearch } from 'meilisearch'
 import type { EnqueuedTaskPromise } from 'meilisearch'
 import type { MailDocument, MailFacetQuery, MailIndexQuery, MailSearchIndex } from '../../../mail/server/utils/mail-search-index'
 import type { MailFacets, MailSummary } from '../../../mail/shared/types/mail'
-import { buildMailFilter } from './query'
+import { buildMailFilter, dayCountQueries } from './query'
 import { buildIndexSettings, EMBEDDER, HIGHLIGHT_POST_TAG, HIGHLIGHT_PRE_TAG, rankingScoreThresholdFor } from './settings'
 
 export interface MeilisearchMailIndexOptions {
@@ -136,6 +136,28 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
           .sort((a, b) => b.count - a.count)
           .slice(0, FACET_LIMIT)
       }
+    },
+
+    async countByDay({ services, since, until }) {
+      const days = dayCountQueries(since, until, services)
+      if (!days.length || !services.length) {
+        return []
+      }
+
+      await ensureSettings()
+      const result = await client.multiSearch({
+        queries: days.map(day => ({
+          indexUid: options.index,
+          filter: day.filter,
+          limit: 0,
+          attributesToRetrieve: []
+        }))
+      })
+
+      return days.map((day, index) => ({
+        date: day.date,
+        count: result.results[index]?.estimatedTotalHits ?? 0
+      }))
     }
   }
 }

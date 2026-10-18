@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildMailFilter, filterValue } from '../server/meilisearch/query'
+import { buildMailFilter, dayCountQueries, filterValue } from '../server/meilisearch/query'
 
 describe('filterValue', () => {
   it('quotes and escapes', () => {
@@ -31,5 +31,30 @@ describe('buildMailFilter', () => {
 
   it('omits criteria that are not set', () => {
     expect(buildMailFilter({ services: ['a'], search: { hasAttachment: false, unread: false } })).toEqual(['service IN ["a"]'])
+  })
+})
+
+describe('dayCountQueries', () => {
+  const unix = (date: string) => Math.floor(new Date(`${date}T00:00:00Z`).getTime() / 1000)
+
+  it('builds one count query per day, until exclusive', () => {
+    const queries = dayCountQueries('2026-10-01', '2026-10-04', ['a', 'b'])
+
+    expect(queries.map(query => query.date)).toEqual(['2026-10-01', '2026-10-02', '2026-10-03'])
+    expect(queries[0]!.filter).toEqual([
+      'service IN ["a", "b"]',
+      `date >= ${unix('2026-10-01')}`,
+      `date < ${unix('2026-10-02')}`
+    ])
+    expect(queries[2]!.filter).toEqual([
+      'service IN ["a", "b"]',
+      `date >= ${unix('2026-10-03')}`,
+      `date < ${unix('2026-10-04')}`
+    ])
+  })
+
+  it('returns no queries without a range or services', () => {
+    expect(dayCountQueries('2026-10-04', '2026-10-01', ['a'])).toEqual([])
+    expect(dayCountQueries('2026-10-01', '2026-10-01', ['a'])).toEqual([])
   })
 })

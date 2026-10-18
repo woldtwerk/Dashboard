@@ -35,14 +35,16 @@ interface Call { url: string, init: RequestInit }
 
 function setupFetch(): Call[] {
   const calls: Call[] = []
-  const json = (data: unknown) => new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json' } })
+  const json = (data: unknown, headers: Record<string, string> = {}) => new Response(JSON.stringify(data), {
+    headers: { 'content-type': 'application/json', ...headers }
+  })
 
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     calls.push({ url, init: init ?? {} })
 
     if (url.endsWith('/api/')) {
-      return new Response(null, { status: 302, headers: { 'x-api-version': '10' } })
+      return json({ version: '10' }, { 'x-api-version': '10' })
     }
     if (url.includes('/api/documents/?')) {
       return json({ count: 1, next: null, previous: null, results: [documentDto] })
@@ -108,5 +110,28 @@ describe('createPaperlessProvider', () => {
     const task = await provider.task('task-123')
     expect(task.status).toBe('success')
     expect(calls.some(call => call.url.includes('task_id=task-123'))).toBe(true)
+  })
+
+  it('counts inbox and added documents with a one-item page', async () => {
+    const calls = setupFetch()
+    const provider = createPaperlessProvider({ url: 'http://paperless:8000', token: 'secret' })
+
+    expect(await provider.countInbox()).toBe(1)
+    expect(await provider.countAdded('2026-10-05', '2026-10-12')).toBe(1)
+
+    const inbox = calls.find(call => call.url.includes('is_in_inbox=true'))!
+    expect(inbox.url).toContain('page_size=1')
+
+    const added = calls.find(call => call.url.includes('added__date__gte=2026-10-05'))!
+    expect(added.url).toContain('added__date__lt=2026-10-12')
+    expect(added.url).toContain('page_size=1')
+  })
+
+  it('pings the API root', async () => {
+    const calls = setupFetch()
+    const provider = createPaperlessProvider({ url: 'http://paperless:8000', token: 'secret' })
+
+    await expect(provider.ping()).resolves.toBeUndefined()
+    expect(calls.some(call => call.url.endsWith('/api/'))).toBe(true)
   })
 })

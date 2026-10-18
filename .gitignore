@@ -10,7 +10,7 @@ dist
 node_modules
 
 # Logs
-logs
+/logs
 *.log
 
 # Misc
@@ -29,3 +29,6 @@ logs
 
 # Git worktrees of parallel coding agents
 .worktrees/
+
+# drizzle-kit migrations are source; a global *.sql ignore must not hide them
+!layers/*/server/db/**/*.sql

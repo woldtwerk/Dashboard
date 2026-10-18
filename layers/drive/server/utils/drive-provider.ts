@@ -1,6 +1,12 @@
 import { createError } from 'nuxt/server'
 import type { SetupValues } from '../../../core/shared/types/setup'
+import type { ServiceHealth } from '../../../core/shared/types/dashboard'
 import type { DriveEntry, DriveInvitation, DriveShare, DriveShareOptions } from '../../shared/types/drive'
+
+export interface DriveProviderStatus {
+  health: ServiceHealth
+  error?: string
+}
 
 /** The request stream and its headers, forwarded verbatim to the provider. */
 export interface DriveUpload {
@@ -29,6 +35,11 @@ export interface DriveProvider {
   remove(paths: string[]): Promise<void>
   emptyTrash(): Promise<void>
 
+  /** Bytes used by the whole drive */
+  usedBytes(): Promise<number>
+  /** Whether the provider is reachable and signed in; for the dashboard's service health */
+  status?(): Promise<DriveProviderStatus>
+
   // --- Public links ---
   share(path: string): Promise<DriveShare>
   setShare(path: string, options: DriveShareOptions): Promise<DriveShare>
@@ -39,8 +50,8 @@ export interface DriveProvider {
   setInvitation(uid: string, accept: boolean): Promise<void>
 }
 
-/** Creates a provider from the settings of one service instance */
-export type DriveProviderFactory = (values: SetupValues) => DriveProvider
+/** Creates a provider from the settings of one service instance, named for logs where known */
+export type DriveProviderFactory = (values: SetupValues, serviceId?: string) => DriveProvider
 
 const providers = new Map<string, DriveProviderFactory>()
 
@@ -56,5 +67,5 @@ export async function useDriveProvider(serviceId: string): Promise<DriveProvider
     throw createError({ status: 503, statusText: `Drive provider "${service.connector}" is not available` })
   }
 
-  return factory(service.values)
+  return factory(service.values, serviceId)
 }

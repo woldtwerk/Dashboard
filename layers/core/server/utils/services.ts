@@ -6,6 +6,11 @@ import type { ConnectorInfo, ServiceInfo, SetupField, SetupState, SetupValues, S
 import { deleteService, findService, findServices, upsertService } from '../db/service-repository'
 import type { ServiceRow } from '../db/service-repository'
 
+export interface ConnectorTestContext {
+  /** The stored service being re-tested; absent for a wizard's first test */
+  serviceId?: string
+}
+
 export interface Connector extends ConnectorInfo {
   wizard: SetupWizard
   /** Cross-field checks; return an error message to reject the values */
@@ -13,7 +18,7 @@ export interface Connector extends ConnectorInfo {
   /** Fill values only the server can know, e.g. a secret fetched from a helper service; runs before `validate` */
   complete?: (values: SetupValues) => Promise<SetupValues>
   /** Verify the values work, e.g. by connecting; throw to reject */
-  test?: (values: SetupValues) => Promise<void>
+  test?: (values: SetupValues, context?: ConnectorTestContext) => Promise<void>
 }
 
 export interface Service extends ServiceInfo {
