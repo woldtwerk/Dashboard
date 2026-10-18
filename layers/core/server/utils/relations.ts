@@ -19,6 +19,12 @@ export interface RelationProvider {
   related(ref: EntityRef, options: { limit: number }): Promise<Relation[]>
   /** What the providers know about an address; parts are merged by `resolvePerson` */
   person?(email: string): Promise<Partial<Person> | undefined>
+  /**
+   * Normalized addresses of the people the provider knows, e.g. a contacts
+   * address book. Used to rank mail; the provider's answer is cached by its
+   * caller, so this may read the whole directory.
+   */
+  addresses?(): Promise<string[]>
 }
 
 /** A provider that took longer than this is left out of the result */
@@ -183,6 +189,33 @@ export async function resolvePerson(email: string, timeoutMs = RELATION_TIMEOUT_
   }
 
   return known ? { key, name, emails: [...emails], contacts: [...contacts.values()] } : undefined
+}
+
+/**
+ * Every address the providers know as a person, normalized and deduplicated.
+ * A provider that fails or exceeds its timeout contributes nothing, so one
+ * broken directory never hides the others.
+ */
+export async function knownAddresses(timeoutMs = RELATION_TIMEOUT_MS): Promise<string[]> {
+  const entries = [...providers].filter(([, provider]) => !!provider.addresses)
+  const lists = await Promise.all(entries.map(async ([domain, provider]): Promise<string[]> => {
+    try {
+      return await withTimeout(provider.addresses!(), timeoutMs)
+    } catch (error) {
+      useServiceLogger('core').warn(`Addresses of "${domain}" are unavailable`, { error: errorText(error) })
+      return []
+    }
+  }))
+
+  const addresses = new Set<string>()
+  for (const email of lists.flat()) {
+    const normalized = normalizeEmail(email)
+    if (normalized) {
+      addresses.add(normalized)
+    }
+  }
+
+  return [...addresses]
 }
 
 function rootDomain(type: EntityType): string {

@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { addDays, format, parseISO, startOfDay } from 'date-fns'
+import { format, parseISO } from 'date-fns'
 import { useDebounceFn } from '@vueuse/core'
 import type { TableColumn } from '@nuxt/ui'
 import type { DashboardMetric, DashboardSeries, ServiceStatus } from '#layers/core/shared/types/dashboard'
 import type { LogEntry } from '#layers/core/shared/types/logs'
-import type { CalendarEvent } from '#layers/calendar/shared/types/calendar'
 import type { BarChartPoint } from '../utils/chart'
+import { dashboardWidgets } from '../utils/dashboard-widgets'
 
 useSeoMeta({ title: 'Home' })
 
@@ -67,32 +67,9 @@ const { data: recentLogs, pending: logsPending } = useFetch<LogEntry[]>('/api/lo
   default: () => []
 })
 
-// --- Upcoming (only with a calendar service) ---
+// --- Registered domain widgets (see dashboard-widgets.ts) ---
 
-const hasCalendar = computed(() => services.value.some(service => service.domain === 'calendar'))
-const timeZone = useCalendarTimeZone()
-const upcomingRange = computed(() => {
-  const start = startOfDay(new Date())
-  return { start: start.toISOString(), end: addDays(start, 7).toISOString() }
-})
-// Fetched during the server render too, so the markup and the hydration payload
-// agree on the list instead of rendering an empty card first
-const { data: upcoming } = useFetch<CalendarEvent[]>('/api/calendar/events', {
-  key: 'dashboard-upcoming',
-  query: computed(() => upcomingRange.value),
-  lazy: true,
-  default: () => []
-})
-
-const upcomingEvents = computed(() => [...upcoming.value]
-  .sort((a, b) => a.start.localeCompare(b.start))
-  .slice(0, 5))
-
-// In the same zone on the server and the first client pass; see useCalendarTimeZone
-const eventTime = (event: CalendarEvent) => format(
-  zoned(parseISO(event.start), timeZone.value),
-  event.allDay ? 'EEE d MMM' : 'EEE d MMM HH:mm'
-)
+const widgets = computed(() => dashboardWidgets(new Set(services.value.map(service => service.domain))))
 
 // --- Table views (the charts' accessible twin) ---
 
@@ -235,45 +212,34 @@ useDomainEvents({}, (event) => {
           </DashboardChartCard>
         </div>
 
-        <!-- Upcoming -->
-        <UCard v-if="hasCalendar">
-          <template #header>
-            <div class="flex items-center justify-between gap-3">
-              <h2 class="text-sm font-semibold text-highlighted">
-                Upcoming
-              </h2>
-              <UButton
-                to="/calendar"
-                label="Open calendar"
-                icon="i-lucide-arrow-right"
-                color="neutral"
-                variant="ghost"
-                size="xs"
-              />
-            </div>
-          </template>
+        <!-- Domain widgets, registered by their layers -->
+        <div v-if="widgets.length" class="grid gap-4 lg:grid-cols-2">
+          <UCard
+            v-for="widget in widgets"
+            :key="widget.id"
+            :class="widget.span === 2 ? 'lg:col-span-2' : undefined"
+          >
+            <template #header>
+              <div class="flex items-center justify-between gap-3">
+                <h2 class="flex items-center gap-2 text-sm font-semibold text-highlighted">
+                  <UIcon :name="widget.icon" class="size-4 text-muted" />
+                  {{ widget.title }}
+                </h2>
+                <UButton
+                  v-if="widget.to"
+                  :to="widget.to"
+                  label="Open"
+                  icon="i-lucide-arrow-right"
+                  color="neutral"
+                  variant="ghost"
+                  size="xs"
+                />
+              </div>
+            </template>
 
-          <ul v-if="upcomingEvents.length" class="divide-y divide-default">
-            <li
-              v-for="event in upcomingEvents"
-              :key="`${event.uid}-${event.start}`"
-              class="flex items-center gap-3 py-2"
-            >
-              <span class="w-28 shrink-0 text-xs text-muted">
-                {{ eventTime(event) }}
-              </span>
-              <span class="truncate text-sm text-highlighted">{{ event.title }}</span>
-            </li>
-          </ul>
-          <UEmpty
-            v-else
-            icon="i-lucide-calendar-x"
-            title="Nothing scheduled"
-            description="No events in the next 7 days."
-            variant="naked"
-            class="py-8"
-          />
-        </UCard>
+            <component :is="widget.component" />
+          </UCard>
+        </div>
 
         <!-- Recent logs -->
         <UCard>

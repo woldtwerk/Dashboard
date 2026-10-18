@@ -125,7 +125,8 @@ export default defineNitroPlugin(() => {
       }
       return ref.type === 'contact' ? relatedToContact(ref, limit) : Promise.resolve([])
     },
-    person: knownPerson
+    person: knownPerson,
+    addresses: async () => (await listAllContacts()).flatMap(({ contact }) => contactEmails(contact))
   })
 })
 
