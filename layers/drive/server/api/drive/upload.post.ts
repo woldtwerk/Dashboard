@@ -14,6 +14,7 @@ export default defineEventHandler(async (event) => {
     contentLength: getRequestHeader(event, 'content-length')
   })
 
+  await invalidateDriveListings(service, affectedPaths('upload', { path }))
   await publishDriveChange(service, path)
 
   return { ok: true }

@@ -102,6 +102,29 @@ export function previewKind(entry: Pick<DriveEntry, 'type' | 'mediaType' | 'name
   return undefined
 }
 
+/** The largest image whose whole file is worth fetching as a grid thumbnail. */
+export const THUMBNAIL_MAX_BYTES = 3 * 1024 * 1024
+
+/**
+ * Whether a tile shows the file itself instead of its icon. Only images small
+ * enough to be downloaded at grid size qualify; an entry of unknown size is not
+ * fetched, since it cannot be shown to be small.
+ */
+export function thumbnailAllowed(entry: Pick<DriveEntry, 'type' | 'name' | 'mediaType' | 'size'>): boolean {
+  return previewKind(entry) === 'image'
+    && entry.size !== undefined
+    && entry.size <= THUMBNAIL_MAX_BYTES
+}
+
+/**
+ * The version token of an entry, derived from its modification time and size.
+ * It rides along as `v` so the download endpoint can build an ETag without an
+ * extra CLI call, and so the browser cache hits again on a revisit.
+ */
+export function entryVersion(entry: Pick<DriveEntry, 'modified' | 'size'>): string {
+  return `${entry.modified ?? ''}-${entry.size ?? ''}`
+}
+
 const SIZE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB']
 
 /** Formats a byte count, e.g. `1.4 MB`; folders have none. */
@@ -205,15 +228,19 @@ export function applySelection(state: DriveSelection, visible: string[], target:
 
 /**
  * The download URL for one or more entries; the server streams a file or a zip.
- * `inline` asks the server to render a safe type in the browser (a preview).
+ * `inline` asks the server to render a safe type in the browser (a preview);
+ * `version` lets an inline response be cached and revalidated with an ETag.
  */
-export function downloadUrl(service: string, paths: string[], options: { inline?: boolean } = {}): string {
+export function downloadUrl(service: string, paths: string[], options: { inline?: boolean, version?: string } = {}): string {
   const params = new URLSearchParams({ service })
   for (const path of paths) {
     params.append('path', path)
   }
   if (options.inline) {
     params.set('inline', '1')
+  }
+  if (options.version) {
+    params.set('v', options.version)
   }
   return `/api/drive/download?${params.toString()}`
 }

@@ -114,6 +114,7 @@ function onRootDrop(event: DragEvent) {
           @click="onClick($event, entry)"
           @dblclick="emit('open', entry)"
           @mouseenter="emit('prefetch', entry)"
+          @pointerdown="emit('prefetch', entry)"
           @dragstart="onDragStart($event, entry)"
           @dragover.prevent
           @drop.stop.prevent="onDrop($event, entry)"
@@ -173,6 +174,7 @@ function onRootDrop(event: DragEvent) {
           @click="onClick($event, entry)"
           @dblclick="emit('open', entry)"
           @mouseenter="emit('prefetch', entry)"
+          @pointerdown="emit('prefetch', entry)"
           @dragstart="onDragStart($event, entry)"
           @dragover.prevent
           @drop.stop.prevent="onDrop($event, entry)"

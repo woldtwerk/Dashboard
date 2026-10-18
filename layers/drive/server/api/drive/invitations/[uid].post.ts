@@ -13,5 +13,12 @@ export default defineEventHandler(async (event) => {
 
   await (await useDriveProvider(service)).setInvitation(uid, accept)
 
+  // Accepting adds the folder to "Shared with me", so that listing is invalidated
+  const affected = affectedPaths('invitation-accept', { accept })
+  await invalidateDriveListings(service, affected)
+  for (const resource of affected) {
+    await publishDriveChange(service, resource)
+  }
+
   return { ok: true }
 })

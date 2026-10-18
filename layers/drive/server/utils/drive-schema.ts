@@ -45,7 +45,9 @@ export const drivePathQuerySchema = driveServiceQuerySchema.extend({
 export const driveDownloadQuerySchema = driveServiceQuerySchema.extend({
   path: z.preprocess(value => Array.isArray(value) ? value : [value], drivePathsSchema),
   /** `inline=1` renders the file in the browser instead of downloading it */
-  inline: z.stringbool().optional()
+  inline: z.stringbool().optional(),
+  /** Version of the entry (`<modified>-<size>`), so an inline preview can be cached */
+  v: z.string().min(1).max(512).optional()
 })
 
 export const driveFolderBodySchema = z.object({

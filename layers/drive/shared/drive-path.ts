@@ -10,6 +10,9 @@ export const DRIVE_ROOT = '/'
 /** The trash section's root folder; trashing, restoring and purging all change its listing. */
 export const DRIVE_TRASH_ROOT = '/trash'
 
+/** The section that lists the folders shared with the account; accepting an invitation changes it. */
+export const DRIVE_SHARED_ROOT = '/shared-with-me'
+
 /** Escapes a name for use as one path segment. */
 export function escapeSegment(name: string): string {
   return name.replace(/\//g, '\\/')

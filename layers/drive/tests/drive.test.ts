@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { DriveEntry } from '../shared/types/drive'
 import { baseName, breadcrumbs, escapeSegment, isWithinPath, joinPath, parentPath, splitPath, unescapeSegment } from '../shared/drive-path'
-import { applySelection, downloadUrl, entryIcon, entryKindLabel, filterEntries, formatDate, formatSize, previewKind, sectionOf, sortEntries } from '../app/utils/drive'
+import { applySelection, downloadUrl, entryIcon, entryKindLabel, entryVersion, filterEntries, formatDate, formatSize, previewKind, sectionOf, sortEntries, thumbnailAllowed } from '../app/utils/drive'
 
 const file = (name: string, overrides: Partial<DriveEntry> = {}): DriveEntry => ({
   uid: name,
@@ -95,6 +95,27 @@ describe('entryIcon and kind', () => {
   })
 })
 
+describe('thumbnailAllowed', () => {
+  it('allows small images', () => {
+    expect(thumbnailAllowed({ type: 'file', name: 'a.png', mediaType: 'image/png', size: 1024 })).toBe(true)
+    expect(thumbnailAllowed({ type: 'file', name: 'a.png', mediaType: 'image/png', size: 3 * 1024 * 1024 })).toBe(true)
+  })
+
+  it('rejects large images, unknown sizes, non-images and folders', () => {
+    expect(thumbnailAllowed({ type: 'file', name: 'a.png', mediaType: 'image/png', size: 4 * 1024 * 1024 })).toBe(false)
+    expect(thumbnailAllowed({ type: 'file', name: 'a.png', mediaType: 'image/png' })).toBe(false)
+    expect(thumbnailAllowed({ type: 'file', name: 'a.pdf', mediaType: 'application/pdf', size: 10 })).toBe(false)
+    expect(thumbnailAllowed({ type: 'folder', name: 'Docs', size: 0 })).toBe(false)
+  })
+})
+
+describe('entryVersion', () => {
+  it('combines the modification time and size', () => {
+    expect(entryVersion({ modified: '2026-10-18T09:30:00Z', size: 42 })).toBe('2026-10-18T09:30:00Z-42')
+    expect(entryVersion({})).toBe('-')
+  })
+})
+
 describe('sortEntries', () => {
   const folder = file('Beta', { type: 'folder', path: '/my-files/Beta' })
 
@@ -150,5 +171,10 @@ describe('applySelection', () => {
 describe('downloadUrl', () => {
   it('repeats the path for several entries', () => {
     expect(downloadUrl('svc', ['/a', '/b'])).toBe('/api/drive/download?service=svc&path=%2Fa&path=%2Fb')
+  })
+
+  it('adds the inline flag and the version', () => {
+    expect(downloadUrl('svc', ['/a'], { inline: true, version: '2026-10-18T09:30:00Z-42' }))
+      .toBe('/api/drive/download?service=svc&path=%2Fa&inline=1&v=2026-10-18T09%3A30%3A00Z-42')
   })
 })
