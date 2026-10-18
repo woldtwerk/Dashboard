@@ -23,6 +23,8 @@ export interface MailSummary {
   subject: string
   /** Subject with Meilisearch match markers, from the search index */
   subjectHighlight?: string
+  /** Sender line with Meilisearch match markers, from the search index */
+  fromHighlight?: string
   from: MailAddress[]
   /** Recipients; only search-index results carry them, to tell how a person took part */
   to?: MailAddress[]
@@ -43,6 +45,11 @@ export interface MailSummary {
   listId?: string
   /** Human readable List-Id description, e.g. "Drupal Security News" */
   listName?: string
+  /**
+   * Meilisearch's `_rankingScore` (0..1) when the query asked for it; a hybrid
+   * search reports the blended keyword/semantic score.
+   */
+  rankingScore?: number
 }
 
 export interface MailMessage extends MailSummary {

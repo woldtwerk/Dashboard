@@ -89,7 +89,7 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
       await settle(index.deleteDocuments({ filter: buildMailFilter({ services: [service], mailbox, search: {} }) }))
     },
 
-    async search({ services, mailbox, mailboxes, participant, conversationKeys, search, limit, offset }: MailIndexQuery): Promise<MailSummary[]> {
+    async search({ services, mailbox, mailboxes, participant, conversationKeys, search, limit, offset, globalSearch }: MailIndexQuery): Promise<MailSummary[]> {
       await ensureSettings()
       const text = search.text?.trim()
       const result = await index.search(text || null, {
@@ -100,11 +100,13 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
         sort: text ? undefined : ['date:desc'],
         hybrid: text && semantic ? { embedder: EMBEDDER, semanticRatio: options.semanticRatio } : undefined,
         rankingScoreThreshold: text ? rankingScoreThresholdFor(semantic, options.semanticRatio, options.rankingScoreThreshold) : undefined,
+        // The palette decides keyword vs semantic from the markers and needs the score
+        showRankingScore: globalSearch ? true : undefined,
         attributesToRetrieve: ['service', 'mailbox', 'uid', 'subject', 'fromList', 'toList', 'ccList', 'date', 'unread', 'flagged', 'hasAttachment', 'conversationKeys', 'listId', 'listName'],
         attributesToCrop: text ? ['text'] : undefined,
-        cropLength: 24,
+        cropLength: globalSearch ? 20 : 24,
         // Highlighted matches come back as marker-tagged strings the client escapes before rendering
-        attributesToHighlight: text ? ['subject', 'text'] : undefined,
+        attributesToHighlight: text ? (globalSearch ? ['subject', 'fromText', 'text'] : ['subject', 'text']) : undefined,
         highlightPreTag: HIGHLIGHT_PRE_TAG,
         highlightPostTag: HIGHLIGHT_POST_TAG
       })
@@ -115,6 +117,7 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
         mailbox: hit.mailbox,
         subject: hit.subject,
         subjectHighlight: hit._formatted?.subject,
+        fromHighlight: hit._formatted?.fromText,
         from: hit.fromList,
         to: hit.toList,
         cc: hit.ccList,
@@ -125,6 +128,7 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
         conversationKeys: hit.conversationKeys,
         listId: hit.listId,
         listName: hit.listName,
+        rankingScore: hit._rankingScore,
         snippet: hit._formatted?.text || undefined
       }))
     },

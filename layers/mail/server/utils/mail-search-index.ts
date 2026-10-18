@@ -17,6 +17,12 @@ export interface MailIndexQuery {
   limit: number
   /** Skip this many best matches; for "load more" */
   offset?: number
+  /**
+   * Tunes the query for the Ctrl+K palette: a shorter body crop, the sender
+   * line highlighted too, and `_rankingScore` reported. The mail page's own
+   * search leaves it off.
+   */
+  globalSearch?: boolean
 }
 
 /** Everything that narrows the result, without paging; for facet suggestions */

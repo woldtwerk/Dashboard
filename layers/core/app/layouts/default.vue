@@ -2,7 +2,7 @@
 import type { CommandPaletteGroup, CommandPaletteItem, NavigationMenuChildItem, NavigationMenuItem } from '@nuxt/ui'
 import { refDebounced } from '@vueuse/core'
 import { highlightToHtml } from '#layers/core/shared/highlight'
-import type { SearchGroup } from '#layers/core/shared/types/search'
+import type { SearchHit, SearchResults } from '#layers/core/shared/types/search'
 
 const { navigation, entries, isDefault, update, reset } = useDashboard()
 
@@ -40,40 +40,74 @@ const flatten = (items: NavigationMenuChildItem[], parent?: string): CommandPale
 // --- Global search --------------------------------------------------------
 
 const searchTerm = ref('')
-const searchGroups = ref<SearchGroup[]>([])
+const searchResults = ref<SearchResults>({ top: [], groups: [] })
 const searching = ref(false)
 
 // The palette's own filtering is off for these groups (`ignoreFilter`): the
 // server decides what matches, the term only drives the request.
-const serverGroups = computed<CommandPaletteGroup[]>(() => searchGroups.value.map(group => ({
+function paletteItem(hit: SearchHit, icon?: string, suffix?: string, suffixHighlight?: string): CommandPaletteItem {
+  const item: CommandPaletteItem = {
+    label: hit.title,
+    labelHtml: highlightToHtml(hit.titleHighlight ?? hit.title),
+    icon,
+    suffix,
+    suffixHtml: suffixHighlight ? highlightToHtml(suffixHighlight) : undefined,
+    to: hit.to,
+    // Only search hits carry a match; the badge marks a semantic one
+    match: hit.match,
+    onSelect: () => { open.value = false }
+  }
+
+  if (hit.snippet) {
+    item.descriptionHtml = highlightToHtml(hit.snippet)
+  }
+
+  return item
+}
+
+const domainLabels = computed(() => new Map(searchResults.value.groups.map(group => [group.domain, group.label])))
+
+const topGroup = computed<CommandPaletteGroup | undefined>(() => {
+  const hits = searchResults.value.top
+  if (!hits.length) {
+    return undefined
+  }
+
+  return {
+    id: 'search-top',
+    label: 'Top results',
+    ignoreFilter: true,
+    // The domain icon and label say where a cross-domain hit came from
+    items: hits.map(hit => paletteItem(hit, hit.icon, hit.domainLabel ?? domainLabels.value.get(hit.domain ?? '') ?? hit.subtitle ?? hit.date))
+  }
+})
+
+const serverGroups = computed<CommandPaletteGroup[]>(() => searchResults.value.groups.map(group => ({
   id: `search-${group.domain}`,
   label: group.label,
   ignoreFilter: true,
-  items: group.hits.map(hit => ({
-    label: hit.title,
-    labelHtml: highlightToHtml(hit.titleHighlight ?? hit.title),
-    icon: group.icon,
-    suffix: hit.subtitle ?? hit.date,
-    to: hit.to,
-    onSelect: () => { open.value = false }
-  }) as CommandPaletteItem)
+  items: group.hits.map(hit => paletteItem(hit, group.icon, hit.subtitle ?? hit.date, hit.subtitleHighlight))
 })))
 
-const groups = computed<CommandPaletteGroup[]>(() => [{
-  id: 'links',
-  label: 'Go to',
-  items: [
-    ...navigation.value.flatMap(({ label, icon, to, children }) => [{ label, icon, to }, ...flatten(children ?? [], label)]),
-    { label: 'Customize menu', icon: 'i-lucide-pencil', onSelect: () => { editing.value = true } }
-  ] as CommandPaletteItem[]
-}, ...serverGroups.value])
+const groups = computed<CommandPaletteGroup[]>(() => [
+  ...(topGroup.value ? [topGroup.value] : []),
+  ...serverGroups.value,
+  {
+    id: 'links',
+    label: 'Go to',
+    items: [
+      ...navigation.value.flatMap(({ label, icon, to, children }) => [{ label, icon, to }, ...flatten(children ?? [], label)]),
+      { label: 'Customize menu', icon: 'i-lucide-pencil', onSelect: () => { editing.value = true } }
+    ] as CommandPaletteItem[]
+  }
+])
 
 let searchRequest = 0
 
 watch(refDebounced(searchTerm, 250), async (value) => {
   const term = value.trim()
   if (term.length < 2) {
-    searchGroups.value = []
+    searchResults.value = { top: [], groups: [] }
     searching.value = false
     return
   }
@@ -82,13 +116,13 @@ watch(refDebounced(searchTerm, 250), async (value) => {
   searching.value = true
 
   try {
-    const groups = await $fetch<SearchGroup[]>('/api/search', { query: { q: term, limit: 5 } })
+    const results = await $fetch<SearchResults>('/api/search', { query: { q: term, limit: 5 } })
     if (request === searchRequest) {
-      searchGroups.value = groups
+      searchResults.value = results
     }
   } catch {
     if (request === searchRequest) {
-      searchGroups.value = []
+      searchResults.value = { top: [], groups: [] }
     }
   } finally {
     if (request === searchRequest) {
@@ -190,7 +224,17 @@ function rename(key: string, label: string) {
       </template>
     </UDashboardSidebar>
 
-    <UDashboardSearch v-model:search-term="searchTerm" :groups="groups" :loading="searching" />
+    <UDashboardSearch v-model:search-term="searchTerm" :groups="groups" :loading="searching">
+      <template #item-trailing="{ item }">
+        <UBadge
+          v-if="item.match === 'semantic'"
+          label="similar"
+          color="neutral"
+          variant="subtle"
+          size="sm"
+        />
+      </template>
+    </UDashboardSearch>
 
     <slot />
   </UDashboardGroup>
