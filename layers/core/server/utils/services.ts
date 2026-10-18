@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:
 import { createHooks } from 'hookable'
 import { createError, deriveSecret } from 'nuxt/server'
 import { z } from 'zod'
-import type { ConnectorInfo, ServiceInfo, SetupField, SetupState, SetupValues, SetupWizard } from '../../shared/types/setup'
+import type { ConnectorInfo, ServiceInfo, SetupField, SetupOption, SetupState, SetupValues, SetupWizard } from '../../shared/types/setup'
 import { deleteService, findService, findServices, upsertService } from '../db/service-repository'
 import type { ServiceRow } from '../db/service-repository'
 
@@ -19,6 +19,8 @@ export interface Connector extends ConnectorInfo {
   complete?: (values: SetupValues) => Promise<SetupValues>
   /** Verify the values work, e.g. by connecting; throw to reject */
   test?: (values: SetupValues, context?: ConnectorTestContext) => Promise<void>
+  /** Options of a dynamic select field, e.g. the models an endpoint offers */
+  fieldOptions?: (field: string, values: SetupValues) => Promise<SetupOption[]>
 }
 
 export interface Service extends ServiceInfo {
@@ -165,6 +167,19 @@ function fieldSchema(field: SetupField): z.ZodType<SetupValue | undefined> {
     }
     case 'switch':
       return z.boolean().default(field.default ?? false)
+    case 'select': {
+      const allowed = field.options?.length && !field.allowCustom
+        ? new Set(field.options.map(option => option.value))
+        : undefined
+
+      if (field.required && !field.secret) {
+        const required = z.string().trim().min(1, `${field.label} is required`)
+        return allowed ? required.refine(value => allowed.has(value), `${field.label} must be one of the offered options`) : required
+      }
+
+      const schema = z.string().trim().optional()
+      return allowed ? schema.refine(value => value === undefined || value === '' || allowed.has(value), `${field.label} must be one of the offered options`) : schema
+    }
     default: {
       const schema = z.string().trim()
       // Secrets may be left empty to keep the stored value; checked after merging
@@ -178,6 +193,29 @@ export const setupBodySchema = z.object({
   values: z.record(z.string(), z.unknown())
 })
 
+/**
+ * Fill empty secret fields from the stored service, but only while every
+ * `bindSecretsTo` field is unchanged. Lenient by design: no required checks,
+ * no `complete`/`validate`, so a dynamic field can ask for options before the
+ * wizard has been submitted.
+ */
+export function mergeStoredSecrets(connector: Connector, input: SetupValues, service?: Service): SetupValues {
+  const values: SetupValues = { ...input }
+  const sameTarget = !!service && (connector.wizard.bindSecretsTo ?? []).every(name => values[name] === service.values[name])
+
+  if (!sameTarget) {
+    return values
+  }
+
+  for (const field of fieldsOf(connector.wizard)) {
+    if (field.secret && !values[field.name]) {
+      values[field.name] = service!.values[field.name]
+    }
+  }
+
+  return values
+}
+
 /** Validate wizard input against the connector schema and merge it with the stored values. */
 export async function resolveSetupValues(connector: Connector, input: Record<string, unknown>, service?: Service): Promise<SetupValues> {
   const fields = fieldsOf(connector.wizard)
@@ -187,18 +225,10 @@ export async function resolveSetupValues(connector: Connector, input: Record<str
     throw createError({ status: 400, statusText: result.error.issues[0]?.message ?? 'Invalid settings' })
   }
 
-  let values: SetupValues = result.data
-
-  // Reusing a stored secret for a different target (e.g. host) would hand it to that target
-  const sameTarget = !!service && (connector.wizard.bindSecretsTo ?? []).every(name => values[name] === service.values[name])
+  let values = mergeStoredSecrets(connector, result.data, service)
 
   for (const field of fields) {
-    if (!field.secret || values[field.name]) {
-      continue
-    }
-    values[field.name] = sameTarget ? service!.values[field.name] : undefined
-
-    if (field.required && !values[field.name]) {
+    if (field.secret && field.required && !values[field.name]) {
       throw createError({ status: 400, statusText: `${field.label} is required` })
     }
   }

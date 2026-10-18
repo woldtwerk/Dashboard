@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { isAiModelAllowed } from '../../shared/ai-model'
 import type { AiModelInfo, AiServiceModels } from '../../shared/types/ai'
 import type { SetupValues } from '../../../core/shared/types/setup'
+import { safeErrorMessage } from '../../../core/server/utils/errors'
 
 export interface AiModel {
   model: LanguageModel
@@ -109,13 +110,6 @@ function withDefaultModel(models: AiModelInfo[], defaultModel: string): AiModelI
     : models
 }
 
-// Error messages must not leak a base URL or key to the client
-function safeErrorMessage(error: unknown): string {
-  const statusMessage = (error as { statusMessage?: unknown })?.statusMessage
-  const message = typeof statusMessage === 'string' ? statusMessage : error instanceof Error ? error.message : ''
-  return message.replace(/https?:\/\/\S+/gi, '').trim() || 'The model list could not be loaded'
-}
-
 /** The models of one AI service; a provider that lists none falls back to the configured model */
 export async function aiServiceModels(service: { id: string, connector: string, name: string, values: SetupValues }): Promise<AiServiceModels> {
   const info = { id: service.id, name: service.name }
@@ -125,7 +119,7 @@ export async function aiServiceModels(service: { id: string, connector: string, 
     const models = await listedModels(service)
     return { service: info, defaultModel, models: withDefaultModel(models, defaultModel) }
   } catch (error) {
-    return { service: info, defaultModel, models: withDefaultModel([], defaultModel), error: safeErrorMessage(error) }
+    return { service: info, defaultModel, models: withDefaultModel([], defaultModel), error: safeErrorMessage(error, 'The model list could not be loaded') }
   }
 }
 
@@ -137,7 +131,7 @@ export async function listAiServiceModels(): Promise<AiServiceModels[]> {
     try {
       return await aiServiceModels(await getService(info.id, 'ai'))
     } catch (error) {
-      return { service: { id: info.id, name: info.name }, defaultModel: '', models: [], error: safeErrorMessage(error) }
+      return { service: { id: info.id, name: info.name }, defaultModel: '', models: [], error: safeErrorMessage(error, 'The model list could not be loaded') }
     }
   }))
 }
