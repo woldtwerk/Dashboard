@@ -66,6 +66,12 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
       await settle(index.addDocuments(documents, { primaryKey: 'id' }))
     },
 
+    async updateDocuments(updates) {
+      if (!updates.length) return
+      await ensureSettings()
+      await settle(index.updateDocuments(updates))
+    },
+
     async updateFlags(updates) {
       if (!updates.length) return
       await ensureSettings()
@@ -94,7 +100,7 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
         sort: text ? undefined : ['date:desc'],
         hybrid: text && semantic ? { embedder: EMBEDDER, semanticRatio: options.semanticRatio } : undefined,
         rankingScoreThreshold: text ? rankingScoreThresholdFor(semantic, options.semanticRatio, options.rankingScoreThreshold) : undefined,
-        attributesToRetrieve: ['service', 'mailbox', 'uid', 'subject', 'fromList', 'toList', 'ccList', 'date', 'unread', 'flagged', 'hasAttachment', 'conversationKeys'],
+        attributesToRetrieve: ['service', 'mailbox', 'uid', 'subject', 'fromList', 'toList', 'ccList', 'date', 'unread', 'flagged', 'hasAttachment', 'conversationKeys', 'listId', 'listName'],
         attributesToCrop: text ? ['text'] : undefined,
         cropLength: 24,
         // Highlighted matches come back as marker-tagged strings the client escapes before rendering
@@ -117,6 +123,8 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
         flagged: hit.flagged,
         hasAttachment: hit.hasAttachment,
         conversationKeys: hit.conversationKeys,
+        listId: hit.listId,
+        listName: hit.listName,
         snippet: hit._formatted?.text || undefined
       }))
     },

@@ -58,6 +58,18 @@ describe('toMailDocument', () => {
     })
   })
 
+  it('indexes the stream key and List-Id of a mailing list mail', () => {
+    const document = toMailDocument('svc', 'INBOX', {
+      ...message,
+      listId: 'security-news.drupal.org',
+      listName: 'Drupal Security News',
+      bulk: true
+    })
+
+    expect(document.conversationKeys).toContain('list:security-news.drupal.org')
+    expect(document).toMatchObject({ listId: 'security-news.drupal.org', listName: 'Drupal Security News' })
+  })
+
   it('deduplicates participant addresses across from, to and cc', () => {
     const document = toMailDocument('svc', 'INBOX', {
       ...message,

@@ -2,7 +2,8 @@ import type { FetchMessageObject, SearchObject } from 'imapflow'
 import { simpleParser } from 'mailparser'
 import type { SetupValues } from '../../../core/shared/types/setup'
 import type { MailProvider } from '../../../mail/server/utils/mail-provider'
-import type { Mailbox, MailMessage, MailMessageState, MailSearch, MailSummary } from '../../../mail/shared/types/mail'
+import type { Mailbox, MailMessage, MailMessageState, MailSearch, MailStreamHeader, MailSummary } from '../../../mail/shared/types/mail'
+import { mailStreamFlags, parseRawStreamHeaders } from '../../../mail/shared/mail-thread'
 import { sequenceRange, uidPage } from './sequence'
 import { isProtonLabel, protonSpecialUse } from './special-use'
 import { toMailAddresses, toMailSummary, toProtonSettings, withProtonBridge, withProtonMailbox } from './bridge'
@@ -10,12 +11,24 @@ import { sendProtonMail } from './mailer'
 
 const MESSAGE_QUERY = { uid: true, flags: true, envelope: true, internalDate: true } as const
 const INDEX_SOURCE_BYTES = 256 * 1024
+/** The only headers the stream backfill needs; the body is never fetched */
+const STREAM_HEADERS = ['list-id', 'list-unsubscribe', 'precedence', 'auto-submitted']
 
 async function toMailMessage(mailbox: string, message: FetchMessageObject): Promise<MailMessage> {
   const parsed = await simpleParser(message.source!)
+  const summary = toMailSummary(mailbox, message)
+  // The list and bulk headers come from the parsed headers, so a stored mail
+  // carries its stream key straight from the index
+  const stream = mailStreamFlags(summary.from, {
+    listId: parsed.headers.get('list-id'),
+    listUnsubscribe: parsed.headers.get('list-unsubscribe'),
+    precedence: parsed.headers.get('precedence'),
+    autoSubmitted: parsed.headers.get('auto-submitted')
+  })
 
   return {
-    ...toMailSummary(mailbox, message),
+    ...summary,
+    ...stream,
     messageId: parsed.messageId,
     inReplyTo: parsed.inReplyTo?.trim() || undefined,
     references: toMessageIds(parsed.references),
@@ -149,6 +162,24 @@ export function createProtonMailProvider(values: SetupValues): MailProvider {
         }
 
         return messages
+      })
+    },
+
+    getStreamHeaders(mailbox, uids) {
+      return withProtonMailbox(settings, mailbox, async (client) => {
+        const headers: MailStreamHeader[] = []
+        if (!uids.length) {
+          return headers
+        }
+
+        // Only the four headers and the envelope, so the bodies stay on the server
+        for await (const message of client.fetch(uids.join(','), { uid: true, envelope: true, headers: STREAM_HEADERS }, { uid: true })) {
+          const from = toMailAddresses(message.envelope?.from)
+          const values = parseRawStreamHeaders(message.headers?.toString('utf8') ?? '')
+          headers.push({ uid: message.uid, from, ...mailStreamFlags(from, values) })
+        }
+
+        return headers
       })
     },
 

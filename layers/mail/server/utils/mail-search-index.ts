@@ -25,9 +25,14 @@ export type MailFacetQuery = Pick<MailIndexQuery, 'services' | 'mailbox' | 'sear
 /** A flag change merged into an already indexed document; `updateDocuments` merges the fields */
 export type MailFlagUpdate = Pick<MailDocument, 'id'> & Partial<Pick<MailDocument, 'unread' | 'flagged'>>
 
+/** A partial document merged into an already indexed one; only the given fields change */
+export type MailDocumentUpdate = Pick<MailDocument, 'id'> & Partial<Omit<MailDocument, 'id'>>
+
 /** Port for a search engine holding indexed mail (e.g. Meilisearch) */
 export interface MailSearchIndex {
   upsert(documents: MailDocument[]): Promise<void>
+  /** Merges partial documents: the fields they carry replace the stored ones */
+  updateDocuments(updates: MailDocumentUpdate[]): Promise<void>
   updateFlags(updates: MailFlagUpdate[]): Promise<void>
   remove(ids: string[]): Promise<void>
   /** All documents of a service, or of one of its mailboxes */

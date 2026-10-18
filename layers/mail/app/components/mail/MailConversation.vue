@@ -2,7 +2,7 @@
 import { useDebounceFn } from '@vueuse/core'
 import type { MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
 import { buildReply } from '#layers/mail/shared/mail-compose'
-import { isOwnMail, stripSubjectPrefix, type OwnMailContext } from '#layers/mail/shared/mail-thread'
+import { isOwnMail, isStreamKey, streamLabel, stripSubjectPrefix, type OwnMailContext } from '#layers/mail/shared/mail-thread'
 
 const props = defineProps<{
   conversationKey: string
@@ -27,9 +27,17 @@ const { data: mails, status, error, refresh } = await useFetch<MailSummary[]>(()
   lazy: true
 })
 
+// A stream is a mailing list or bulk sender: its mails are cards, not bubbles
+const isStream = computed(() => isStreamKey(props.conversationKey))
+
 const title = computed(() => {
   const latest = mails.value?.at(-1)
-  return latest ? stripSubjectPrefix(latest.subject) || latest.subject || '(no subject)' : 'Conversation'
+  if (!latest) {
+    return isStream.value ? 'Stream' : 'Conversation'
+  }
+  return isStream.value
+    ? streamLabel(latest)
+    : stripSubjectPrefix(latest.subject) || latest.subject || '(no subject)'
 })
 
 const ownContext = computed<OwnMailContext>(() => ({ ownAddress: props.ownAddress, sentMailboxes: props.sentMailboxes }))
@@ -182,25 +190,33 @@ useDomainEvents({ domains: ['mail'] }, (event) => {
         class="m-4"
       />
       <div v-else class="flex flex-col gap-4 p-4 sm:p-6">
-        <MailConversationMessage
-          v-for="mail in mails"
-          :key="mailKey(mail)"
-          :mail="mail"
-          :service="service"
-          :own="isOwnMail(mail, ownContext)"
-          @open="emits('open', mail)"
+        <MailStreamList
+          v-if="isStream"
+          :mails="mails"
+          @open="emits('open', $event)"
         />
 
-        <article v-if="pending" class="flex flex-col items-end gap-1">
-          <span class="px-1 text-xs text-muted">me · sending…</span>
-          <div class="max-w-[85%] whitespace-pre-wrap rounded-lg bg-primary/10 px-3 py-2 text-sm">
-            {{ pending }}
-          </div>
-        </article>
+        <template v-else>
+          <MailConversationMessage
+            v-for="mail in mails"
+            :key="mailKey(mail)"
+            :mail="mail"
+            :service="service"
+            :own="isOwnMail(mail, ownContext)"
+            @open="emits('open', mail)"
+          />
+
+          <article v-if="pending" class="flex flex-col items-end gap-1">
+            <span class="px-1 text-xs text-muted">me · sending…</span>
+            <div class="max-w-[85%] whitespace-pre-wrap rounded-lg bg-primary/10 px-3 py-2 text-sm">
+              {{ pending }}
+            </div>
+          </article>
+        </template>
       </div>
     </div>
 
-    <div v-if="latestIncoming" class="border-t border-default p-4 sm:px-6">
+    <div v-if="latestIncoming && !isStream" class="border-t border-default p-4 sm:px-6">
       <UChatPrompt
         v-model="replyText"
         :rows="2"

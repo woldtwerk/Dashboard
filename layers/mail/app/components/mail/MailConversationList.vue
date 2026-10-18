@@ -2,7 +2,7 @@
 import { useInfiniteScroll } from '@vueuse/core'
 import { format, isToday } from 'date-fns'
 import type { MailAddress, MailConversation } from '#layers/mail/shared/types/mail'
-import { conversationParticipantLabel } from '#layers/mail/shared/mail-thread'
+import { conversationKind, conversationParticipantLabel, streamLabel } from '#layers/mail/shared/mail-thread'
 import { highlightToHtml } from '#layers/mail/shared/mail-highlight'
 
 const props = defineProps<{
@@ -26,6 +26,16 @@ const scroller = ref<HTMLElement | null>(null)
 
 const participantNames = (participants: MailAddress[]) =>
   participants.map(address => conversationParticipantLabel(address, props.ownAddress)).join(', ')
+
+/** A stream (mailing list or bulk sender) is labelled by its list, not its participants */
+const isStream = (conversation: MailConversation) => conversationKind(conversation) === 'stream'
+
+const streamIcon = (key: string) => key.startsWith('list:') ? 'i-lucide-newspaper' : 'i-lucide-mail-plus'
+
+const conversationLabel = (conversation: MailConversation) =>
+  isStream(conversation)
+    ? streamLabel(conversation.latest)
+    : participantNames(conversation.participants) || 'Unknown sender'
 
 function scrollToTop() {
   if (scroller.value) {
@@ -62,11 +72,16 @@ useInfiniteScroll(scroller, () => emits('loadMore'), {
         >
           <div class="flex items-center justify-between gap-2" :class="[conversation.unread && 'font-semibold']">
             <div class="flex items-center gap-3 min-w-0">
-              <span class="truncate">{{ participantNames(conversation.participants) || 'Unknown sender' }}</span>
+              <UIcon
+                v-if="isStream(conversation)"
+                :name="streamIcon(conversation.key)"
+                class="size-4 shrink-0 text-dimmed"
+              />
+              <span class="truncate">{{ conversationLabel(conversation) }}</span>
 
               <UChip v-if="conversation.unread" />
               <UBadge
-                v-if="conversation.count > 1"
+                v-if="conversation.count > 1 || isStream(conversation)"
                 :label="conversation.count"
                 variant="subtle"
                 color="neutral"
