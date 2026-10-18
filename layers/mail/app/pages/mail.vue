@@ -3,8 +3,9 @@ import { breakpointsTailwind, refDebounced, useDebounceFn, useDocumentVisibility
 import type { LocationQuery } from 'vue-router'
 import type { MailConversation, MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
 import { buildReply, emptyOutgoingMail, type OutgoingMail } from '#layers/mail/shared/mail-compose'
+import { trashTarget } from '#layers/mail/shared/mail-delete'
 import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
-import type { RetainedConversations, RetainedMails } from '#layers/mail/app/utils/mail-retention'
+import type { RetainedConversations, RetainedMail, RetainedMails } from '#layers/mail/app/utils/mail-retention'
 import type { SetupState } from '#layers/core/shared/types/setup'
 
 useSeoMeta({ title: 'Mail' })
@@ -710,6 +711,184 @@ async function sendCompose(mail: OutgoingMail) {
   }
 }
 
+// --- Deleting ---
+
+// The mailboxes of the account the list is showing. The trash of the deleted
+// mail's mailbox decides whether a delete moves it or removes it for good.
+const mailboxes = computed(() => folders.value.find(entry => entry.service.id === service.value)?.mailboxes ?? [])
+
+/** Whether deleting this mail is permanent: its mailbox is the trash, or the account has none */
+function isPermanentDelete(mail: MailSummary): boolean {
+  return !trashTarget(mailboxes.value, mail.mailbox)
+}
+
+/** What an optimistic delete took away, so a failure or an undo can put it back */
+interface DeleteSnapshot {
+  mail: MailSummary
+  /** Its place in the loaded list; -1 when it was not in it, e.g. a linked mail */
+  listIndex: number
+  /** The unread-retention entry it had, if any */
+  retained?: RetainedMail
+  /** Its place among the conversations, for the single-mail conversation it emptied */
+  conversationIndex: number
+  conversation?: MailConversation
+}
+
+/** Forget a retained mail: its timer and its entry */
+function forgetRetention(key: string) {
+  const timer = retentionTimers.get(key)
+  if (timer) {
+    clearTimeout(timer)
+    retentionTimers.delete(key)
+  }
+  if (retained.value.has(key)) {
+    retained.value.delete(key)
+    // delete() mutates the map in place; hand the computed a fresh map so it re-runs
+    retained.value = new Map(retained.value)
+  }
+}
+
+/** Put back what an optimistic delete removed: the list entry, its retention and its conversation */
+function restoreMail(snapshot: DeleteSnapshot, mail = snapshot.mail) {
+  const key = mailKey(mail)
+
+  if (snapshot.listIndex >= 0 && !mails.value.some(item => mailKey(item) === key)) {
+    const next = [...mails.value]
+    next.splice(Math.min(snapshot.listIndex, next.length), 0, mail)
+    mails.value = next
+  }
+
+  if (snapshot.retained && !retained.value.has(key)) {
+    retained.value.set(key, { ...snapshot.retained, mail })
+    retained.value = new Map(retained.value)
+  }
+
+  if (snapshot.conversation && !conversations.value.some(item => item.key === snapshot.conversation!.key)) {
+    const next = [...conversations.value]
+    next.splice(Math.min(snapshot.conversationIndex, next.length), 0, snapshot.conversation)
+    conversations.value = next
+  }
+}
+
+const confirmState = reactive({ open: false, title: '', description: '', confirmLabel: 'Confirm', action: undefined as (() => void) | undefined })
+
+function askConfirm(title: string, description: string, confirmLabel: string, action: () => void) {
+  Object.assign(confirmState, { open: true, title, description, confirmLabel, action })
+}
+
+function runConfirm() {
+  confirmState.action?.()
+  confirmState.open = false
+}
+
+/** Moves a trashed mail back to where it came from and puts it back in the list */
+async function undoDelete(snapshot: DeleteSnapshot, result: { trashMailbox?: string, trashUid?: number }): Promise<void> {
+  if (!result.trashMailbox || !result.trashUid) {
+    // Without the trash UID the moved mail cannot be addressed; reloading shows it back
+    reloadList()
+    return
+  }
+
+  try {
+    const moved = await $fetch<{ uid?: number }>(`/api/mail/messages/${result.trashUid}/move`, {
+      method: 'POST',
+      query: { service: service.value, mailbox: result.trashMailbox },
+      body: { target: snapshot.mail.mailbox }
+    })
+    restoreMail(snapshot, { ...snapshot.mail, uid: moved.uid ?? snapshot.mail.uid })
+    refreshNuxtData('mail-folders')
+  } catch (error) {
+    toast.add({ title: 'Could not undo', description: mailErrorMessage(error), color: 'error', icon: 'i-lucide-circle-alert' })
+  }
+}
+
+/**
+ * Deletes one mail, optimistically: it leaves the list (and the unread-retention
+ * state and the conversations) at once, the neighbour opens, and only then the
+ * API is asked. A failure puts the mail and the selection back; a move to the
+ * trash offers an undo for five seconds. A permanent delete is confirmed first
+ * and has no undo.
+ */
+async function deleteMail(mail: MailSummary, confirmed = false): Promise<void> {
+  if (isPermanentDelete(mail) && !confirmed) {
+    askConfirm('Delete forever?', 'This mail will be removed permanently and cannot be restored.', 'Delete forever', () => void deleteMail(mail, true))
+    return
+  }
+
+  const key = mailKey(mail)
+  // The neighbour is read before the list changes
+  const next = nextSelection(visibleList.value, key)
+  const conversationIndex = conversations.value.findIndex(item => item.count === 1 && mailKey(item.latest) === key)
+  const snapshot: DeleteSnapshot = {
+    mail,
+    listIndex: mails.value.findIndex(item => mailKey(item) === key),
+    retained: retained.value.get(key),
+    conversationIndex,
+    conversation: conversationIndex >= 0 ? conversations.value[conversationIndex] : undefined
+  }
+
+  mails.value = removeFromList(mails.value, key)
+  forgetRetention(key)
+  if (snapshot.conversation) {
+    conversations.value = conversations.value.filter(item => item !== snapshot.conversation)
+  }
+  selectedMail.value = next
+
+  try {
+    const result = await $fetch<{ action: 'trashed' | 'deleted', trashMailbox?: string, trashUid?: number }>(
+      `/api/mail/messages/${mail.uid}/delete`,
+      { method: 'POST', query: { service: service.value, mailbox: mail.mailbox }, body: { permanent: confirmed } }
+    )
+
+    refreshNuxtData('mail-folders')
+
+    if (result.action === 'deleted') {
+      toast.add({ title: 'Deleted permanently', color: 'success', icon: 'i-lucide-trash-2' })
+      return
+    }
+
+    toast.add({
+      title: 'Moved to Trash',
+      color: 'success',
+      icon: 'i-lucide-trash-2',
+      duration: 5000,
+      actions: [{ label: 'Undo', color: 'neutral', variant: 'link', onClick: () => void undoDelete(snapshot, result) }]
+    })
+  } catch (error) {
+    restoreMail(snapshot)
+    selectedMail.value = mail
+
+    // The server refused a permanent delete it was not told to do — ask and retry
+    if (mailErrorStatus(error) === 409) {
+      askConfirm('Delete forever?', 'This mail will be removed permanently and cannot be restored.', 'Delete forever', () => void deleteMail(mail, true))
+      return
+    }
+
+    toast.add({ title: 'Could not delete message', description: mailErrorMessage(error), color: 'error', icon: 'i-lucide-circle-alert' })
+  }
+}
+
+/**
+ * # / Delete remove the selected mail, in the list or the reader. A whole
+ * conversation is out of scope: with no single mail open there is nothing
+ * selected to delete. Backspace does the same; Nuxt UI's defineShortcuts
+ * already ignores a focused input, so typing in the search box or the composer
+ * never deletes a mail.
+ */
+function deleteSelectedMail() {
+  const mail = selectedMail.value
+  if (!mail || isComposerOpen.value) {
+    return
+  }
+  void deleteMail(mail)
+}
+
+defineShortcuts({
+  '#': deleteSelectedMail,
+  'delete': deleteSelectedMail,
+  'backspace': deleteSelectedMail
+})
+
 const breakpoints = useBreakpoints(breakpointsTailwind)
 const isMobile = breakpoints.smaller('lg')
 </script>
@@ -981,8 +1160,10 @@ const isMobile = breakpoints.smaller('lg')
     :key="selectedMail.uid"
     :mail="selectedMail"
     :service="service"
+    :permanent="isPermanentDelete(selectedMail)"
     @close="selectedMail = null"
     @mark-unread="markUnread"
+    @delete="selectedMail && deleteMail(selectedMail)"
     @compose="openCompose($event, selectedMail ?? undefined)"
     @prefetch="prefetchCompose"
   />
@@ -1020,8 +1201,10 @@ const isMobile = breakpoints.smaller('lg')
           :key="selectedMail.uid"
           :mail="selectedMail"
           :service="service"
+          :permanent="isPermanentDelete(selectedMail)"
           @close="selectedMail = null"
           @mark-unread="markUnread"
+          @delete="selectedMail && deleteMail(selectedMail)"
           @compose="openCompose($event, selectedMail ?? undefined)"
           @prefetch="prefetchCompose"
         />
@@ -1040,4 +1223,23 @@ const isMobile = breakpoints.smaller('lg')
     @send="sendCompose"
     @discard="discardCompose"
   />
+
+  <UModal v-model:open="confirmState.open" :title="confirmState.title">
+    <template #body>
+      <p class="text-sm text-muted">
+        {{ confirmState.description }}
+      </p>
+    </template>
+    <template #footer>
+      <div class="flex w-full justify-end gap-2">
+        <UButton
+          label="Cancel"
+          color="neutral"
+          variant="ghost"
+          @click="confirmState.open = false"
+        />
+        <UButton :label="confirmState.confirmLabel" color="error" @click="runConfirm" />
+      </div>
+    </template>
+  </UModal>
 </template>

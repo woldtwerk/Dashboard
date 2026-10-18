@@ -18,6 +18,15 @@ export function mailErrorMessage(error: unknown): string {
   return 'Unknown error'
 }
 
+/** The HTTP status of a failed request, when it carries one */
+export function mailErrorStatus(error: unknown): number | undefined {
+  if (error && typeof error === 'object') {
+    const { statusCode, status } = error as { statusCode?: number, status?: number }
+    return statusCode ?? status
+  }
+  return undefined
+}
+
 const SPECIAL_USE: Record<string, { icon: string, order: number }> = {
   '\\Inbox': { icon: 'i-lucide-inbox', order: 0 },
   '\\Flagged': { icon: 'i-lucide-star', order: 1 },

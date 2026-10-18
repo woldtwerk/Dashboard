@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MAIL_TOOL_TEXT_LIMIT, mailReadInput, mailSearchInput, mailSendInput, toMailToolSearch } from '../server/tools'
+import { MAIL_TOOL_TEXT_LIMIT, mailDeleteInput, mailReadInput, mailSearchInput, mailSendInput, toMailToolSearch } from '../server/tools'
 
 describe('toMailToolSearch', () => {
   it('maps the tool input onto the domain search', () => {
@@ -36,6 +36,13 @@ describe('toMailToolSearch', () => {
     expect(mailSearchInput.safeParse({ limit: 26 }).success).toBe(false)
     expect(mailReadInput.safeParse({ service: 's', mailbox: 'INBOX', uid: 1 }).success).toBe(true)
     expect(MAIL_TOOL_TEXT_LIMIT).toBe(20_000)
+  })
+
+  it('defaults the delete tool to a recoverable delete', () => {
+    const input = mailDeleteInput.parse({ service: 's', mailbox: 'INBOX', uid: 1 })
+
+    expect(input.permanent).toBe(false)
+    expect(mailDeleteInput.parse({ service: 's', mailbox: 'INBOX', uid: 1, permanent: true }).permanent).toBe(true)
   })
 })
 

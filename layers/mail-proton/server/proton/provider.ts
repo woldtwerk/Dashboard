@@ -174,7 +174,14 @@ export function createProtonMailProvider(values: SetupValues): MailProvider {
 
     moveMessage(mailbox, uid, target) {
       return withProtonMailbox(settings, mailbox, async (client) => {
-        await client.messageMove(String(uid), target, { uid: true })
+        const result = await client.messageMove(String(uid), target, { uid: true })
+        return { uid: result ? result.uidMap?.get(uid) : undefined }
+      })
+    },
+
+    deleteMessage(mailbox, uid) {
+      return withProtonMailbox(settings, mailbox, async (client) => {
+        await client.messageDelete(String(uid), { uid: true })
       })
     },
 

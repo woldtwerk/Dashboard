@@ -7,11 +7,14 @@ import { normalizeEmail } from '#layers/core/shared/entities'
 const props = defineProps<{
   mail: MailSummary
   service: string
+  /** The mail already sits in the trash, so deleting removes it for good */
+  permanent?: boolean
 }>()
 
 const emits = defineEmits<{
   close: []
   markUnread: []
+  delete: []
   compose: [mode: 'reply' | 'replyAll' | 'forward']
   /** Warm the message the composer will need */
   prefetch: [mode: 'reply' | 'replyAll' | 'forward']
@@ -116,6 +119,15 @@ function openPerson(address?: string) {
             aria-label="Forward"
             @mouseenter="emits('prefetch', 'forward')"
             @click="emits('compose', 'forward')"
+          />
+        </UTooltip>
+        <UTooltip :text="permanent ? 'Delete forever' : 'Delete (#)'">
+          <UButton
+            icon="i-lucide-trash-2"
+            :color="permanent ? 'error' : 'neutral'"
+            variant="ghost"
+            :aria-label="permanent ? 'Delete forever' : 'Delete'"
+            @click="emits('delete')"
           />
         </UTooltip>
         <GraphLinkButton :entity="mailEntity" />

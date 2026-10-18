@@ -11,8 +11,14 @@ export interface MailProvider {
   getMessage(mailbox: string, uid: number): Promise<MailMessage | null>
   setSeen(mailbox: string, uid: number, seen: boolean): Promise<void>
   setFlagged(mailbox: string, uid: number, flagged: boolean): Promise<void>
-  /** Moves one message to another mailbox; the target must already exist */
-  moveMessage(mailbox: string, uid: number, target: string): Promise<void>
+  /**
+   * Moves one message to another mailbox; the target must already exist. The
+   * result carries the message's UID in the target where the server reports one
+   * (IMAP UIDPLUS); without it the caller can only announce the move.
+   */
+  moveMessage(mailbox: string, uid: number, target: string): Promise<{ uid?: number }>
+  /** Marks one message `\Deleted` and expunges it, without touching the others */
+  deleteMessage(mailbox: string, uid: number): Promise<void>
 
   // --- Sending ---
   /**

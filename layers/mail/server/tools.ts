@@ -4,6 +4,7 @@ import type { MailSearch } from '../shared/types/mail'
 import { mailLink, toMailSource } from '../shared/mail-source'
 import { OUTGOING_MESSAGE_ID_LIMIT, OUTGOING_MESSAGE_ID_PATTERN, OUTGOING_REFERENCES_LIMIT, OUTGOING_SUBJECT_LIMIT } from '../shared/mail-compose'
 import { mailAccountAddress } from './utils/mail-identity'
+import { deleteMail } from './utils/mail-delete'
 import { sendMail } from './utils/mail-send'
 
 /** Mail text sent to an assistant or MCP client per message. */
@@ -42,6 +43,13 @@ export const mailMoveInput = z.object({
   mailbox: z.string().min(1).describe('Mailbox path the message is currently in'),
   uid: z.number().int().positive().describe('IMAP UID of the message within its mailbox'),
   target: z.string().min(1).describe('Destination mailbox path, e.g. "Archive" or "Folders/Work"')
+})
+
+export const mailDeleteInput = z.object({
+  service: z.string().min(1).describe('Mail service id'),
+  mailbox: z.string().min(1).describe('Mailbox path the message is currently in'),
+  uid: z.number().int().positive().describe('IMAP UID of the message within its mailbox'),
+  permanent: z.boolean().default(false).describe('Set true to delete permanently. Only needed for mail already in the trash or accounts without a trash folder; otherwise the mail is moved to the trash. Permanent deletion cannot be undone.')
 })
 
 const mailAddressInput = z.object({
@@ -212,6 +220,23 @@ export const mailTools: DomainTool[] = [
       await publishDomainEvent({ domain: 'mail', service: input.service, type: 'changed', resource: input.target })
 
       return { uid: input.uid, from: input.mailbox, to: input.target }
+    }
+  },
+  {
+    name: 'mail_delete',
+    domain: 'mail',
+    description: 'Delete one mail the way the mail client does: it moves the mail to the account\'s trash. Removing mail permanently needs `permanent: true` and only applies to mail that already is in the trash, or to accounts without a trash folder; such a deletion cannot be restored.',
+    input: mailDeleteInput,
+    writes: true,
+    execute: async (raw) => {
+      const input = raw as z.infer<typeof mailDeleteInput>
+
+      return await deleteMail(input.service, input.mailbox, input.uid, { permanent: input.permanent }, {
+        provider: await useMailProvider(input.service),
+        index: useMailSearchIndex(),
+        publish: mailbox => publishDomainEvent({ domain: 'mail', service: input.service, type: 'changed', resource: mailbox }),
+        logger: useServiceLogger('mail', input.service)
+      })
     }
   },
   {
