@@ -28,6 +28,7 @@ describe('buildIndexSettings', () => {
 
     expect(settings.filterableAttributes).toContain('hasAttachment')
     expect(settings.filterableAttributes).toContain('fromTerms')
+    expect(settings.filterableAttributes).toContain('participantTerms')
     expect(settings.typoTolerance).toEqual(buildTypoTolerance(options))
   })
 

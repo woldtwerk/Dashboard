@@ -27,6 +27,8 @@ export const calendarObjects = sqliteTable('calendar_objects', {
   uid: text('uid').notNull(),
   /** The raw iCalendar object, expanded when a window is read */
   data: text('data').notNull(),
+  /** Normalized emails of ORGANIZER and ATTENDEE as a JSON array, for participant queries */
+  participants: text('participants').notNull().default('[]'),
   firstStart: integer('first_start', { mode: 'timestamp_ms' }).notNull(),
   /** End of the last occurrence; null for a series without an end */
   lastEnd: integer('last_end', { mode: 'timestamp_ms' })

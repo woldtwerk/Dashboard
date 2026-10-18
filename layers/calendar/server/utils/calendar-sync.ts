@@ -1,11 +1,11 @@
-import { and, count, eq, gt, inArray, isNull, lt, or } from 'drizzle-orm'
+import { and, count, eq, gt, inArray, isNull, like, lt, or } from 'drizzle-orm'
 import type { SqliteRemoteDatabase } from 'drizzle-orm/sqlite-proxy'
 import type { Calendar, CalendarEvent, CalendarSyncStatus } from '../../shared/types/calendar'
 import { calendarCacheSchema } from '../db/cache'
 import { calendarCollections, calendarObjects, calendarSync } from '../db/cache-schema'
 import { objectBounds } from '../calendar-sync/bounds'
 import { diffObjects } from '../calendar-sync/diff'
-import { expandEvents } from './calendar-ical'
+import { expandEvents, objectParticipants, objectParticipantRoles } from './calendar-ical'
 import type { CalendarProvider, RemoteCalendarObject } from './calendar-provider'
 
 const LOCK_TTL_MS = 5 * 60_000
@@ -14,7 +14,7 @@ const STALE_MS = 2 * 60_000
 const SQL_CHUNK = 500
 
 /** Bump when the stored bounds change meaning, so an outdated cache refetches */
-export const CALENDAR_CACHE_VERSION = 2
+export const CALENDAR_CACHE_VERSION = 3
 
 export type CalendarCacheDb = SqliteRemoteDatabase<typeof calendarCacheSchema>
 type CacheTransaction = Parameters<Parameters<CalendarCacheDb['transaction']>[0]>[0]
@@ -67,6 +67,7 @@ function toRows(service: string, calendarUrl: string, objects: RemoteCalendarObj
       etag: object.etag ?? null,
       uid: bounds.uid,
       data: object.data,
+      participants: JSON.stringify(objectParticipants(object.data)),
       firstStart: bounds.firstStart,
       lastEnd: bounds.lastEnd
     }
@@ -87,6 +88,7 @@ async function upsertRows(service: string, rows: ReturnType<typeof toRows>): Pro
           etag: row.etag,
           uid: row.uid,
           data: row.data,
+          participants: row.participants,
           firstStart: row.firstStart,
           lastEnd: row.lastEnd
         }
@@ -247,6 +249,7 @@ async function syncObjects(service: string, calendar: Calendar, provider: Calend
           etag: row.etag,
           uid: row.uid,
           data: row.data,
+          participants: row.participants,
           firstStart: row.firstStart,
           lastEnd: row.lastEnd
         }
@@ -443,4 +446,74 @@ export async function cachedEvents(
     calendar: row.calendarUrl,
     service
   }, { start: new Date(window.start), end: new Date(window.end) }, fallbackZone))
+}
+
+/** One expanded event and the organizer of the object it came from */
+export interface CachedParticipantEvent {
+  event: CalendarEvent
+  organizer?: string
+}
+
+/**
+ * Events one address takes part in, expanded from the cached objects. The cache
+ * is narrowed with a LIKE on the participant JSON first, then checked exactly, so
+ * a `_` or `%` in an address cannot add a stranger.
+ */
+export async function cachedEventsForParticipant(
+  service: string,
+  email: string,
+  window: { start: string, end: string },
+  fallbackZone: string,
+  db?: CalendarCacheDb
+): Promise<CachedParticipantEvent[]> {
+  const cache = db ?? await cacheDb()
+  const rows = await cache.select({
+    url: calendarObjects.url,
+    etag: calendarObjects.etag,
+    calendarUrl: calendarObjects.calendarUrl,
+    data: calendarObjects.data,
+    participants: calendarObjects.participants
+  }).from(calendarObjects).where(and(
+    eq(calendarObjects.service, service),
+    like(calendarObjects.participants, `%"${email}"%`),
+    lt(calendarObjects.firstStart, new Date(window.end)),
+    or(isNull(calendarObjects.lastEnd), gt(calendarObjects.lastEnd, new Date(window.start)))
+  ))
+
+  return rows.flatMap((row) => {
+    if (!row.participants.includes(`"${email}"`)) {
+      return []
+    }
+
+    const organizer = objectParticipantRoles(row.data).organizer
+    return expandEvents(row.data, {
+      url: row.url,
+      etag: row.etag ?? undefined,
+      calendar: row.calendarUrl,
+      service
+    }, { start: new Date(window.start), end: new Date(window.end) }, fallbackZone)
+      .map(event => ({ event, organizer }))
+  })
+}
+
+/** A cached object by UID, used to read the participants of an event reference */
+export interface CachedCalendarObject {
+  url: string
+  calendarUrl: string
+  data: string
+  firstStart: Date
+}
+
+export async function cachedObjectsByUid(service: string, uid: string, db?: CalendarCacheDb): Promise<CachedCalendarObject[]> {
+  const cache = db ?? await cacheDb()
+
+  return cache.select({
+    url: calendarObjects.url,
+    calendarUrl: calendarObjects.calendarUrl,
+    data: calendarObjects.data,
+    firstStart: calendarObjects.firstStart
+  }).from(calendarObjects).where(and(
+    eq(calendarObjects.service, service),
+    eq(calendarObjects.uid, uid)
+  ))
 }

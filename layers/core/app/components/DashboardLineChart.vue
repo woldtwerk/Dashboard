@@ -2,6 +2,7 @@
 import { VisAxis, VisCrosshair, VisLine, VisScatter, VisTooltip, VisXYContainer, VisXYLabels } from '@unovis/vue'
 import { useElementSize } from '@vueuse/core'
 import type { LineChartRow, LineChartSeries } from '../utils/chart'
+import { yDomainFromZero } from '../utils/chart'
 
 interface EndLabel {
   x: number
@@ -63,6 +64,11 @@ const labelColor = (label: EndLabel) => label.color
 const crosshairY = computed(() => props.series.map(series => yFor(series.key)))
 const crosshairColors = computed(() => props.series.map(series => series.color))
 
+// Durations always start at zero, so a lone point is not pushed off the plot
+const yDomain = computed(() => yDomainFromZero(props.rows.flatMap(row => props.series
+  .map(series => row.values[series.key])
+  .filter((value): value is number => value != null))))
+
 function template(row?: LineChartRow): string {
   return row ? props.formatTooltip(row) : ''
 }
@@ -86,6 +92,7 @@ function template(row?: LineChartRow): string {
       :width="width"
       :height="240"
       :margin="{ left: 8, right: 8, top: 8, bottom: 24 }"
+      :y-domain="yDomain"
       :aria-label="label"
     >
       <VisLine

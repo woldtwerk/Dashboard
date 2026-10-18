@@ -16,12 +16,31 @@ interface SetupFieldBase {
   secret?: boolean
 }
 
+export interface SetupOption {
+  label: string
+  value: string
+  description?: string
+}
+
 export type SetupField
   = | (SetupFieldBase & { type: 'text' | 'password' | 'textarea', placeholder?: string, autocomplete?: string, default?: string })
     | (SetupFieldBase & { type: 'number', min?: number, max?: number, default?: number })
     | (SetupFieldBase & { type: 'switch', default?: boolean })
     /** Text file (e.g. a certificate): uploaded or pasted, stored as text */
     | (SetupFieldBase & { type: 'file', accept?: string, placeholder?: string, default?: string })
+    | (SetupFieldBase & {
+      type: 'select'
+      /** Static options */
+      options?: SetupOption[]
+      /** Options come from the connector's `fieldOptions` on the server */
+      dynamic?: boolean
+      /** Reload dynamic options when one of these fields changes; options load only once they are all filled */
+      dependsOn?: string[]
+      /** Accept a value that is not in the list */
+      allowCustom?: boolean
+      placeholder?: string
+      default?: string
+    })
 
 export interface SetupStep {
   id: string

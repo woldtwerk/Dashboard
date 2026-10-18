@@ -3,6 +3,7 @@ import { createError } from 'nuxt/server'
 import type { AiModel } from '../../../ai/server/utils/ai'
 import type { Connector } from '../../../core/server/utils/services'
 import type { SetupField } from '../../../core/shared/types/setup'
+import { listOpenAICompatibleModels, listOpenCodeModels } from './models'
 import { createGenericModel, createOpenCodeModel } from './provider'
 
 /** A tiny completion proves URL, key and model before the service is saved */
@@ -62,10 +63,18 @@ export const openCodeConnector: Connector = {
       fields: [
         { name: 'baseUrl', label: 'API base URL', description: 'OpenCode Go by default; use the Zen URL from its docs for pay as you go.', type: 'text', required: true, default: 'https://opencode.ai/inference/go/openai/v1' },
         { name: 'apiKey', label: 'API key', type: 'password', required: true, secret: true },
-        { name: 'model', label: 'Model', description: 'A chat completions model with tool calling, e.g. deepseek-v4.1-flash, glm-5.3, kimi-k3.', type: 'text', required: true, default: 'deepseek-v4.1-flash' },
+        { name: 'model', label: 'Model', description: 'A chat completions model with tool calling, e.g. deepseek-v4.1-flash, glm-5.3, kimi-k3.', type: 'select', dynamic: true, dependsOn: ['baseUrl', 'apiKey'], allowCustom: true, required: true, default: 'deepseek-v4.1-flash' },
         structuredOutputsField
       ]
     }]
+  },
+
+  async fieldOptions(field, values) {
+    if (field !== 'model') {
+      return []
+    }
+    const models = await listOpenCodeModels(values)
+    return models.map(model => ({ label: model.label, value: model.id, description: model.id }))
   },
 
   test: async values => testModel(await createOpenCodeModel(values, { session: 'allmight-setup-test' }))
@@ -89,10 +98,18 @@ export const openAICompatibleConnector: Connector = {
       fields: [
         { name: 'baseUrl', label: 'API base URL', type: 'text', required: true, placeholder: 'http://host.docker.internal:11434/v1' },
         { name: 'apiKey', label: 'API key', description: 'Leave empty if the endpoint needs none.', type: 'password', secret: true },
-        { name: 'model', label: 'Model', description: 'Needs tool calling for the assistant.', type: 'text', required: true, placeholder: 'qwen3:8b' },
+        { name: 'model', label: 'Model', description: 'Needs tool calling for the assistant.', type: 'select', dynamic: true, dependsOn: ['baseUrl'], allowCustom: true, required: true, placeholder: 'qwen3:8b' },
         { ...structuredOutputsField, default: false }
       ]
     }]
+  },
+
+  async fieldOptions(field, values) {
+    if (field !== 'model') {
+      return []
+    }
+    const models = await listOpenAICompatibleModels(values)
+    return models.map(model => ({ label: model.id, value: model.id }))
   },
 
   validate(values) {

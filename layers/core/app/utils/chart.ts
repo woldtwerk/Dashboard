@@ -119,6 +119,16 @@ export interface StackedChartRow {
  * breaks instead of dropping to zero. */
 export type SyncDurationRow = LineChartRow
 
+/**
+ * Y domain starting at zero for a duration chart: `[0, max * 1.1]`, or `[0, 1]`
+ * without a positive value. Unovis otherwise starts at the smallest data point,
+ * which draws a lone point below the plot area.
+ */
+export function yDomainFromZero(values: number[]): [number, number] {
+  const max = values.reduce((highest, value) => Number.isFinite(value) ? Math.max(highest, value) : highest, 0)
+  return [0, max > 0 ? max * 1.1 : 1]
+}
+
 export function syncDurationRows(days: ActivityDay[]): { domains: string[], rows: SyncDurationRow[] } {
   const domains = activityDomains(days)
   const byKey = new Map(days.map(day => [`${day.date}\u0000${day.domain}`, day]))

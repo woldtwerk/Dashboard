@@ -103,6 +103,10 @@ const rows = computed(() => {
         </dl>
 
         <div class="flex flex-wrap gap-2">
+          <GraphLinkButton
+            v-if="entry"
+            :entity="{ type: 'file', service, id: entry.path }"
+          />
           <UButton
             label="Download"
             icon="i-lucide-download"

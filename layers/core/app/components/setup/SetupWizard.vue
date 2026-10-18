@@ -144,6 +144,10 @@ async function save() {
           v-model="values[field.name]"
           :field="field"
           :keeps-secret="keepsSecret(field)"
+          :connector="state.connector.id"
+          :service-id="state.service?.id"
+          :values="values"
+          :stored-secrets="state.storedSecrets"
         />
       </div>
     </UCard>

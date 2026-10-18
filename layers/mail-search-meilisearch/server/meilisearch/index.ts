@@ -83,18 +83,18 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
       await settle(index.deleteDocuments({ filter: buildMailFilter({ services: [service], mailbox, search: {} }) }))
     },
 
-    async search({ services, mailbox, search, limit, offset }: MailIndexQuery): Promise<MailSummary[]> {
+    async search({ services, mailbox, participant, search, limit, offset }: MailIndexQuery): Promise<MailSummary[]> {
       await ensureSettings()
       const text = search.text?.trim()
       const result = await index.search(text || null, {
-        filter: buildMailFilter({ services, mailbox, search }),
+        filter: buildMailFilter({ services, mailbox, participant, search }),
         limit,
         offset,
         // Without text, browse newest first; with text, rank by relevance
         sort: text ? undefined : ['date:desc'],
         hybrid: text && semantic ? { embedder: EMBEDDER, semanticRatio: options.semanticRatio } : undefined,
         rankingScoreThreshold: text ? rankingScoreThresholdFor(semantic, options.semanticRatio, options.rankingScoreThreshold) : undefined,
-        attributesToRetrieve: ['service', 'mailbox', 'uid', 'subject', 'fromList', 'date', 'unread', 'flagged', 'hasAttachment'],
+        attributesToRetrieve: ['service', 'mailbox', 'uid', 'subject', 'fromList', 'toList', 'ccList', 'date', 'unread', 'flagged', 'hasAttachment'],
         attributesToCrop: text ? ['text'] : undefined,
         cropLength: 24,
         // Highlighted matches come back as marker-tagged strings the client escapes before rendering
@@ -110,6 +110,8 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
         subject: hit.subject,
         subjectHighlight: hit._formatted?.subject,
         from: hit.fromList,
+        to: hit.toList,
+        cc: hit.ccList,
         date: new Date(hit.date * 1000).toISOString(),
         unread: hit.unread,
         flagged: hit.flagged,
