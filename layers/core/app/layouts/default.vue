@@ -97,33 +97,37 @@ function rename(key: string, label: string) {
 
       <template #footer="{ collapsed }">
         <template v-if="editing">
-          <UButton
-            icon="i-lucide-rotate-ccw"
-            label="Reset to default"
-            color="neutral"
-            variant="ghost"
-            block
-            :disabled="isDefault"
-            @click="reset"
-          />
-          <UButton
-            icon="i-lucide-check"
-            label="Done"
-            block
-            @click="editing = false"
-          />
+          <div class="flex w-full gap-2">
+            <UButton
+              icon="i-lucide-rotate-ccw"
+              label="Reset to default"
+              color="neutral"
+              variant="ghost"
+              class="min-w-0 flex-1"
+              :ui="{ label: 'truncate' }"
+              :disabled="isDefault"
+              @click="reset"
+            />
+            <UButton
+              icon="i-lucide-check"
+              label="Done"
+              class="shrink-0"
+              @click="editing = false"
+            />
+          </div>
         </template>
         <template v-else>
-          <UButton
-            icon="i-lucide-pencil"
-            :label="collapsed ? undefined : 'Customize menu'"
-            color="neutral"
-            variant="ghost"
-            block
-            :square="collapsed"
-            @click="editing = true"
-          />
-          <ThemeMenu :collapsed="collapsed" />
+          <UTooltip text="Customize menu">
+            <UButton
+              icon="i-lucide-pencil"
+              aria-label="Customize menu"
+              color="neutral"
+              variant="ghost"
+              square
+              @click="editing = true"
+            />
+          </UTooltip>
+          <ThemeMenu :collapsed="collapsed" class="flex-1 min-w-0" />
         </template>
       </template>
     </UDashboardSidebar>
