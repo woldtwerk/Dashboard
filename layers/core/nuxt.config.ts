@@ -26,6 +26,18 @@ export default defineNuxtConfig({
       retentionDays: 7,
       // NUXT_LOGS_MAX_ENTRIES — keep at most this many log entries
       maxEntries: 50000
+    },
+    vapid: {
+      // NUXT_VAPID_PUBLIC_KEY — base64url public key, also handed to the browser in `public.vapidPublicKey`
+      publicKey: '',
+      // NUXT_VAPID_PRIVATE_KEY — base64url private key, only used by the server to sign pushes
+      privateKey: '',
+      // NUXT_VAPID_SUBJECT — `mailto:` or `https:` contact for the push service
+      subject: ''
+    },
+    public: {
+      // The env var is not a NUXT_PUBLIC_* name, so the public copy is filled here
+      vapidPublicKey: process.env.NUXT_VAPID_PUBLIC_KEY ?? ''
     }
   },
 

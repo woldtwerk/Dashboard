@@ -6,6 +6,7 @@ import type { NotificationSettings } from '../../shared/types/settings'
 import { notifications } from '../db/schema'
 import { publishToChannel } from './domain-events'
 import { getSettings } from './settings'
+import { sendPush } from './web-push'
 
 export type NotificationRow = typeof notifications.$inferSelect
 
@@ -123,7 +124,8 @@ export async function notify(input: NotificationInput): Promise<AppNotification 
   }
 
   const settings = await getSettings<NotificationSettings>('notifications')
-  if (notificationStyle(settings, input.category) === 'off') {
+  const style = notificationStyle(settings, input.category)
+  if (style === 'off') {
     return undefined
   }
 
@@ -167,6 +169,17 @@ export async function notify(input: NotificationInput): Promise<AppNotification 
 
   const notification = toAppNotification(saved)
   await publishToChannel('notifications', notification)
+
+  // Desktop-style categories also leave the dashboard as Web Push. notify() runs
+  // once per event, so this is the one place that sends; the channel subscriber
+  // only feeds open tabs. A push failure must not fail the caller.
+  if (!settings.doNotDisturb && (style === 'desktop' || style === 'both')) {
+    void sendPush(notification).catch((error) => {
+      useServiceLogger('core', 'push').warn('Could not send push notifications', {
+        error: error instanceof Error ? error.message : String(error)
+      })
+    })
+  }
 
   return notification
 }

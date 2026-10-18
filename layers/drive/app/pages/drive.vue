@@ -2,6 +2,7 @@
 import { refDebounced, useDebounceFn } from '@vueuse/core'
 import type { DropdownMenuItem } from '@nuxt/ui'
 import type { DriveEntry, DriveInvitation, DriveOrder, DriveSort, DriveView } from '#layers/drive/shared/types/drive'
+import type { DriveSelectionAction } from '../utils/selection-action'
 import { isWithinPath, joinPath, parentPath } from '#layers/drive/shared/drive-path'
 import { DRIVE_SECTIONS, downloadUrl, filterEntries, sectionByKey, sectionOf, sortEntries } from '../utils/drive'
 import { driveRequest } from '../utils/drive-request'
@@ -403,6 +404,60 @@ function menuItems(entry: DriveEntry): DropdownMenuItem[] {
   return items
 }
 
+const selectionActions = computed<DriveSelectionAction[]>(() => {
+  const actions: DriveSelectionAction[] = [
+    { key: 'download', label: 'Download', icon: 'i-lucide-download' }
+  ]
+
+  if (section.value.key === 'trash') {
+    actions.push(
+      { key: 'restore', label: 'Restore', icon: 'i-lucide-rotate-ccw' },
+      { key: 'delete-forever', label: 'Delete permanently', icon: 'i-lucide-trash-2', color: 'error' }
+    )
+  } else {
+    actions.push(
+      { key: 'move', label: 'Move to…', icon: 'i-lucide-folder-input' },
+      { key: 'copy', label: 'Copy to…', icon: 'i-lucide-copy' }
+    )
+    if (selectedEntries.value.length === 1) {
+      actions.push({ key: 'share', label: 'Share link', icon: 'i-lucide-link' })
+    }
+    actions.push({ key: 'trash', label: 'Move to trash', icon: 'i-lucide-trash', color: 'error' })
+  }
+
+  return actions
+})
+
+function runSelectionAction(key: string) {
+  const paths = selection.selected.value
+
+  switch (key) {
+    case 'download':
+      download(paths)
+      break
+    case 'restore':
+      restore(paths)
+      break
+    case 'delete-forever':
+      askConfirm('Delete permanently?', `${selection.count.value} items will be removed forever.`, 'Delete', () => removeForever(paths))
+      break
+    case 'move':
+      startPicker('move', paths)
+      break
+    case 'copy':
+      startPicker('copy', paths)
+      break
+    case 'share':
+      if (selectedEntries.value[0]) {
+        openShare(selectedEntries.value[0])
+      }
+      break
+    case 'trash':
+      trash(paths)
+      break
+  }
+}
+
 useEventListener('keydown', (event: KeyboardEvent) => {
   const target = event.target as HTMLElement | null
   if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) {
@@ -441,189 +496,123 @@ useEventListener('keydown', (event: KeyboardEvent) => {
     </UDashboardNavbar>
 
     <UDashboardToolbar>
-      <DriveBreadcrumb
-        :path="path"
-        :section="section"
-        class="min-w-0 flex-1"
-        @navigate="navigate"
+      <DriveSelectionToolbar
+        v-if="selection.count.value"
+        :count="selection.count.value"
+        :actions="selectionActions"
+        @action="runSelectionAction"
+        @clear="selection.clear()"
       />
-
-      <UInput
-        v-model="search"
-        icon="i-lucide-search"
-        placeholder="Search this folder..."
-        size="sm"
-        class="hidden max-w-56 sm:block"
-      >
-        <template v-if="search" #trailing>
-          <UButton
-            icon="i-lucide-x"
-            color="neutral"
-            variant="link"
-            size="xs"
-            aria-label="Clear search"
-            @click="search = ''"
-          />
-        </template>
-      </UInput>
-
-      <UTooltip text="New folder">
-        <UButton
-          icon="i-lucide-folder-plus"
-          color="neutral"
-          variant="ghost"
-          size="sm"
-          :disabled="section.key === 'trash'"
-          @click="newFolderOpen = true"
-        />
-      </UTooltip>
-
-      <UTooltip text="Upload files">
-        <UButton
-          icon="i-lucide-upload"
-          color="neutral"
-          variant="ghost"
-          size="sm"
-          :disabled="section.key === 'trash'"
-          @click="pickFiles"
-        />
-      </UTooltip>
-      <input
-        ref="fileInput"
-        type="file"
-        multiple
-        class="hidden"
-        @change="onFilePicked"
-      >
-
-      <UDropdownMenu :items="sortItems">
-        <UButton
-          icon="i-lucide-arrow-up-down"
-          color="neutral"
-          variant="ghost"
-          size="sm"
-          aria-label="Sort"
-        />
-      </UDropdownMenu>
-
-      <UTooltip :text="order === 'asc' ? 'Ascending' : 'Descending'">
-        <UButton
-          :icon="order === 'asc' ? 'i-lucide-arrow-up' : 'i-lucide-arrow-down'"
-          color="neutral"
-          variant="ghost"
-          size="sm"
-          @click="updateQuery({ order: order === 'asc' ? 'desc' : null })"
-        />
-      </UTooltip>
-
-      <UTooltip text="Grid view">
-        <UButton
-          icon="i-lucide-layout-grid"
-          :color="view === 'grid' ? 'primary' : 'neutral'"
-          :variant="view === 'grid' ? 'soft' : 'ghost'"
-          size="sm"
-          aria-label="Grid view"
-          @click="updateQuery({ view: null })"
-        />
-      </UTooltip>
-      <UTooltip text="List view">
-        <UButton
-          icon="i-lucide-list"
-          :color="view === 'list' ? 'primary' : 'neutral'"
-          :variant="view === 'list' ? 'soft' : 'ghost'"
-          size="sm"
-          aria-label="List view"
-          @click="updateQuery({ view: 'list' })"
-        />
-      </UTooltip>
-
-      <UTooltip text="Refresh">
-        <UButton
-          icon="i-lucide-refresh-cw"
-          color="neutral"
-          variant="ghost"
-          size="sm"
-          :loading="status === 'pending'"
-          @click="refresh()"
-        />
-      </UTooltip>
-    </UDashboardToolbar>
-
-    <div v-if="selection.count.value" class="flex flex-wrap items-center gap-2 border-b border-default px-4 py-2">
-      <span class="text-sm font-medium">{{ selection.count.value }} selected</span>
-
-      <UButton
-        label="Download"
-        icon="i-lucide-download"
-        color="neutral"
-        variant="ghost"
-        size="xs"
-        @click="download(selection.selected.value)"
-      />
-
-      <template v-if="section.key === 'trash'">
-        <UButton
-          label="Restore"
-          icon="i-lucide-rotate-ccw"
-          color="neutral"
-          variant="ghost"
-          size="xs"
-          @click="restore(selection.selected.value)"
-        />
-        <UButton
-          label="Delete permanently"
-          icon="i-lucide-trash-2"
-          color="error"
-          variant="ghost"
-          size="xs"
-          @click="askConfirm('Delete permanently?', `${selection.count.value} items will be removed forever.`, 'Delete', () => removeForever(selection.selected.value))"
-        />
-      </template>
 
       <template v-else>
-        <UButton
-          label="Move to…"
-          icon="i-lucide-folder-input"
-          color="neutral"
-          variant="ghost"
-          size="xs"
-          @click="startPicker('move', selection.selected.value)"
+        <DriveBreadcrumb
+          :path="path"
+          :section="section"
+          class="min-w-0 flex-1"
+          @navigate="navigate"
         />
-        <UButton
-          label="Copy to…"
-          icon="i-lucide-copy"
-          color="neutral"
-          variant="ghost"
-          size="xs"
-          @click="startPicker('copy', selection.selected.value)"
-        />
-        <UButton
-          v-if="selectedEntries.length === 1"
-          label="Share link"
-          icon="i-lucide-link"
-          color="neutral"
-          variant="ghost"
-          size="xs"
-          @click="openShare(selectedEntries[0]!)"
-        />
-        <UButton
-          label="Move to trash"
-          icon="i-lucide-trash"
-          color="error"
-          variant="ghost"
-          size="xs"
-          @click="trash(selection.selected.value)"
-        />
-      </template>
 
-      <UButton
-        label="Clear"
-        color="neutral"
-        variant="ghost"
-        size="xs"
-        @click="selection.clear()"
-      />
-    </div>
+        <UInput
+          v-model="search"
+          icon="i-lucide-search"
+          placeholder="Search this folder..."
+          size="sm"
+          class="hidden max-w-56 sm:block"
+        >
+          <template v-if="search" #trailing>
+            <UButton
+              icon="i-lucide-x"
+              color="neutral"
+              variant="link"
+              size="xs"
+              aria-label="Clear search"
+              @click="search = ''"
+            />
+          </template>
+        </UInput>
+
+        <UTooltip text="New folder">
+          <UButton
+            icon="i-lucide-folder-plus"
+            color="neutral"
+            variant="ghost"
+            size="sm"
+            :disabled="section.key === 'trash'"
+            @click="newFolderOpen = true"
+          />
+        </UTooltip>
+
+        <UTooltip text="Upload files">
+          <UButton
+            icon="i-lucide-upload"
+            color="neutral"
+            variant="ghost"
+            size="sm"
+            :disabled="section.key === 'trash'"
+            @click="pickFiles"
+          />
+        </UTooltip>
+        <input
+          ref="fileInput"
+          type="file"
+          multiple
+          class="hidden"
+          @change="onFilePicked"
+        >
+
+        <UDropdownMenu :items="sortItems">
+          <UButton
+            icon="i-lucide-arrow-up-down"
+            color="neutral"
+            variant="ghost"
+            size="sm"
+            aria-label="Sort"
+          />
+        </UDropdownMenu>
+
+        <UTooltip :text="order === 'asc' ? 'Ascending' : 'Descending'">
+          <UButton
+            :icon="order === 'asc' ? 'i-lucide-arrow-up' : 'i-lucide-arrow-down'"
+            color="neutral"
+            variant="ghost"
+            size="sm"
+            @click="updateQuery({ order: order === 'asc' ? 'desc' : null })"
+          />
+        </UTooltip>
+
+        <UTooltip text="Grid view">
+          <UButton
+            icon="i-lucide-layout-grid"
+            :color="view === 'grid' ? 'primary' : 'neutral'"
+            :variant="view === 'grid' ? 'soft' : 'ghost'"
+            size="sm"
+            aria-label="Grid view"
+            @click="updateQuery({ view: null })"
+          />
+        </UTooltip>
+        <UTooltip text="List view">
+          <UButton
+            icon="i-lucide-list"
+            :color="view === 'list' ? 'primary' : 'neutral'"
+            :variant="view === 'list' ? 'soft' : 'ghost'"
+            size="sm"
+            aria-label="List view"
+            @click="updateQuery({ view: 'list' })"
+          />
+        </UTooltip>
+
+        <UTooltip text="Refresh">
+          <UButton
+            icon="i-lucide-refresh-cw"
+            color="neutral"
+            variant="ghost"
+            size="sm"
+            :loading="status === 'pending'"
+            @click="refresh()"
+          />
+        </UTooltip>
+      </template>
+    </UDashboardToolbar>
 
     <div v-if="upload.uploads.value.length" class="space-y-2 border-b border-default px-4 py-2">
       <div v-for="job in upload.uploads.value" :key="job.id" class="space-y-1">
