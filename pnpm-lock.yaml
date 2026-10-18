@@ -179,6 +179,9 @@ catalogs:
     '@ai-sdk/vue':
       specifier: 4.0.127
       version: 4.0.127
+    '@date-fns/tz':
+      specifier: ^1.5.0
+      version: 1.5.0
     '@iconify-json/lucide':
       specifier: ^1.2.142
       version: 1.2.142
@@ -356,6 +359,9 @@ importers:
       '@allmight/core':
         specifier: workspace:*
         version: link:../core
+      '@date-fns/tz':
+        specifier: 'catalog:'
+        version: 1.5.0
       '@nuxt/ui':
         specifier: 'catalog:'
         version: 4.11.3(c33e7b9ea8d2921466bb7b53476c153c)
@@ -870,6 +876,9 @@ packages:
   '@csstools/css-tokenizer@4.0.2':
     resolution: {integrity: sha512-OoKoR0f76dCY666JlcbhmVTs2drYj1GUXZTYTcbUgJjh9Nv41aFfZ21bPQTERm5+L5cBDo466NltB2lplS5GBw==}
     engines: {node: '>=20.19.0'}
+
+  '@date-fns/tz@1.5.0':
+    resolution: {integrity: sha512-lwYN/vDPeNRULcepoE/LO2Pgx+7/RV+S9ARfbc9lr2DtGkOD7pAiruHvbR1RX3Qyf6ja47EWJDMsNK5vK08DJg==}
 
   '@devframes/hub@0.7.15':
     resolution: {integrity: sha512-g2aUJZAsmBsWARqvA2nhT5F9v2usJ/uiavstsWA7FZaXU6+2LYx/OafqDlFNUa+PxGUWwEZe/qzwAuRoZjv8uA==}
@@ -7175,6 +7184,8 @@ snapshots:
   '@colordx/core@7.3.0': {}
 
   '@csstools/css-tokenizer@4.0.2': {}
+
+  '@date-fns/tz@1.5.0': {}
 
   '@devframes/hub@0.7.15(devframe@0.7.15(cac@7.0.0)(srvx@1.0.5)(typescript@6.0.3))':
     dependencies:
