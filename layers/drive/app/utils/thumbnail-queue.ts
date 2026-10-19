@@ -13,6 +13,11 @@ export interface ThumbnailSlot {
 
 export interface ThumbnailQueue {
   acquire(): ThumbnailSlot
+  /** While paused, no waiting slot is granted; a slot already granted keeps running. */
+  pause(): void
+  /** Grants waiting slots again, unless they were cancelled meanwhile. */
+  resume(): void
+  readonly paused: boolean
 }
 
 interface Waiting {
@@ -23,9 +28,13 @@ interface Waiting {
 /** At most `limit` slots are held at a time, in the order they were requested. */
 export function createThumbnailQueue(limit = 2): ThumbnailQueue {
   let active = 0
+  let paused = false
   const waiting: Waiting[] = []
 
   function pump() {
+    if (paused) {
+      return
+    }
     while (active < limit && waiting.length) {
       const next = waiting.shift()!
       if (next.cancelled) {
@@ -60,6 +69,19 @@ export function createThumbnailQueue(limit = 2): ThumbnailQueue {
         promise,
         cancel: () => { entry.cancelled = true }
       }
+    },
+
+    pause() {
+      paused = true
+    },
+
+    resume() {
+      paused = false
+      pump()
+    },
+
+    get paused() {
+      return paused
     }
   }
 }

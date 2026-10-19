@@ -22,6 +22,8 @@ const emit = defineEmits<{
   clear: []
   rename: [entry: DriveEntry, name: string]
   prefetch: [entry: DriveEntry]
+  prefetchNow: [entry: DriveEntry]
+  cancelPrefetch: [entry: DriveEntry]
   dragStart: [entry: DriveEntry]
   dropOn: [target: DriveEntry, files: File[] | null]
   dropFiles: [files: File[]]
@@ -114,7 +116,8 @@ function onRootDrop(event: DragEvent) {
           @click="onClick($event, entry)"
           @dblclick="emit('open', entry)"
           @mouseenter="emit('prefetch', entry)"
-          @pointerdown="emit('prefetch', entry)"
+          @mouseleave="emit('cancelPrefetch', entry)"
+          @pointerdown="emit('prefetchNow', entry)"
           @dragstart="onDragStart($event, entry)"
           @dragover.prevent
           @drop.stop.prevent="onDrop($event, entry)"
@@ -174,7 +177,8 @@ function onRootDrop(event: DragEvent) {
           @click="onClick($event, entry)"
           @dblclick="emit('open', entry)"
           @mouseenter="emit('prefetch', entry)"
-          @pointerdown="emit('prefetch', entry)"
+          @mouseleave="emit('cancelPrefetch', entry)"
+          @pointerdown="emit('prefetchNow', entry)"
           @dragstart="onDragStart($event, entry)"
           @dragover.prevent
           @drop.stop.prevent="onDrop($event, entry)"

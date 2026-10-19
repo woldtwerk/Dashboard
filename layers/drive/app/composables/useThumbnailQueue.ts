@@ -12,13 +12,20 @@ const serverSlot: ThumbnailSlot = {
   cancel: () => {}
 }
 
+const serverQueue: ThumbnailQueue = {
+  acquire: () => serverSlot,
+  pause: () => {},
+  resume: () => {},
+  paused: false
+}
+
 /**
  * The shared thumbnail load limit for this tab. On the server it is a no-op, as
  * the server render only draws the icon and never fetches a thumbnail.
  */
 export function useThumbnailQueue(): ThumbnailQueue {
   if (!import.meta.client) {
-    return { acquire: () => serverSlot }
+    return serverQueue
   }
   queue ??= createThumbnailQueue(THUMBNAIL_CONCURRENCY)
   return queue

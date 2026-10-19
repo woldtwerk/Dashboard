@@ -6,6 +6,8 @@ import type { DriveSelectionAction } from '../utils/selection-action'
 import { breadcrumbs, isWithinPath, joinPath, parentPath } from '#layers/drive/shared/drive-path'
 import { DRIVE_SECTIONS, downloadUrl, filterEntries, sectionByKey, sectionOf, sortEntries } from '../utils/drive'
 import { driveRequest } from '../utils/drive-request'
+import { createDrivePrefetchQueue } from '../utils/drive-prefetch'
+import { useThumbnailQueue } from '../composables/useThumbnailQueue'
 
 useSeoMeta({ title: 'Drive' })
 
@@ -46,25 +48,28 @@ watch(() => queryString('q'), (value) => {
 })
 
 const nuxtApp = useNuxtApp()
+const requestFetch = useRequestFetch()
 const contentsKey = computed(() => `drive:${service.value}:${path.value}`)
 
-// A visited or prefetched folder is read straight from the payload, so it shows
-// at once and still revalidates in the background. A manual refresh always
-// fetches, so the refresh button is not answered by the cache.
-const { data: entries, status, error, refresh } = await useFetch<DriveEntry[]>('/api/drive/contents', {
-  query: computed(() => ({ service: service.value, path: path.value })),
-  key: contentsKey,
-  default: () => [],
-  getCachedData(key, app, ctx) {
-    if (ctx.cause === 'refresh:manual') {
-      return undefined
-    }
-    return app.payload.data[key] ?? app.static.data[key]
-  }
-})
+// The listing comes from a per-app promise cache, so a hover prefetch that is
+// still in flight and the click on the same folder are one request. A visited
+// folder is read straight from the payload, so it shows at once and still
+// revalidates in the background. A manual refresh always fetches.
+const { data: entries, status, error, refresh } = await useDriveListing(service, path)
 
 // Only a first, dataless load may show a spinner; a revalidation keeps the list
 const loading = computed(() => status.value === 'pending' && !entries.value.length)
+
+// While the folder the user navigated to is loading, hold thumbnails back, so
+// they cannot take the provider's CLI lock before the listing does.
+const thumbnails = useThumbnailQueue()
+watch(loading, (value) => {
+  if (value) {
+    thumbnails.pause()
+  } else {
+    thumbnails.resume()
+  }
+}, { immediate: true })
 
 // A cached listing is shown at once, which makes Nuxt skip the request; refresh
 // it in the background anyway, so a folder changed elsewhere is not stale.
@@ -88,40 +93,50 @@ useDomainEvents({ domains: ['drive'] }, (event) => {
 
 // --- Prefetch -------------------------------------------------------------
 
-// A hover or a press on a folder tile loads its listing into the Nuxt payload,
-// so opening it shows the cached answer immediately.
-const prefetched = new Set<string>()
+// A hover (after a short intent delay) or a press on a folder warms its listing
+// through one shared promise, so the click that follows reuses the request. One
+// prefetch runs at a time, and navigating drops the ones not started yet.
+const prefetchQueue = createDrivePrefetchQueue((target) => {
+  const key = `drive:${target.service}:${target.path}`
+  if (import.meta.client && nuxtApp.payload.data[key] === undefined) {
+    return prefetchDriveListing(nuxtApp, requestFetch, target.service, target.path)
+  }
+})
 
-function prefetchPath(target: string) {
-  if (!import.meta.client) {
-    return
-  }
-  const key = `drive:${service.value}:${target}`
-  if (nuxtApp.payload.data[key] !== undefined || prefetched.has(key)) {
-    return
-  }
-  prefetched.add(key)
-  driveRequest<DriveEntry[]>('/api/drive/contents', { query: { service: service.value, path: target } })
-    .then((list) => { nuxtApp.payload.data[key] = list })
-    .catch(() => {})
-}
+onScopeDispose(() => prefetchQueue.cancelQueued())
 
 function prefetch(entry: DriveEntry) {
   if (entry.type === 'folder') {
-    prefetchPath(entry.path)
+    prefetchQueue.hover({ service: service.value, path: entry.path })
   }
 }
 
-// The breadcrumb ancestors of the shown folder are the likeliest next step, e.g. "up"
+function prefetchNow(entry: DriveEntry) {
+  if (entry.type === 'folder') {
+    prefetchQueue.enqueue({ service: service.value, path: entry.path })
+  }
+}
+
+function cancelPrefetch(entry: DriveEntry) {
+  if (entry.type === 'folder') {
+    prefetchQueue.leave({ service: service.value, path: entry.path })
+  }
+}
+
+// The breadcrumb ancestors of the shown folder are the likeliest next step, e.g.
+// "up". A changing folder also drops prefetches queued for the previous one,
+// whether the change came from a link, the back button or the account picker.
 watch([service, path], () => {
+  prefetchQueue.cancelQueued()
   for (const crumb of breadcrumbs(parentPath(path.value))) {
-    prefetchPath(crumb.path)
+    prefetchQueue.enqueue({ service: service.value, path: crumb.path })
   }
 }, { immediate: true })
 
 // --- Navigation -----------------------------------------------------------
 
 function navigate(next: string) {
+  prefetchQueue.cancelQueued()
   selection.clear()
   updateQuery({ path: next === '/my-files' ? null : next, item: null })
 }
@@ -711,6 +726,8 @@ useEventListener('keydown', (event: KeyboardEvent) => {
       @drop-on="onDropOn"
       @drop-files="files => uploadTo(path, files)"
       @prefetch="prefetch"
+      @prefetch-now="prefetchNow"
+      @cancel-prefetch="cancelPrefetch"
     />
 
     <template #footer>

@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DriveEntry } from '../shared/types/drive'
 import {
+  DRIVE_LIST_STORE_TTL_SECONDS,
   DRIVE_LIST_TTL_MS,
   affectedPaths,
   cachedList,
-  sameEntries
+  sameEntries,
+  waitForListing
 } from '../server/utils/drive-cache'
 
 const entry = (path: string, overrides: Partial<DriveEntry> = {}): DriveEntry => ({
@@ -25,12 +27,17 @@ interface Stored {
 let stored: Stored
 let published: unknown[]
 let busy: () => Error
+let writtenTtl: number | undefined
+let held: Set<string>
 
 function storage() {
   return {
     getMounts: () => [],
     getItem: async (key: string) => stored.values.get(key) ?? null,
-    setItem: async (key: string, value: unknown) => { stored.values.set(key, value) },
+    setItem: async (key: string, value: unknown, options?: { ttl?: number }) => {
+      stored.values.set(key, value)
+      writtenTtl = options?.ttl
+    },
     removeItem: async (key: string) => { stored.values.delete(key) },
     getKeys: async () => [...stored.values.keys()]
   }
@@ -47,6 +54,7 @@ async function throwBusy(): Promise<DriveEntry[]> {
 beforeEach(() => {
   stored = { values: new Map() }
   published = []
+  writtenTtl = undefined
   busy = createBusyError
 
   vi.stubGlobal('useStorage', () => storage())
@@ -56,7 +64,8 @@ beforeEach(() => {
   })
 
   // Emulates the database lease: a second concurrent holder is turned away
-  const held = new Set<string>()
+  held = new Set<string>()
+  vi.stubGlobal('isLockHeld', (name: string) => Promise.resolve(held.has(name)))
   vi.stubGlobal('withLock', (name: string, _ttl: number, fn: (handle: { renew: () => Promise<boolean> }) => Promise<unknown>) => {
     if (held.has(name)) {
       return Promise.resolve(undefined)
@@ -70,7 +79,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-async function flush(times = 6) {
+async function flush(times = 10) {
   for (let index = 0; index < times; index++) {
     await Promise.resolve()
   }
@@ -176,5 +185,100 @@ describe('cachedList', () => {
   it('rejects a busy load when nothing is cached', async () => {
     const load = vi.fn(throwBusy)
     await expect(cachedList('svc', '/my-files', load)).rejects.toMatchObject({ status: 423 })
+  })
+
+  it('loads a cold folder once and hands the other request the shared listing', async () => {
+    const entries = [entry('/a')]
+    let resolveLoad!: (value: DriveEntry[]) => void
+    const load = vi.fn(() => new Promise<DriveEntry[]>((resolve) => {
+      resolveLoad = resolve
+    }))
+
+    const first = cachedList('svc', '/my-files', load)
+    const second = cachedList('svc', '/my-files', load)
+
+    await flush()
+    expect(load).toHaveBeenCalledTimes(1)
+
+    resolveLoad(entries)
+    await expect(first).resolves.toEqual(entries)
+    await expect(second).resolves.toEqual(entries)
+    expect(load).toHaveBeenCalledTimes(1)
+  })
+
+  it('loads itself as soon as a failed lease is released, not after the wait cap', async () => {
+    const entries = [entry('/a')]
+    let rejectLoad!: (error: Error) => void
+    const failing = new Promise<DriveEntry[]>((_resolve, reject) => {
+      rejectLoad = reject
+    })
+    const load = vi.fn()
+      .mockReturnValueOnce(failing)
+      .mockResolvedValueOnce(entries)
+
+    const started = Date.now()
+    const holder = cachedList('svc', '/my-files', load)
+    const waiter = cachedList('svc', '/my-files', load)
+
+    await flush()
+    expect(load).toHaveBeenCalledTimes(1)
+
+    rejectLoad(createBusyError())
+
+    await expect(holder).rejects.toMatchObject({ status: 423 })
+    await expect(waiter).resolves.toEqual(entries)
+    // The lease is gone, so the waiter loads at once instead of polling out the cap
+    expect(Date.now() - started).toBeLessThan(2_000)
+    expect(load).toHaveBeenCalledTimes(2)
+  })
+
+  it('stores a listing long enough to survive a restart', async () => {
+    await cachedList('svc', '/my-files', async () => [entry('/a')])
+    expect(writtenTtl).toBe(DRIVE_LIST_STORE_TTL_SECONDS)
+  })
+})
+
+describe('waitForListing', () => {
+  it('returns the listing as soon as another request writes it', async () => {
+    const listing = { entries: [entry('/a')], fetchedAt: Date.now() }
+    let reads = 0
+
+    const result = await waitForListing('svc', '/my-files', {
+      timeoutMs: 1000,
+      intervalMs: 1,
+      read: async () => (++reads >= 2 ? listing : undefined),
+      held: async () => true
+    })
+
+    expect(result).toBe(listing)
+    expect(reads).toBe(2)
+  })
+
+  it('stops as soon as the holder released the lease without a listing', async () => {
+    let polls = 0
+
+    const result = await waitForListing('svc', '/my-files', {
+      timeoutMs: 10_000,
+      intervalMs: 1,
+      read: async () => undefined,
+      held: async () => {
+        polls++
+        return polls < 3
+      }
+    })
+
+    expect(result).toBeUndefined()
+    expect(polls).toBe(3)
+  })
+
+  it('gives up once the cap has passed even while the lease is held', async () => {
+    const result = await waitForListing('svc', '/my-files', {
+      timeoutMs: 5,
+      intervalMs: 1,
+      read: async () => undefined,
+      held: async () => true
+    })
+
+    expect(result).toBeUndefined()
   })
 })

@@ -1,5 +1,6 @@
 import type { DriveEntry } from '../../shared/types/drive'
 import { DRIVE_SHARED_ROOT, DRIVE_TRASH_ROOT, parentPath } from '../../shared/drive-path'
+import { sharedStorage } from '../../../core/server/utils/shared-storage'
 
 /**
  * Folder listings are cached in the shared Nitro storage (Redis when mounted,
@@ -16,6 +17,22 @@ export const DRIVE_LIST_TTL_MS = 30_000
 /** Lease for a background refresh; a slow CLI call must not lose it mid-flight. */
 export const DRIVE_LIST_LOCK_TTL_MS = 60_000
 
+/**
+ * How long a listing stays in the store. Freshness is only `DRIVE_LIST_TTL_MS`;
+ * the longer store TTL keeps a listing across a restart or a Redis eviction, so a
+ * revisit is served at once and revalidated in the background.
+ */
+export const DRIVE_LIST_STORE_TTL_SECONDS = 7 * 24 * 60 * 60
+
+/** How often a request without the load lease looks for the other worker's listing. */
+export const DRIVE_LIST_POLL_INTERVAL_MS = 250
+
+/**
+ * A request that did not get the load lease waits for the holder's listing at
+ * most this long, even though the lease itself lives `DRIVE_LIST_LOCK_TTL_MS`.
+ */
+export const DRIVE_LIST_WAIT_MAX_MS = 20_000
+
 export interface CachedListing {
   entries: DriveEntry[]
   /** `Date.now()` when the listing was read from the provider */
@@ -31,15 +48,9 @@ export function driveListLock(service: string, path: string): string {
   return `drive-list:${service}:${path}`
 }
 
-/** Redis when mounted (shared by every cluster worker), else the default Nitro storage. */
-export function driveStorage() {
-  const storage = useStorage()
-  return storage.getMounts().some(mount => mount.base === 'redis') ? useStorage('redis') : storage
-}
-
 async function readListing(key: string): Promise<CachedListing | undefined> {
   try {
-    return await driveStorage().getItem<CachedListing>(key) ?? undefined
+    return await sharedStorage().getItem<CachedListing>(key) ?? undefined
   } catch {
     // A listing still works without its cache
     return undefined
@@ -48,10 +59,54 @@ async function readListing(key: string): Promise<CachedListing | undefined> {
 
 async function writeListing(key: string, listing: CachedListing): Promise<void> {
   try {
-    await driveStorage().setItem(key, listing)
+    await sharedStorage().setItem(key, listing, { ttl: DRIVE_LIST_STORE_TTL_SECONDS })
   } catch {
     // Best effort: a cache write never fails a request
   }
+}
+
+/**
+ * Waits for another request's listing to appear, polling the shared store. Used
+ * when the load lease is held elsewhere: rather than issuing a second CLI call
+ * for the same folder, the loser waits for the winner's write.
+ *
+ * The wait also watches the lease: once the holder is gone without having
+ * written a listing, it failed, so waiting longer is pointless and the caller
+ * can load right away. The total wait is capped at `DRIVE_LIST_WAIT_MAX_MS`.
+ */
+export async function waitForListing(
+  service: string,
+  path: string,
+  options: {
+    timeoutMs?: number
+    intervalMs?: number
+    read?: (key: string) => Promise<CachedListing | undefined>
+    held?: (name: string) => Promise<boolean>
+  } = {}
+): Promise<CachedListing | undefined> {
+  const key = driveListKey(service, path)
+  const lock = driveListLock(service, path)
+  const timeoutMs = options.timeoutMs ?? Math.min(DRIVE_LIST_LOCK_TTL_MS, DRIVE_LIST_WAIT_MAX_MS)
+  const intervalMs = options.intervalMs ?? DRIVE_LIST_POLL_INTERVAL_MS
+  const read = options.read ?? readListing
+  const held = options.held ?? isLockHeld
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, intervalMs))
+
+    const listing = await read(key)
+    if (listing) {
+      return listing
+    }
+
+    // The holder released the lease without writing: it failed
+    if (!(await held(lock))) {
+      return undefined
+    }
+  }
+
+  return undefined
 }
 
 function entrySignature(entry: DriveEntry): string {
@@ -121,10 +176,11 @@ async function revalidate(
 }
 
 /**
- * The entries of a folder, from the shared cache when possible. A missing
- * listing is loaded; a fresh one is returned as is; a stale one is returned at
- * once and refreshed behind the lock. When the provider is busy, a cached
- * listing is always preferred over an error.
+ * The entries of a folder, from the shared cache when possible. A fresh listing
+ * is returned as is; a stale one is returned at once and refreshed behind the
+ * lock; a missing one is loaded under the lock, so concurrent cold requests for
+ * the same folder make one CLI call, not several. When the provider is busy, a
+ * cached listing is always preferred over an error.
  */
 export async function cachedList(service: string, path: string, load: () => Promise<DriveEntry[]>): Promise<DriveEntry[]> {
   const key = driveListKey(service, path)
@@ -138,6 +194,47 @@ export async function cachedList(service: string, path: string, load: () => Prom
     return cached.entries
   }
 
+  return await loadCold(service, path, key, load)
+}
+
+/** A cache miss: one worker loads it, the others wait for that listing instead of loading too. */
+async function loadCold(service: string, path: string, key: string, load: () => Promise<DriveEntry[]>): Promise<DriveEntry[]> {
+  const deadline = Date.now() + DRIVE_LIST_WAIT_MAX_MS
+
+  for (;;) {
+    try {
+      const loaded = await withLock(driveListLock(service, path), DRIVE_LIST_LOCK_TTL_MS, async () => {
+        // Another worker may have written it while this one waited for the lease
+        const current = await readListing(key)
+        return current ? current.entries : await loadListing(service, path, key, undefined, load)
+      })
+
+      if (loaded) {
+        return loaded
+      }
+    } catch (error) {
+      const fallback = isDriveBusy(error) ? await readListing(key) : undefined
+      if (fallback) {
+        return fallback.entries
+      }
+      throw error
+    }
+
+    // Another request holds the lease. Wait for its write; the wait ends as soon
+    // as that request failed (its lease is gone) or the cap passes. Taking the
+    // lease again in the next round keeps a third request single-flighted too.
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      break
+    }
+
+    const shared = await waitForListing(service, path, { timeoutMs: remaining })
+    if (shared) {
+      return shared.entries
+    }
+  }
+
+  // Nothing appeared within the cap; load it ourselves rather than fail the click.
   try {
     return await loadListing(service, path, key, undefined, load)
   } catch (error) {
@@ -206,7 +303,7 @@ export function affectedPaths(action: DriveMutationAction, input: DriveMutationI
 
 /** Drops the cached listings of `paths`, so the next read asks the provider. */
 export async function invalidateDriveListings(service: string, paths: string[]): Promise<void> {
-  const storage = driveStorage()
+  const storage = sharedStorage()
   await Promise.all([...new Set(paths)].map(async (path) => {
     try {
       await storage.removeItem(driveListKey(service, path))

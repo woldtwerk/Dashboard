@@ -1,5 +1,7 @@
 import { z } from 'zod'
-import type { DomainTool } from '../../core/shared/types/tools'
+import type { DomainTool, ToolSource } from '../../core/shared/types/tools'
+import { entityLink } from '../../core/shared/entities'
+import type { DriveEntry } from '../shared/types/drive'
 import { driveNameSchema, drivePathSchema } from './utils/drive-schema'
 import { publishDriveChange, publishDriveChanges, publishDriveTrashChange } from './utils/drive-events'
 
@@ -7,6 +9,34 @@ const serviceInput = z.string().min(1).describe('Drive service id')
 const pathInput = drivePathSchema.describe('Absolute path, e.g. "/my-files/Photos"')
 const nameInput = driveNameSchema.describe('A single file or folder name, without slashes')
 const pathsInput = z.array(drivePathSchema).min(1).max(100).describe('Absolute paths of the entries')
+
+function driveSource(entry: DriveEntry, service: string): ToolSource {
+  const subtitle = entry.parent || entry.mediaType
+
+  return {
+    kind: entry.type === 'folder' ? 'folder' : 'file',
+    title: entry.name,
+    ...(subtitle ? { subtitle } : {}),
+    ...(entry.modified ? { date: entry.modified } : {}),
+    link: entityLink({ type: 'file', service, id: entry.path })
+  }
+}
+
+/** Source cards for `drive_list`: one row per entry in the folder. */
+export function driveListSources(output: unknown): ToolSource[] {
+  const result = output as { service?: string, entries?: DriveEntry[] } | undefined
+  if (!Array.isArray(result?.entries)) {
+    return []
+  }
+
+  return result.entries.map(entry => driveSource(entry, result.service ?? ''))
+}
+
+/** Source card for `drive_info`: the one file or folder that was read. */
+export function driveInfoSources(output: unknown): ToolSource[] {
+  const entry = output as (Partial<DriveEntry> & { service?: string }) | undefined
+  return entry?.path ? [driveSource(entry as DriveEntry, entry.service ?? '')] : []
+}
 
 export const driveTools: DomainTool[] = [
   {
@@ -17,8 +47,9 @@ export const driveTools: DomainTool[] = [
     writes: false,
     execute: async (raw) => {
       const input = raw as { service: string, path: string }
-      return { entries: await (await useDriveProvider(input.service)).list(input.path) }
-    }
+      return { service: input.service, entries: await (await useDriveProvider(input.service)).list(input.path) }
+    },
+    sources: driveListSources
   },
   {
     name: 'drive_info',
@@ -28,8 +59,9 @@ export const driveTools: DomainTool[] = [
     writes: false,
     execute: async (raw) => {
       const input = raw as { service: string, path: string }
-      return await (await useDriveProvider(input.service)).info(input.path)
-    }
+      return { ...await (await useDriveProvider(input.service)).info(input.path), service: input.service }
+    },
+    sources: driveInfoSources
   },
   {
     name: 'drive_create_folder',

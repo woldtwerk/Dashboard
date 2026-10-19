@@ -62,6 +62,8 @@ LOGIN_URL_TIMEOUT = float(os.environ.get('PROTON_DRIVE_LOGIN_URL_TIMEOUT', '60')
 LOGIN_TTL = float(os.environ.get('PROTON_DRIVE_LOGIN_TTL', '600'))
 # How long a signed-in check (`filesystem list /`) may take
 STATUS_TIMEOUT = float(os.environ.get('PROTON_DRIVE_STATUS_TIMEOUT', '30'))
+# A successful command counts as proof of a live session for this long
+STATUS_FRESH = float(os.environ.get('PROTON_DRIVE_STATUS_FRESH', '60'))
 
 ANSI = re.compile(r'\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[()][A-Za-z0-9]|\x1b[=>]|[\r\x08]')
 CONTROL_CHARS = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
@@ -354,6 +356,9 @@ class Drive:
         # Guards `login` itself, so state reads and writes never race
         self.state_lock = threading.Lock()
         self.login = None
+        # Monotonic time of the last successful CLI command, so /status can answer
+        # without running one
+        self.last_success = None
 
     @property
     def signing_in(self):
@@ -361,7 +366,16 @@ class Drive:
             return self.login is not None
 
     def signed_in(self):
-        """The session is usable when a trivial read succeeds."""
+        """Whether the session is usable.
+
+        A command that succeeded within the last minute proves it without running
+        another, and a command in flight is assumed to be a signed-in one: waiting
+        for the lock would make a busy transfer look like a signed-out session.
+        """
+        if self.last_success is not None and time.monotonic() - self.last_success < STATUS_FRESH:
+            return True
+        if self.lock.locked():
+            return True
         try:
             result = self.run(['filesystem', 'list', '-j', '/'], timeout=STATUS_TIMEOUT)
         except DriveError:
@@ -390,6 +404,9 @@ class Drive:
                 raise DriveError(502, f'Proton Drive could not run: {error}')
         finally:
             self.lock.release()
+
+        if process.returncode == 0:
+            self.last_success = time.monotonic()
 
         return {
             'exitCode': process.returncode,
@@ -437,6 +454,8 @@ class Drive:
         if flow is not None and flow.running:
             flow.stop()
         self.run(['auth', 'logout'])
+        # A logout is not proof of a live session, even though the command succeeded
+        self.last_success = None
 
 
 def text_query(query, key, required=True):

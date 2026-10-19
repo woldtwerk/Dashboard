@@ -47,4 +47,45 @@ describe('createThumbnailQueue', () => {
     await flush()
     expect(granted).toBe(false)
   })
+
+  it('holds waiting slots while paused and grants them on resume', async () => {
+    const queue = createThumbnailQueue(1)
+    queue.pause()
+
+    const slot = queue.acquire()
+    let granted = false
+    slot.promise.then(() => {
+      granted = true
+    })
+    await flush()
+    expect(granted).toBe(false)
+    expect(queue.paused).toBe(true)
+
+    queue.resume()
+    await flush()
+    expect(granted).toBe(true)
+    ;(await slot.promise)()
+  })
+
+  it('does not grant the next slot when a release happens while paused', async () => {
+    const queue = createThumbnailQueue(1)
+    const held = queue.acquire()
+    const release = await held.promise
+
+    queue.pause()
+    release()
+
+    const waiting = queue.acquire()
+    let granted = false
+    waiting.promise.then(() => {
+      granted = true
+    })
+    await flush()
+    expect(granted).toBe(false)
+
+    queue.resume()
+    await flush()
+    expect(granted).toBe(true)
+    ;(await waiting.promise)()
+  })
 })
