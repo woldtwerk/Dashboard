@@ -27,6 +27,9 @@ web_environment:
   # Local Laya decision server: key in .ddev/.env.web (NUXT_LAYA_API_KEY) and
   # .ddev/.env.laya (LAYA_API_KEY), both gitignored
   - NUXT_LAYA_URL=http://laya:8000
+  # Absolute, so `pnpm dev` and `pnpm preview` (which runs from .output/) share the same data
+  - NUXT_DATABASE_PATH=/var/www/html/.data/allmight.sqlite
+  - NUXT_CACHE_DIR=/var/www/html/.data/cache
 # Nuxt is started by hand: ddev exec pnpm dev --host 0.0.0.0
 web_extra_exposed_ports:
   - name: nuxt
