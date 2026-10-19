@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { format } from 'date-fns'
 import type { MailSummary } from '#layers/mail/shared/types/mail'
 import type { EntityRef } from '#layers/core/shared/types/entities'
 import { normalizeEmail, entityKey } from '#layers/core/shared/entities'
 import { isTrustedImageSender } from '#layers/mail/shared/mail-images'
+import { formatMailFullDate } from '#layers/mail/app/utils/mail-date'
 
 const props = defineProps<{
   mail: MailSummary
@@ -31,10 +31,11 @@ defineShortcuts({
 const route = useRoute()
 const router = useRouter()
 
-const { data: message, status, error } = await useFetch(() => `/api/mail/messages/${props.mail.uid}`, {
-  query: computed(() => ({ service: props.service, mailbox: props.mail.mailbox })),
-  lazy: true
-})
+// The zone the header renders the mail's date in, resolved once for the view
+const zone = useTimeZone()
+
+// The reader, the composer and the list's hover prefetch share one request per mail
+const { data: message, status, error } = useMailMessage(() => props.mail, () => props.service)
 
 const dropdownItems = [[{
   label: 'Mark as unread',
@@ -98,17 +99,20 @@ function openPerson(address?: string) {
   <UDashboardPanel id="mail-2">
     <UDashboardNavbar :title="mail.subject || '(no subject)'" :toggle="false">
       <template #leading>
-        <UButton
-          icon="i-lucide-x"
-          color="neutral"
-          variant="ghost"
-          class="-ms-1.5"
-          @click="emits('close')"
-        />
+        <UTooltip text="Close">
+          <UButton
+            icon="i-lucide-x"
+            color="neutral"
+            variant="ghost"
+            class="-ms-1.5"
+            aria-label="Close"
+            @click="emits('close')"
+          />
+        </UTooltip>
       </template>
 
       <template #right>
-        <UTooltip text="Reply (r)">
+        <UTooltip text="Reply" :kbds="['r']">
           <UButton
             icon="i-lucide-reply"
             color="neutral"
@@ -118,7 +122,7 @@ function openPerson(address?: string) {
             @click="emits('compose', 'reply')"
           />
         </UTooltip>
-        <UTooltip text="Reply all (a)">
+        <UTooltip text="Reply all" :kbds="['a']">
           <UButton
             icon="i-lucide-reply-all"
             color="neutral"
@@ -128,7 +132,7 @@ function openPerson(address?: string) {
             @click="emits('compose', 'replyAll')"
           />
         </UTooltip>
-        <UTooltip text="Forward (f)">
+        <UTooltip text="Forward" :kbds="['f']">
           <UButton
             icon="i-lucide-forward"
             color="neutral"
@@ -138,7 +142,7 @@ function openPerson(address?: string) {
             @click="emits('compose', 'forward')"
           />
         </UTooltip>
-        <UTooltip :text="permanent ? 'Delete forever' : 'Delete (#)'">
+        <UTooltip :text="permanent ? 'Delete forever' : 'Delete'" :kbds="['#']">
           <UButton
             icon="i-lucide-trash-2"
             :color="permanent ? 'error' : 'neutral'"
@@ -204,7 +208,7 @@ function openPerson(address?: string) {
         </div>
 
         <p class="max-sm:pl-16 text-muted text-sm sm:mt-2 shrink-0">
-          {{ format(new Date(mail.date), 'dd MMM yyyy HH:mm') }}
+          {{ formatMailFullDate(mail.date, zone) }}
         </p>
       </div>
 

@@ -7,6 +7,8 @@ const props = defineProps<{
   open: boolean
   /** The draft to start from; the composer never mutates it */
   mail: OutgoingMail
+  /** The addresses the account may send from; the From control picks between them */
+  addresses: string[]
   /** Where unsent text is kept, per compose; nothing is kept without it */
   draftKey?: string
   title?: string
@@ -22,13 +24,16 @@ const emits = defineEmits<{
 // A reload restores what was typed; the prefill is the fallback
 const stored = props.draftKey ? readMailDraft<MailComposeDraft>(props.draftKey) : undefined
 
+// A stored From that is no longer offered falls back to the prefill
+const storedFrom = stored?.from && props.addresses.includes(stored.from) ? stored.from : undefined
+const from = ref(storedFrom ?? props.mail.from ?? props.addresses[0] ?? '')
 const to = ref<string[]>(stored?.to ?? props.mail.to.map(formatMailAddressTag))
 const cc = ref<string[]>(stored?.cc ?? props.mail.cc.map(formatMailAddressTag))
 const bcc = ref<string[]>(stored?.bcc ?? props.mail.bcc.map(formatMailAddressTag))
 const subject = ref(stored?.subject ?? props.mail.subject)
 const text = ref(stored?.text ?? props.mail.text)
 
-const draft = computed<MailComposeDraft>(() => ({ to: to.value, cc: cc.value, bcc: bcc.value, subject: subject.value, text: text.value }))
+const draft = computed<MailComposeDraft>(() => ({ from: from.value, to: to.value, cc: cc.value, bcc: bcc.value, subject: subject.value, text: text.value }))
 
 watch(draft, (value) => {
   if (props.draftKey) {
@@ -82,6 +87,13 @@ const slideoverUi = computed(() => isMobile.value
   >
     <template #body>
       <div class="flex h-full flex-col gap-4">
+        <UFormField v-if="addresses.length > 1" label="From">
+          <USelect v-model="from" :items="addresses" class="w-full" />
+        </UFormField>
+        <p v-else-if="from" class="text-sm text-muted">
+          From: {{ from }}
+        </p>
+
         <UFormField label="To">
           <UInputTags
             v-model="to"
@@ -142,14 +154,16 @@ const slideoverUi = computed(() => isMobile.value
         variant="ghost"
         @click="discard"
       />
-      <UButton
-        type="button"
-        label="Send"
-        icon="i-lucide-send"
-        :loading="sending"
-        :disabled="!canSend"
-        @click="send"
-      />
+      <UTooltip text="Send" :kbds="['meta', 'enter']">
+        <UButton
+          type="button"
+          label="Send"
+          icon="i-lucide-send"
+          :loading="sending"
+          :disabled="!canSend"
+          @click="send"
+        />
+      </UTooltip>
     </template>
   </USlideover>
 </template>

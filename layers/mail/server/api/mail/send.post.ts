@@ -1,7 +1,7 @@
 import { createError, defineEventHandler, getValidatedQuery, readValidatedBody } from 'nuxt/server'
 import { z } from 'zod'
 import { OUTGOING_MESSAGE_ID_LIMIT, OUTGOING_MESSAGE_ID_PATTERN, OUTGOING_REFERENCES_LIMIT, OUTGOING_SUBJECT_LIMIT } from '../../../shared/mail-compose'
-import { mailAccountAddress } from '../../utils/mail-identity'
+import { resolveSenderAddress } from '../../utils/mail-identity'
 import { sendMail } from '../../utils/mail-send'
 
 const addressSchema = z.object({
@@ -14,6 +14,7 @@ const messageIdSchema = z.string().max(OUTGOING_MESSAGE_ID_LIMIT).regex(OUTGOING
 
 /** The body mirrors `OutgoingMail`, plus the mail a reply answers */
 const sendBodySchema = z.object({
+  from: z.string().max(320).optional(),
   to: z.array(addressSchema).default([]),
   cc: z.array(addressSchema).default([]),
   bcc: z.array(addressSchema).default([]),
@@ -29,18 +30,18 @@ const sendBodySchema = z.object({
 
 export default defineEventHandler(async (event) => {
   const { service } = await getValidatedQuery(event, serviceQuerySchema)
-  const { reply, ...mail } = await readValidatedBody(event, sendBodySchema)
+  const { reply, from, ...mail } = await readValidatedBody(event, sendBodySchema)
 
   const provider = await useMailProvider(service)
-  const address = await mailAccountAddress(service)
+  const sender = await resolveSenderAddress(service, from)
 
-  if (!address) {
-    throw createError({ status: 500, statusText: 'The mail account has no sender address' })
+  if (!sender.ok) {
+    throw createError({ status: sender.status, statusText: sender.error })
   }
 
-  const result = await sendMail(mail, reply, {
+  const result = await sendMail({ ...mail, from: sender.address }, reply, {
     provider,
-    from: { address },
+    from: { address: sender.address },
     // Bridge keeps the flag itself; only a provider offering the generic setter is used
     markAnswered: provider.setAnswered
       ? (mailbox: string, uid: number) => provider.setAnswered!(mailbox, uid, true)

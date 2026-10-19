@@ -14,12 +14,23 @@ describe('mail compose addresses', () => {
   })
 
   it('builds an outgoing mail from the draft', () => {
-    expect(toOutgoingMail({ to: ['alice@example.com'], cc: [], bcc: [], subject: '  Hi  ', text: 'Body' })).toEqual({
+    expect(toOutgoingMail({ from: 'me@example.com', to: ['alice@example.com'], cc: [], bcc: [], subject: '  Hi  ', text: 'Body' })).toEqual({
+      from: 'me@example.com',
       to: [{ name: undefined, address: 'alice@example.com' }],
       cc: [],
       bcc: [],
       subject: 'Hi',
       text: 'Body'
     })
+  })
+
+  it('keeps the draft\'s From address', () => {
+    const sent = toOutgoingMail({ from: 'alias@example.com', to: ['alice@example.com'], cc: [], bcc: [], subject: 'Hi', text: 'Body' })
+
+    expect(sent.from).toBe('alias@example.com')
+  })
+
+  it('drops an empty From', () => {
+    expect(toOutgoingMail({ from: '', to: ['alice@example.com'], cc: [], bcc: [], subject: 'Hi', text: 'Body' }).from).toBeUndefined()
   })
 })

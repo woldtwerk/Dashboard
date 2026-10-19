@@ -1,9 +1,10 @@
 import { z } from 'zod'
-import type { DomainTool } from '../../core/shared/types/tools'
+import type { DomainTool, ToolSource } from '../../core/shared/types/tools'
 import type { MailSearch } from '../shared/types/mail'
 import { mailLink, toMailSource } from '../shared/mail-source'
+import type { MailSource } from '../shared/mail-source'
 import { OUTGOING_MESSAGE_ID_LIMIT, OUTGOING_MESSAGE_ID_PATTERN, OUTGOING_REFERENCES_LIMIT, OUTGOING_SUBJECT_LIMIT } from '../shared/mail-compose'
-import { mailAccountAddress } from './utils/mail-identity'
+import { resolveSenderAddress } from './utils/mail-identity'
 import { deleteMail } from './utils/mail-delete'
 import { sendMail } from './utils/mail-send'
 
@@ -62,6 +63,7 @@ const mailMessageIdInput = z.string().max(OUTGOING_MESSAGE_ID_LIMIT).regex(OUTGO
 
 export const mailSendInput = z.object({
   service: z.string().min(1).describe('Mail service id to send from'),
+  from: z.string().max(320).optional().describe('From address; one of the account\'s own addresses. Defaults to the account address.'),
   to: z.array(mailAddressInput).min(1).describe('Recipients'),
   cc: z.array(mailAddressInput).optional().describe('Carbon-copy recipients'),
   bcc: z.array(mailAddressInput).optional().describe('Blind carbon-copy recipients'),
@@ -127,6 +129,35 @@ async function searchMail(input: z.infer<typeof mailSearchInput>) {
 const addresses = (list: { name?: string, address?: string }[]) =>
   list.map(({ name, address }) => name && address ? `${name} <${address}>` : name || address || '').join(', ')
 
+function mailSource(mail: Partial<MailSource>): ToolSource[] {
+  if (!mail.subject || !mail.link) {
+    return []
+  }
+
+  return [{
+    kind: 'mail',
+    title: mail.subject,
+    ...(mail.from ? { subtitle: mail.from } : {}),
+    ...(mail.date ? { date: mail.date } : {}),
+    link: mail.link
+  }]
+}
+
+/** Source cards for `mail_search`: one row per found message. */
+export function mailSearchSources(output: unknown): ToolSource[] {
+  const results = (output as { results?: Partial<MailSource>[] } | undefined)?.results
+  if (!Array.isArray(results)) {
+    return []
+  }
+
+  return results.flatMap(mailSource)
+}
+
+/** Source card for `mail_read`: the one message that was read. */
+export function mailReadSources(output: unknown): ToolSource[] {
+  return mailSource((output ?? {}) as Partial<MailSource>)
+}
+
 async function readMail(input: z.infer<typeof mailReadInput>) {
   const message = await (await useMailProvider(input.service)).getMessage(input.mailbox, input.uid)
   if (!message) {
@@ -165,7 +196,8 @@ export const mailTools: DomainTool[] = [
     description: 'Search mail across all accounts or one account. Returns the newest matching messages with subject, sender, date, excerpt and a link. At most 25 results; use mail_read for the full text.',
     input: mailSearchInput,
     writes: false,
-    execute: async input => await searchMail(input as z.infer<typeof mailSearchInput>)
+    execute: async input => await searchMail(input as z.infer<typeof mailSearchInput>),
+    sources: mailSearchSources
   },
   {
     name: 'mail_read',
@@ -173,7 +205,8 @@ export const mailTools: DomainTool[] = [
     description: 'Read one mail by service, mailbox and UID. Returns the headers (subject, from, to, date) and the plain text, cut at 20 000 characters. Attachments are not included.',
     input: mailReadInput,
     writes: false,
-    execute: async input => await readMail(input as z.infer<typeof mailReadInput>)
+    execute: async input => await readMail(input as z.infer<typeof mailReadInput>),
+    sources: mailReadSources
   },
   {
     name: 'mail_list_folders',
@@ -248,10 +281,10 @@ export const mailTools: DomainTool[] = [
     execute: async (raw) => {
       const input = raw as z.infer<typeof mailSendInput>
       const provider = await useMailProvider(input.service)
-      const address = await mailAccountAddress(input.service)
+      const sender = await resolveSenderAddress(input.service, input.from)
 
-      if (!address) {
-        return { error: 'The mail account has no sender address' }
+      if (!sender.ok) {
+        return { error: sender.error }
       }
 
       const result = await sendMail({
@@ -260,11 +293,12 @@ export const mailTools: DomainTool[] = [
         bcc: input.bcc ?? [],
         subject: input.subject,
         text: input.text,
+        from: sender.address,
         inReplyTo: input.inReplyTo,
         references: input.references
       }, undefined, {
         provider,
-        from: { address },
+        from: { address: sender.address },
         markAnswered: provider.setAnswered
           ? (mailbox: string, uid: number) => provider.setAnswered!(mailbox, uid, true)
           : undefined,

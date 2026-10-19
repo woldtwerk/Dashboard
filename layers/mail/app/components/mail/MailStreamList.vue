@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { format } from 'date-fns'
 import type { MailAddress, MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
 import type { OwnMailContext } from '#layers/mail/shared/mail-thread'
 import { isTrustedImageSender } from '#layers/mail/shared/mail-images'
 import { entityKey } from '#layers/core/shared/entities'
 import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
+import { formatMailFullDate } from '#layers/mail/app/utils/mail-date'
 
 const props = defineProps<{
   /** The conversation's mails, oldest first as the endpoint returns them */
@@ -20,6 +20,9 @@ const emits = defineEmits<{
   compose: [mode: MailComposeMode, mail: MailSummary]
   delete: [mail: MailSummary]
 }>()
+
+// One zone for the whole conversation, resolved once; the items only format with it
+const zone = useTimeZone()
 
 // The optimistic reply is the newest item while it is on its way
 const allMails = computed(() => props.pending ? [...props.mails, props.pending.mail] : props.mails)
@@ -139,7 +142,7 @@ watch(expanded, (values) => {
 
 function mailDate(value: string): string {
   const mail = mailFor(value)
-  return mail ? format(new Date(mail.date), 'dd MMM yyyy HH:mm') : ''
+  return mail ? formatMailFullDate(mail.date, zone.value) : ''
 }
 
 function addressLine(addresses: MailAddress[] = []): string {

@@ -79,3 +79,40 @@ export async function mailOwnAddresses(serviceId: string): Promise<string[]> {
   }
   return list
 }
+
+/** The outcome of choosing the From address for a send */
+export type SenderAddressResult
+  = | { ok: true, address: string }
+    | { ok: false, status: 400 | 500, error: string }
+
+/**
+ * Picks the From address of a send from the account's own addresses. Without a
+ * requested address the setup address is used; a requested one must be among the
+ * account's own, so an arbitrary From cannot be spoofed. Pure, so the send
+ * endpoint and the MCP tool share the check and it is testable on its own.
+ */
+export function senderAddressFor(own: string[], setup: string | undefined, requested?: string): SenderAddressResult {
+  if (!requested) {
+    return setup
+      ? { ok: true, address: setup }
+      : { ok: false, status: 500, error: 'The mail account has no sender address' }
+  }
+
+  const normalized = normalizeEmail(requested)
+  if (!normalized || !own.some(address => normalizeEmail(address) === normalized)) {
+    const display = (normalized ?? requested).replace(/[\r\n]+/g, ' ')
+    return { ok: false, status: 400, error: `This account cannot send as ${display}` }
+  }
+
+  return { ok: true, address: normalized }
+}
+
+/** Resolves the From address for a send against the account's own addresses */
+export async function resolveSenderAddress(serviceId: string, requested?: string): Promise<SenderAddressResult> {
+  const [own, setup] = await Promise.all([
+    mailOwnAddresses(serviceId),
+    mailAccountAddress(serviceId)
+  ])
+
+  return senderAddressFor(own, setup, requested)
+}

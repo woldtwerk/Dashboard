@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useDebounceFn } from '@vueuse/core'
 import type { MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
-import { buildReply } from '#layers/mail/shared/mail-compose'
+import { buildReply, defaultSenderAddress } from '#layers/mail/shared/mail-compose'
 import { isOwnMail, isStreamKey, streamLabel, stripSubjectPrefix, type OwnMailContext } from '#layers/mail/shared/mail-thread'
 import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
 
@@ -10,6 +10,8 @@ const props = defineProps<{
   service: string
   /** The account's own address, read from its service setup */
   ownAddress?: string
+  /** The addresses the account may send from; the quick reply picks the right one */
+  addresses: string[]
   /** Mailbox paths with special-use `\Sent` */
   sentMailboxes: string[]
 }>()
@@ -95,11 +97,13 @@ watch(mails, async () => {
 const replyText = ref('')
 const sending = ref(false)
 /** The reply that is on its way, shown as its own accordion item until the mail arrives */
-const pendingReply = ref<{ text: string, subject: string } | null>(null)
+const pendingReply = ref<{ text: string, subject: string, from?: string } | null>(null)
 /** A UID the mail server will never hand out, for the item shown while sending */
 const PENDING_UID = -1
 
-const ownAddresses = computed(() => props.ownAddress ? [props.ownAddress] : [])
+const ownAddresses = computed(() => props.addresses.length
+  ? props.addresses
+  : (props.ownAddress ? [props.ownAddress] : []))
 
 // The reply answers the newest mail that is not the account's own
 const latestIncoming = computed(() => [...(mails.value ?? [])].reverse().find(mail => !isOwnMail(mail, ownContext.value)))
@@ -110,12 +114,14 @@ const pendingMail = computed<MailSummary | null>(() => {
     return null
   }
 
+  const sender = draft.from ?? props.ownAddress
+
   return {
     uid: PENDING_UID,
     service: props.service,
     mailbox: latestIncoming.value?.mailbox ?? '',
     subject: draft.subject,
-    from: props.ownAddress ? [{ address: props.ownAddress }] : [],
+    from: sender ? [{ address: sender }] : [],
     date: new Date().toISOString(),
     unread: false,
     flagged: false,
@@ -152,8 +158,11 @@ async function sendReply() {
   sending.value = true
 
   try {
-    const draft = buildReply(await mailMessage(target), ownAddresses.value, 'reply')
-    pendingReply.value = { text, subject: draft.subject }
+    const original = await mailMessage(target)
+    const draft = buildReply(original, ownAddresses.value, 'reply')
+    // The reply goes out from the address the original was sent to, when it is ours
+    const from = defaultSenderAddress(ownAddresses.value, original) ?? draft.from
+    pendingReply.value = { text, subject: draft.subject, from }
 
     await $fetch('/api/mail/send', {
       method: 'POST',
@@ -161,6 +170,7 @@ async function sendReply() {
       // The typed text goes above the quote buildReply prepared
       body: {
         ...draft,
+        from,
         text: `${text}${draft.text}`,
         reply: { mailbox: target.mailbox, uid: target.uid }
       }
@@ -258,6 +268,7 @@ useDomainEvents({ domains: ['mail'] }, (event) => {
         :rows="2"
         :autoresize="true"
         :maxrows="8"
+        :autofocus="false"
         :disabled="sending"
         placeholder="Reply…"
         @submit="sendReply"

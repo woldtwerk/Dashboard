@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { MailMessage } from '../shared/types/mail'
 import {
   buildReply,
+  defaultSenderAddress,
   OUTGOING_MESSAGE_ID_LIMIT,
   OUTGOING_RECIPIENT_LIMIT,
   OUTGOING_REFERENCES_LIMIT,
@@ -137,6 +138,48 @@ describe('buildReply', () => {
       messageId: '<c@example.com>'
     })
     expect(buildReply(repeated, [], 'reply').references).toEqual(['<a@example.com>', '<C@example.com>'])
+  })
+})
+
+describe('defaultSenderAddress', () => {
+  const own = ['me@example.com', 'alias@example.com']
+
+  it('picks the own address the original was sent to', () => {
+    expect(defaultSenderAddress(own, { to: [{ address: 'alias@example.com' }], cc: [] })).toBe('alias@example.com')
+  })
+
+  it('prefers a To match over a Cc match, in the order they appear', () => {
+    const original = {
+      to: [{ address: 'other@example.com' }, { address: 'alias@example.com' }],
+      cc: [{ address: 'me@example.com' }]
+    }
+    expect(defaultSenderAddress(own, original)).toBe('alias@example.com')
+  })
+
+  it('matches case-insensitively and returns the normalized own address', () => {
+    expect(defaultSenderAddress(own, { to: [{ address: 'ALIAS@Example.com' }], cc: [] })).toBe('alias@example.com')
+  })
+
+  it('falls back to the first own address when no recipient is ours', () => {
+    expect(defaultSenderAddress(own, { to: [{ address: 'bob@example.com' }], cc: [] })).toBe('me@example.com')
+    expect(defaultSenderAddress(own)).toBe('me@example.com')
+  })
+
+  it('has no sender without any own address', () => {
+    expect(defaultSenderAddress([], { to: [{ address: 'alias@example.com' }], cc: [] })).toBeUndefined()
+    expect(defaultSenderAddress([])).toBeUndefined()
+  })
+})
+
+describe('buildReply sender', () => {
+  it('sends a reply from the alias the original arrived on', () => {
+    const original = message({ to: [{ address: 'alias@example.com' }] })
+    expect(buildReply(original, ['me@example.com', 'alias@example.com'], 'reply').from).toBe('alias@example.com')
+  })
+
+  it('sends from the setup address otherwise', () => {
+    expect(buildReply(message(), ['me@example.com'], 'reply').from).toBe('me@example.com')
+    expect(buildReply(message(), ['me@example.com'], 'forward').from).toBe('me@example.com')
   })
 })
 

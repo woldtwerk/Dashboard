@@ -9,6 +9,8 @@ export interface OutgoingMail {
   bcc: MailAddress[]
   subject: string
   text: string
+  /** The account address the mail is sent from; the setup address when absent */
+  from?: string
   /** Message-ID this mail answers */
   inReplyTo?: string
   /** Message-ID chain this mail belongs to, oldest first */
@@ -18,6 +20,26 @@ export interface OutgoingMail {
 /** An empty draft, for a mail the user starts from scratch */
 export function emptyOutgoingMail(): OutgoingMail {
   return { to: [], cc: [], bcc: [], subject: '', text: '' }
+}
+
+/**
+ * The address a mail should be sent from. A reply or forward goes out from the
+ * address the original was sent to, when that is one of the account's own — the
+ * alias it arrived on. Anything else, and a fresh mail, uses the first own
+ * address, which is the account's setup address.
+ */
+export function defaultSenderAddress(own: string[], original?: Pick<MailMessage, 'to' | 'cc'>): string | undefined {
+  if (original) {
+    const ownAddresses = new Set(own.map(normalizeEmail).filter((email): email is string => !!email))
+    for (const { address } of [...original.to ?? [], ...original.cc ?? []]) {
+      const normalized = normalizeEmail(address)
+      if (normalized && ownAddresses.has(normalized)) {
+        return normalized
+      }
+    }
+  }
+
+  return normalizeEmail(own[0])
 }
 
 /** How a mail is started from an existing one */
@@ -150,9 +172,10 @@ export function buildReply(original: MailMessage, own: string[], mode: ComposeMo
   const replyTarget = original.replyTo?.length ? original.replyTo : original.from
 
   const subject = withSubjectPrefix(original.subject, mode === 'forward' ? 'Fwd: ' : 'Re: ')
+  const from = defaultSenderAddress(own, original)
 
   if (mode === 'forward') {
-    return { to: [], cc: [], bcc: [], subject, text: forwardBody(original) }
+    return { to: [], cc: [], bcc: [], subject, text: forwardBody(original), from }
   }
 
   const to = mode === 'replyAll'
@@ -165,6 +188,7 @@ export function buildReply(original: MailMessage, own: string[], mode: ComposeMo
     bcc: [],
     subject,
     text: replyBody(original),
+    from,
     inReplyTo: original.messageId,
     references: replyReferences(original)
   }

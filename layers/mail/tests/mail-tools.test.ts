@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MAIL_TOOL_TEXT_LIMIT, mailDeleteInput, mailReadInput, mailSearchInput, mailSendInput, toMailToolSearch } from '../server/tools'
+import { MAIL_TOOL_TEXT_LIMIT, mailDeleteInput, mailReadInput, mailReadSources, mailSearchInput, mailSearchSources, mailSendInput, toMailToolSearch } from '../server/tools'
 
 describe('toMailToolSearch', () => {
   it('maps the tool input onto the domain search', () => {
@@ -54,9 +54,49 @@ describe('mailSendInput', () => {
     expect(mailSendInput.safeParse({ ...base, inReplyTo: '<root@example.com>', references: ['<root@example.com>'] }).success).toBe(true)
   })
 
+  it('accepts an optional From address', () => {
+    expect(mailSendInput.safeParse({ ...base, from: 'alias@example.com' }).success).toBe(true)
+    expect(mailSendInput.safeParse({ ...base, from: 'x'.repeat(321) }).success).toBe(false)
+  })
+
   it('rejects a subject or Message-ID carrying a line break', () => {
     expect(mailSendInput.safeParse({ ...base, subject: 'Hi\r\nBcc: evil@example.com' }).success).toBe(false)
     expect(mailSendInput.safeParse({ ...base, inReplyTo: 'a@example.com\r\nX: injected' }).success).toBe(false)
     expect(mailSendInput.safeParse({ ...base, references: ['<ok@example.com>', 'bad id'] }).success).toBe(false)
+  })
+})
+
+describe('mail tool sources', () => {
+  it('maps search results to mail cards', () => {
+    const sources = mailSearchSources({ results: [{
+      subject: 'Your ticket',
+      from: 'Tickets <tickets@example.com>',
+      date: '2026-10-20T19:30:00Z',
+      link: '/mail?service=s&uid=7'
+    }] })
+
+    expect(sources).toEqual([{
+      kind: 'mail',
+      title: 'Your ticket',
+      subtitle: 'Tickets <tickets@example.com>',
+      date: '2026-10-20T19:30:00Z',
+      link: '/mail?service=s&uid=7'
+    }])
+  })
+
+  it('drops a malformed entry and an unknown output', () => {
+    expect(mailSearchSources({ results: [{ subject: 'no link' }] })).toEqual([])
+    expect(mailSearchSources(undefined)).toEqual([])
+  })
+
+  it('maps a read mail to one card', () => {
+    expect(mailReadSources({ subject: 'Hello', from: 'a@b.c', date: '2026-10-01', link: '/mail?uid=1' })).toEqual([{
+      kind: 'mail',
+      title: 'Hello',
+      subtitle: 'a@b.c',
+      date: '2026-10-01',
+      link: '/mail?uid=1'
+    }])
+    expect(mailReadSources({ error: 'Mail not found' })).toEqual([])
   })
 })

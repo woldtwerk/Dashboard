@@ -4,6 +4,8 @@ import type { MailAddress } from '#layers/mail/shared/types/mail'
 
 /** The fields the composer edits, with recipients still as tag strings */
 export interface MailComposeDraft {
+  /** The account address the mail is sent from */
+  from: string
   to: string[]
   cc: string[]
   bcc: string[]
@@ -40,6 +42,7 @@ export function invalidMailAddresses(values: string[]): string[] {
 /** The composer's fields as an outgoing mail, ready for the send API */
 export function toOutgoingMail(draft: MailComposeDraft): OutgoingMail {
   return {
+    from: draft.from || undefined,
     to: parseMailAddresses(draft.to),
     cc: parseMailAddresses(draft.cc),
     bcc: parseMailAddresses(draft.bcc),

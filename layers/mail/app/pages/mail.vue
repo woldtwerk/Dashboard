@@ -282,9 +282,21 @@ const listRef = ref<{ scrollToTop: () => void } | null>(null)
 // it, so opening a mail or a conversation leaves the list and its scroll alone.
 const listIdentity = computed(() => listIdentityFromQuery(route.query))
 
+// Multi-select of list rows; ordered mail keys in `?sel=`, one entry is no selection
+const selectedMailKeys = computed(() => selectionFromQuery(route.query))
+
+function setSelectedMails(keys: string[]) {
+  updateQuery({ sel: selectionToQuery(keys) })
+}
+
 // A filter, folder, account or view change starts the visible list over
 watch(listIdentity, () => {
   clearRetention()
+
+  // The selection belongs to the list that was shown, not to the next one
+  if (queryString('sel')) {
+    updateQuery({ sel: null })
+  }
 
   if (showThreads.value) {
     // The conversations watcher below reloads the list that is actually shown
@@ -344,6 +356,18 @@ const viewItems = computed<DropdownMenuItem[][]>(() => [[{
 // The account's own address, so a conversation can align own mails to the right
 const { data: serviceSetup } = await useFetch<SetupState>(() => `/api/services/${service.value}`, { lazy: true })
 const ownAddress = computed(() => String(serviceSetup.value?.values.user ?? '') || undefined)
+
+// Every address the account may send from, for the composer's From control and
+// reply prefills; cached per service and warmed on the compose hover.
+const { data: mailAddresses, refresh: refreshMailAddresses } = await useFetch<{ addresses: string[], default?: string }>(
+  '/api/mail/addresses',
+  {
+    query: computed(() => ({ service: service.value })),
+    key: () => `mail-addresses:${service.value}`,
+    lazy: true,
+    default: () => ({ addresses: [] as string[], default: undefined })
+  }
+)
 const sentMailboxes = computed(() => (folders.value.find(entry => entry.service.id === service.value)?.mailboxes ?? [])
   .filter(item => item.specialUse === '\\Sent')
   .map(item => item.path))
@@ -480,7 +504,48 @@ function onConversationSeen() {
 // Reloading keeps the loaded depth: fetch as many pages as the URL says are shown
 function reloadList() {
   basePages.value = list.value.pages
-  refresh()
+  return refresh()
+}
+
+// The refresh button spins while anything runs on its behalf, and its tooltip
+// names which one it is
+const reloading = computed(() => showThreads.value ? conversationsLoading.value : status.value === 'pending')
+const syncing = computed(() => !!currentIndex.value?.syncing)
+const refreshing = computed(() => reloading.value || syncing.value || indexing.value)
+const refreshTooltip = computed(() => mailRefreshTooltip({
+  syncing: syncing.value,
+  indexing: indexing.value,
+  messages: currentIndex.value?.messages ?? 0,
+  reloading: reloading.value
+}))
+
+/**
+ * Starts a full index sync of the service in the background. The server's
+ * per-service lock keeps a second run from starting while one is in flight.
+ */
+async function startSync(serviceId: string) {
+  try {
+    await $fetch('/api/mail/sync', { method: 'POST', query: { service: serviceId } })
+  } catch (error) {
+    toast.add({ title: 'Could not start the sync', description: mailErrorMessage(error), color: 'error', icon: 'i-lucide-circle-alert' })
+  }
+}
+
+/**
+ * Asks the server for new mail, then reloads what the page shows. The lists are
+ * read from the local index, so reloading them alone would not fetch new mail;
+ * the background sync does that and publishes the events that reload again.
+ */
+async function refreshMail() {
+  // A running sync is left alone; its lock would refuse a second one, and the
+  // click still reloads the list on screen
+  const sync = indexAvailable.value && !syncing.value ? startSync(service.value) : Promise.resolve()
+
+  await Promise.all([
+    showThreads.value ? reloadConversations() : reloadList(),
+    refreshNuxtData('mail-folders'),
+    sync.then(() => refreshIndexStatus())
+  ])
 }
 
 const refreshListFromEvents = useDebounceFn(() => reloadList(), 300)
@@ -647,6 +712,24 @@ function markUnread() {
   setSeen(mail, false)
 }
 
+/**
+ * Flip the read state of a mail picked from a list's context menu. The open
+ * mail going to unread closes the reader, like the reader's own "Mark as
+ * unread" does; any other mail is set to seen = was unread.
+ */
+function toggleUnread(mail: MailSummary) {
+  const open = selectedMail.value
+  if (open && mailKey(open) === mailKey(mail) && !mail.unread) {
+    markUnread()
+    return
+  }
+
+  setSeen(mail, mail.unread)
+  if (showThreads.value) {
+    reloadConversationsFromEvents()
+  }
+}
+
 // --- Composing ---
 
 // The composer rides on `?compose=` and, for a reply, the `uid`/`in` of the mail it answers
@@ -668,20 +751,40 @@ const isComposerOpen = computed({
   }
 })
 
-const ownAddresses = computed(() => ownAddress.value ? [ownAddress.value] : [])
+const ownAddresses = computed(() => mailAddresses.value?.addresses.length
+  ? mailAddresses.value.addresses
+  : (ownAddress.value ? [ownAddress.value] : []))
 
-// One full-message request per mail, shared by the composer and its hover prefetch
-const messageCache = new Map<string, Promise<MailMessage>>()
+/** The From address a fresh mail starts from: the setup address */
+const defaultFrom = computed(() => mailAddresses.value?.default ?? ownAddress.value)
 
-function mailMessage(uid: number, fromMailbox: string): Promise<MailMessage> {
-  const key = `${service.value}:${fromMailbox}:${uid}`
-  let request = messageCache.get(key)
-  if (!request) {
-    request = $fetch<MailMessage>(`/api/mail/messages/${uid}`, { query: { service: service.value, mailbox: fromMailbox } })
-    messageCache.set(key, request)
-    request.catch(() => messageCache.delete(key))
+/**
+ * Loads the account's sendable addresses when they are not in yet. A lazy
+ * useFetch may still be on its way when the composer opens — a reload with
+ * `?compose=reply…` in the URL, or a quick click — and building a draft from the
+ * half list would send from the login and let a reply-all address an own alias.
+ * Errors are swallowed; the setup-address fallback stands.
+ */
+async function ensureMailAddresses(): Promise<void> {
+  if (mailAddresses.value?.addresses.length) {
+    return
   }
-  return request
+  try {
+    await refreshMailAddresses()
+  } catch {
+    // The setup address is the fallback
+  }
+}
+
+// One full-message request per mail, shared by the reader, the composer and its
+// hover prefetch; the cache lives in `useMailMessage`
+function mailMessage(uid: number, fromMailbox: string): Promise<MailMessage> {
+  return loadMailMessage(nuxtApp, requestFetch, service.value, fromMailbox, uid)
+}
+
+/** Warm the reader for a mail the list points at, on hover and around the arrow keys */
+function prefetchMessage(mail: MailSummary) {
+  prefetchMailMessage(nuxtApp, requestFetch, service.value, mail.mailbox, mail.uid)
 }
 
 function openCompose(mode: MailComposeMode, mail?: MailSummary) {
@@ -705,6 +808,9 @@ function discardCompose() {
 }
 
 function prefetchCompose(mode: MailComposeMode) {
+  // Warm the From list with the mail itself, so opening the composer is instant
+  void ensureMailAddresses()
+
   const mail = selectedMail.value
   if (!mail || mode === 'new') {
     return
@@ -717,8 +823,13 @@ watch(composeQuery, async (compose) => {
     composeDraft.value = null
     return
   }
+
+  // The address list decides the reply sender and which own addresses a
+  // reply-all drops, so it must be there before either draft is built
+  await ensureMailAddresses()
+
   if (compose.mode === 'new' || !compose.uid) {
-    composeDraft.value = emptyOutgoingMail()
+    composeDraft.value = { ...emptyOutgoingMail(), from: defaultFrom.value }
     return
   }
 
@@ -1007,13 +1118,6 @@ const isMobile = breakpoints.smaller('lg')
         </template>
       </UInput>
 
-      <UTooltip
-        v-if="indexing"
-        :text="`Building search index (${currentIndex?.messages ?? 0} messages). Until then, search goes to the mail server.`"
-      >
-        <UIcon name="i-lucide-loader-circle" class="size-4 shrink-0 animate-spin text-dimmed" />
-      </UTooltip>
-
       <UPopover :content="{ align: 'end' }">
         <UChip :show="activeFilters > 0" :text="activeFilters" size="xl">
           <UButton
@@ -1101,14 +1205,15 @@ const isMobile = breakpoints.smaller('lg')
         </UTooltip>
       </UDropdownMenu>
 
-      <UTooltip text="Refresh">
+      <UTooltip :text="refreshTooltip">
         <UButton
           icon="i-lucide-refresh-cw"
+          :ui="{ leadingIcon: refreshing ? 'animate-spin' : undefined }"
           color="neutral"
           variant="ghost"
           size="sm"
-          :loading="status === 'pending'"
-          @click="reloadList()"
+          aria-label="Refresh"
+          @click="refreshMail()"
         />
       </UTooltip>
       <UTooltip text="Account settings">
@@ -1169,12 +1274,17 @@ const isMobile = breakpoints.smaller('lg')
         ref="conversationListRef"
         :conversations="visibleConversationList"
         :selected-key="conversationKey"
+        :service="service"
         :own-address="ownAddress"
         :loading-more="conversationsLoading"
         :done="conversationState.done"
+        :is-permanent="isPermanentDelete"
         @select="openConversation"
         @prefetch="prefetchConversation"
         @load-more="loadConversations(false)"
+        @compose="(mode, mail) => openCompose(mode, mail)"
+        @toggle-unread="toggleUnread"
+        @delete="deleteMail($event)"
       />
     </template>
     <template v-else>
@@ -1201,11 +1311,19 @@ const isMobile = breakpoints.smaller('lg')
         ref="listRef"
         v-model="selectedMail"
         :mails="visibleList"
+        :service="service"
+        :selection="selectedMailKeys"
         :show-mailbox="allFolders"
         :mailbox-names="mailboxNames"
         :loading-more="loadingMore"
         :done="pageState.done"
+        :is-permanent="isPermanentDelete"
         @load-more="loadMore"
+        @update-selection="setSelectedMails"
+        @prefetch="prefetchMessage"
+        @compose="(mode, mail) => openCompose(mode, mail)"
+        @toggle-unread="toggleUnread"
+        @delete="deleteMail($event)"
       />
     </template>
   </UDashboardPanel>
@@ -1216,6 +1334,7 @@ const isMobile = breakpoints.smaller('lg')
     :conversation-key="conversationKey"
     :service="service"
     :own-address="ownAddress"
+    :addresses="ownAddresses"
     :sent-mailboxes="sentMailboxes"
     @seen="onConversationSeen"
     @close="closeConversation"
@@ -1247,6 +1366,7 @@ const isMobile = breakpoints.smaller('lg')
           :conversation-key="conversationKey"
           :service="service"
           :own-address="ownAddress"
+          :addresses="ownAddresses"
           :sent-mailboxes="sentMailboxes"
           @seen="onConversationSeen"
           @close="closeConversation"
@@ -1273,6 +1393,7 @@ const isMobile = breakpoints.smaller('lg')
     v-if="composeDraft"
     :open="isComposerOpen"
     :mail="composeDraft"
+    :addresses="ownAddresses"
     :title="composeTitle"
     :draft-key="composeStorageKey"
     :sending="sending"
