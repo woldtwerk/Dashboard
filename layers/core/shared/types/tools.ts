@@ -20,6 +20,23 @@ export interface ToolContext {
   caller: string
 }
 
+/**
+ * One result item of a tool call, as the chat shows it under the answer. The
+ * domain that owns the tool maps its own output to this shape; the chat only
+ * knows `kind` (for the icon) and renders title, subtitle, date and link.
+ */
+export interface ToolSource {
+  /** Item kind, e.g. `mail`, `document`, `event`, `contact`, `file`; maps to an icon */
+  kind: string
+  title: string
+  /** Sender, correspondent, calendar, folder — whatever describes the item */
+  subtitle?: string
+  /** ISO 8601 timestamp or date-only (`YYYY-MM-DD`) used to sort and dim past items */
+  date?: string
+  /** In-app path (`/mail?…`) or `https:` URL that opens the item */
+  link?: string
+}
+
 export interface DomainTool<I extends z.ZodTypeAny = z.ZodTypeAny> {
   /** snake_case, unique across domains, e.g. `mail_search` */
   name: string
@@ -29,4 +46,10 @@ export interface DomainTool<I extends z.ZodTypeAny = z.ZodTypeAny> {
   /** true for tools that change data (MCP destructiveHint, needs write scope) */
   writes: boolean
   execute(input: z.infer<I>, context: ToolContext): Promise<unknown>
+  /**
+   * The result items the chat renders as source cards. Pure mapping of the
+   * tool output; the registry caps what reaches the UI. Optional: a tool
+   * without it still shows its call and a plain result line.
+   */
+  sources?(output: unknown): ToolSource[]
 }

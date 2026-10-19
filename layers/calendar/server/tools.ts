@@ -1,6 +1,8 @@
 import { createError } from 'nuxt/server'
 import { z } from 'zod'
-import type { DomainTool } from '../../core/shared/types/tools'
+import type { DomainTool, ToolSource } from '../../core/shared/types/tools'
+import { entityLink } from '../../core/shared/entities'
+import type { Calendar } from '../shared/types/calendar'
 
 /** A tool window may span at most this many days. */
 export const CALENDAR_TOOL_MAX_RANGE_DAYS = 92
@@ -17,7 +19,58 @@ interface CalendarToolEvent {
   reminders?: number[]
 }
 
+/** One event as `calendar_list_events` returns it, with the ids its link needs. */
+interface CalendarToolEventResult extends CalendarToolEvent {
+  uid: string
+  calendar: string
+  recurrenceId?: string
+  service?: string
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000
+
+/** Source cards for `calendar_list_events`: one row per event in the window. */
+export function calendarEventSources(output: unknown): ToolSource[] {
+  const events = (output as { events?: Partial<CalendarToolEventResult>[] } | undefined)?.events
+  if (!Array.isArray(events)) {
+    return []
+  }
+
+  return events.flatMap((event) => {
+    if (!event.title || !event.uid || !event.calendar) {
+      return []
+    }
+
+    return [{
+      kind: 'event',
+      title: event.title,
+      ...(event.location ? { subtitle: event.location } : {}),
+      ...(event.start ? { date: event.start } : {}),
+      link: entityLink({
+        type: 'event',
+        service: event.service,
+        id: `${event.calendar}|${event.uid}|${event.recurrenceId ?? ''}`
+      })
+    }]
+  })
+}
+
+/** Source cards for `calendar_list_calendars`: one row per calendar. */
+export function calendarListSources(output: unknown): ToolSource[] {
+  if (!Array.isArray(output)) {
+    return []
+  }
+
+  return (output as { service: string, calendars?: Partial<Calendar>[] }[]).flatMap(entry =>
+    (entry.calendars ?? []).flatMap(calendar => calendar.name
+      ? [{
+          kind: 'calendar',
+          title: calendar.name,
+          subtitle: calendar.serviceName || entry.service,
+          link: '/calendar'
+        }]
+      : []))
+}
 
 /** Validates and normalizes the window of `calendar_list_events`. */
 export function toCalendarToolWindow(range: { start: Date, end: Date }): { start: string, end: string } {
@@ -73,7 +126,8 @@ export const calendarTools: DomainTool[] = [
           return { service: id, calendars: [], error: error instanceof Error ? error.message : 'Unavailable' }
         }
       }))
-    }
+    },
+    sources: calendarListSources
   },
   {
     name: 'calendar_list_events',
@@ -106,7 +160,8 @@ export const calendarTools: DomainTool[] = [
       }
 
       return { events: events.sort((a, b) => a.start.localeCompare(b.start)) }
-    }
+    },
+    sources: calendarEventSources
   },
   {
     name: 'calendar_create_event',

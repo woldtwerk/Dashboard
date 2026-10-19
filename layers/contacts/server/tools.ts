@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import type { DomainTool } from '../../core/shared/types/tools'
+import type { DomainTool, ToolSource } from '../../core/shared/types/tools'
+import { entityLink } from '../../core/shared/entities'
 import { matchContact } from '../../contacts/app/utils/contacts'
 import type { Contact, ContactInput } from '../shared/types/contacts'
 
@@ -47,6 +48,29 @@ async function serviceContacts(service: string, addressBook: string | undefined,
     .map(contact => ({ ...contact, service }))
 }
 
+function contactSource(contact: Contact): ToolSource {
+  const subtitle = contact.organization || contact.emails[0]?.value
+
+  return {
+    kind: 'contact',
+    title: contact.name || contact.emails[0]?.value || '(no name)',
+    ...(subtitle ? { subtitle } : {}),
+    link: entityLink({ type: 'contact', service: contact.service, id: contact.uid })
+  }
+}
+
+/** Source cards for `contacts_search`: one row per matching contact. */
+export function contactsSearchSources(output: unknown): ToolSource[] {
+  const contacts = (output as { contacts?: Contact[] } | undefined)?.contacts
+  return Array.isArray(contacts) ? contacts.map(contactSource) : []
+}
+
+/** Source card for `contacts_get`: the one contact that was read. */
+export function contactGetSources(output: unknown): ToolSource[] {
+  const contact = output as Partial<Contact> | undefined
+  return contact?.uid ? [contactSource(contact as Contact)] : []
+}
+
 export const contactsTools: DomainTool[] = [
   {
     name: 'contacts_search',
@@ -74,7 +98,8 @@ export const contactsTools: DomainTool[] = [
       }
 
       return { contacts: results }
-    }
+    },
+    sources: contactsSearchSources
   },
   {
     name: 'contacts_get',
@@ -98,7 +123,8 @@ export const contactsTools: DomainTool[] = [
       }
 
       return { error: 'Contact not found' }
-    }
+    },
+    sources: contactGetSources
   },
   {
     name: 'contacts_create',

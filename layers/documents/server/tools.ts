@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import type { DomainTool } from '../../core/shared/types/tools'
+import type { DomainTool, ToolSource } from '../../core/shared/types/tools'
+import { entityLink } from '../../core/shared/entities'
 import type { DocumentsDocument, DocumentsQuery } from '../shared/types/documents'
 import { EMPTY_DOCUMENTS_FILTERS } from '../shared/types/documents'
 
@@ -40,7 +41,20 @@ export function toDocumentsToolQuery(input: z.infer<typeof documentsSearchInput>
 }
 
 /** A document list entry without the extracted content. */
-function toSummary(document: DocumentsDocument, service: string) {
+export interface DocumentsToolSummary {
+  service: string
+  id: number
+  title: string
+  created: string
+  correspondent: number | null
+  documentType: number | null
+  tags: number[]
+  archiveSerialNumber: number | null
+  mimeType: string
+  pageCount: number | null
+}
+
+function toSummary(document: DocumentsDocument, service: string): DocumentsToolSummary {
   return {
     service,
     id: document.id,
@@ -53,6 +67,34 @@ function toSummary(document: DocumentsDocument, service: string) {
     mimeType: document.mimeType,
     pageCount: document.pageCount
   }
+}
+
+function documentSource(document: DocumentsToolSummary): ToolSource {
+  const serial = document.archiveSerialNumber
+
+  return {
+    kind: 'document',
+    title: document.title || '(untitled document)',
+    ...(serial !== null && serial !== undefined ? { subtitle: `#${serial}` } : {}),
+    ...(document.created ? { date: document.created } : {}),
+    link: entityLink({ type: 'document', service: document.service, id: String(document.id) })
+  }
+}
+
+/** Source cards for `documents_search`: one row per found document. */
+export function documentsSearchSources(output: unknown): ToolSource[] {
+  const documents = (output as { documents?: DocumentsToolSummary[] } | undefined)?.documents
+  if (!Array.isArray(documents)) {
+    return []
+  }
+
+  return documents.map(documentSource)
+}
+
+/** Source card for `documents_get`: the one document that was read. */
+export function documentsGetSources(output: unknown): ToolSource[] {
+  const document = output as Partial<DocumentsToolSummary> | undefined
+  return document?.id !== undefined && document.service ? [documentSource(document as DocumentsToolSummary)] : []
 }
 
 export const documentsTools: DomainTool[] = [
@@ -82,7 +124,8 @@ export const documentsTools: DomainTool[] = [
       }
 
       return { count, documents: documents.slice(0, input.limit) }
-    }
+    },
+    sources: documentsSearchSources
   },
   {
     name: 'documents_get',
@@ -104,7 +147,8 @@ export const documentsTools: DomainTool[] = [
         notes: document.notes,
         metadata
       }
-    }
+    },
+    sources: documentsGetSources
   },
   {
     name: 'documents_list_tags',

@@ -10,8 +10,11 @@
     "@allmight/core": "workspace:*",
     "@allmight/mail": "workspace:*",
     "@nuxt/ui": "catalog:",
+    "@vueuse/core": "catalog:",
     "ai": "catalog:",
     "date-fns": "catalog:",
+    "drizzle-orm": "catalog:",
+    "markdown-it": "catalog:",
     "zod": "catalog:"
   },
   "peerDependencies": {
