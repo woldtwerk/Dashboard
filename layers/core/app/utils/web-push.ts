@@ -27,14 +27,14 @@ export function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuf
 }
 
 /**
- * The Push API needs a service worker, the PushManager and the Notification API
- * on a secure origin. An insecure origin is reported as unsupported rather than
- * failing halfway through the permission request.
+ * The Push API needs a service worker on `navigator`, the PushManager and the
+ * Notification API on a secure origin. An insecure origin is reported as
+ * unsupported rather than failing halfway through the permission request.
  */
 export function pushSupported(env: Window | undefined): boolean {
   return !!env
     && env.isSecureContext
-    && 'serviceWorker' in env
+    && 'serviceWorker' in env.navigator
     && 'PushManager' in env
     && 'Notification' in env
 }

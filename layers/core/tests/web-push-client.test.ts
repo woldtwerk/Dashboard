@@ -9,13 +9,17 @@ interface EnvOptions {
 }
 
 function env(options: EnvOptions = {}): Window {
-  const fake: Record<string, unknown> = {
-    isSecureContext: options.secure ?? true
-  }
+  const navigator: Record<string, unknown> = {}
 
   if (options.serviceWorker !== false) {
-    fake.serviceWorker = {}
+    navigator.serviceWorker = {}
   }
+
+  const fake: Record<string, unknown> = {
+    isSecureContext: options.secure ?? true,
+    navigator
+  }
+
   if (options.pushManager !== false) {
     fake.PushManager = function PushManager() {}
   }
@@ -65,6 +69,14 @@ describe('pushSupported', () => {
 
   it('accepts a fully capable browser', () => {
     expect(pushSupported(env())).toBe(true)
+  })
+
+  it('finds the service worker on navigator, not on the window', () => {
+    const browser = env()
+
+    expect('serviceWorker' in browser).toBe(false)
+    expect('serviceWorker' in browser.navigator).toBe(true)
+    expect(pushSupported(browser)).toBe(true)
   })
 })
 
