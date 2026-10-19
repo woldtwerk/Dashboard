@@ -2,14 +2,15 @@
 import { APP_PASSWORD_SCOPES } from '#layers/core/shared/types/app-passwords'
 import type { AppPasswordInfo, AppPasswordScope, CreatedAppPassword } from '#layers/core/shared/types/app-passwords'
 import { formatRelative } from '#layers/core/app/utils/time'
+import { formatZoned } from '#layers/core/shared/date-format'
 
 const toast = useToast()
 const { user } = useUserSession()
-const now = new Date()
+const now = useDashboardNow()
 
-// Fixed locale, so the server and the client render the same date
-const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium' })
-const formatDate = (value: string) => dateFormat.format(new Date(value))
+// Fixed pattern, in the shared zone, so the server and the client render the same date
+const zone = useTimeZone()
+const formatDate = (value: string) => formatZoned(value, zone.value, 'dd MMM yyyy')
 
 const { data: passwords, refresh } = await useFetch<AppPasswordInfo[]>('/api/app-passwords', { default: () => [] })
 

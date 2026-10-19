@@ -3,6 +3,7 @@ import { useDebounceFn } from '@vueuse/core'
 import type { TableColumn } from '@nuxt/ui'
 import type { LogEntry, LogLevel } from '#layers/core/shared/types/logs'
 import type { LogFilters } from '../utils/logs'
+import { formatZoned } from '#layers/core/shared/date-format'
 
 useSeoMeta({ title: 'Logs' })
 
@@ -10,6 +11,8 @@ const route = useRoute()
 const router = useRouter()
 const toast = useToast()
 const now = useDashboardNow()
+// Log times keep their seconds, read in the shared zone
+const zone = useTimeZone()
 
 const PAGE_SIZE = 100
 
@@ -150,7 +153,7 @@ const columns: TableColumn<LogEntry>[] = [
   { accessorKey: 'message', header: 'Message' }
 ]
 
-const absoluteTime = (entry: LogEntry) => new Date(entry.at).toLocaleString()
+const absoluteTime = (entry: LogEntry) => formatZoned(entry.at, zone.value, 'dd MMM yyyy HH:mm:ss')
 </script>
 
 <template>

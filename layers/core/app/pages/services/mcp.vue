@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { format } from 'date-fns'
 import type { CreatedMcpToken, McpTokenInfo } from '#layers/core/shared/types/mcp'
 import { formatRelative } from '../../utils/time'
+import { formatZoned } from '#layers/core/shared/date-format'
 
 useSeoMeta({ title: 'MCP access' })
 
 const toast = useToast()
-const now = new Date()
+const now = useDashboardNow()
+// Token timestamps are read in the shared zone
+const zone = useTimeZone()
 
 const { data: tokens, refresh } = await useFetch<McpTokenInfo[]>('/api/mcp/tokens', { default: () => [] })
 
@@ -150,7 +152,7 @@ const scopeColor = (value: McpTokenInfo['scope']) => value === 'write' ? 'warnin
                   </UBadge>
                 </div>
                 <p class="text-sm text-muted">
-                  Created {{ format(new Date(token.createdAt), 'dd MMM yyyy') }}
+                  Created {{ formatZoned(token.createdAt, zone, 'dd MMM yyyy') }}
                   · Last used {{ formatRelative(token.lastUsedAt, now) }}
                 </p>
               </div>

@@ -49,7 +49,11 @@ export default defineNuxtConfig({
     },
     public: {
       // The env var is not a NUXT_PUBLIC_* name, so the public copy is filled here
-      vapidPublicKey: process.env.NUXT_VAPID_PUBLIC_KEY ?? ''
+      vapidPublicKey: process.env.NUXT_VAPID_PUBLIC_KEY ?? '',
+      // NUXT_PUBLIC_TIME_ZONE — IANA zone times render in when the browser's is
+      // unknown, e.g. on the server render before the `tz` cookie is set.
+      // Override with NUXT_PUBLIC_TIME_ZONE=America/New_York
+      timeZone: 'Europe/Berlin'
     }
   },
 
