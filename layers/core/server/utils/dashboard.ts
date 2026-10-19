@@ -6,6 +6,7 @@ import type {
 } from '../../shared/types/dashboard'
 import type { ServiceInfo } from '../../shared/types/setup'
 import { useServiceLogger } from './service-logger'
+import { sharedStorage } from './shared-storage'
 
 export interface DashboardSeriesSource {
   info: Omit<DashboardSeriesInfo, 'id' | 'domain'>
@@ -45,8 +46,7 @@ export const STATUS_LOG_INTERVAL_MS = 5 * 60_000
 
 // Redis when mounted (shared by every cluster worker), else the default Nitro storage
 export function dashboardStorage() {
-  const storage = useStorage()
-  return storage.getMounts().some(mount => mount.base === 'redis') ? useStorage('redis') : storage
+  return sharedStorage()
 }
 
 async function readCache<T>(key: string): Promise<T | undefined> {

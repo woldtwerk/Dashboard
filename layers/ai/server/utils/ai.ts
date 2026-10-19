@@ -6,6 +6,7 @@ import { isAiModelAllowed } from '../../shared/ai-model'
 import type { AiModelInfo, AiServiceModels } from '../../shared/types/ai'
 import type { SetupValues } from '../../../core/shared/types/setup'
 import { safeErrorMessage } from '../../../core/server/utils/errors'
+import { sharedStorage } from '../../../core/server/utils/shared-storage'
 
 export interface AiModel {
   model: LanguageModel
@@ -65,8 +66,7 @@ interface CachedModels {
 
 // Redis when mounted (shared by all cluster workers), else the default Nitro storage
 export function modelsStorage() {
-  const storage = useStorage()
-  return storage.getMounts().some(mount => mount.base === 'redis') ? useStorage('redis') : storage
+  return sharedStorage()
 }
 
 // Keyed by service and a hash of its base URL, so neither the API key nor the URL lands in the cache

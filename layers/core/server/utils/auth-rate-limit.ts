@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { sharedStorage } from './shared-storage'
 
 export const LOGIN_MAX_FAILURES = 5
 export const LOGIN_WINDOW_MS = 15 * 60_000
@@ -62,8 +63,7 @@ export function clientIp(xForwardedFor: string | undefined, remoteAddress: strin
 
 // Redis when mounted (shared by every cluster worker), else the default Nitro storage
 function authStorage() {
-  const storage = useStorage()
-  return storage.getMounts().some(mount => mount.base === 'redis') ? useStorage('redis') : storage
+  return sharedStorage()
 }
 
 // Hashed so neither the client address nor the email itself lands in the cache
