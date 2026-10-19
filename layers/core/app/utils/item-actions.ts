@@ -31,8 +31,14 @@ export interface ItemAction {
   domains: string[]
   /** Lower comes first; ties break by label, then id */
   order?: number
+  /** Also offered when several items are selected; otherwise one item only */
+  multiple?: boolean
   /** Where the action goes for one item; undefined hides it for that item */
-  to: (context: ItemActionContext) => RouteLocationRaw | undefined
+  to?: (context: ItemActionContext) => RouteLocationRaw | undefined
+  /** Runs the action for every targeted item, e.g. a workflow over a selection */
+  onSelect?: (contexts: ItemActionContext[]) => void
+  /** A submenu built from the targets; must stay synchronous */
+  children?: (contexts: ItemActionContext[]) => DropdownMenuItem[]
   /** Whether the action applies to this item at all */
   visible?: (context: ItemActionContext) => boolean
 }
@@ -76,16 +82,36 @@ export function useItemActions(context: MaybeRefOrGetter<ItemActionContext>): Co
 
 /**
  * The dropdown a domain renders: its own entries first, then one group with the
- * registered actions whose `to` resolved for this item.
+ * registered actions that apply to the targets. With several targets only actions
+ * marked `multiple` appear; their `to`, `onSelect` and `children` receive every
+ * target.
  */
 export function itemActionMenuItems(
   domain: string,
-  context: ItemActionContext,
+  contexts: ItemActionContext | ItemActionContext[],
   leading: DropdownMenuItem[][] = []
 ): DropdownMenuItem[][] {
-  const items = itemActionsFor(domain, context)
+  const targets = Array.isArray(contexts) ? contexts : [contexts]
+  if (!targets.length) {
+    return [...leading]
+  }
+
+  const items = itemActionsFor(domain, targets[0]!)
+    .filter(action => targets.length === 1 || action.multiple)
+    // An action that is conditionally visible must be visible for every target
+    .filter(action => !action.visible || targets.every(target => action.visible!(target)))
     .map((action): DropdownMenuItem | undefined => {
-      const to = action.to(context)
+      if (action.children) {
+        return { label: action.label, icon: action.icon, children: action.children(targets) }
+      }
+      if (action.onSelect) {
+        return {
+          label: action.label,
+          icon: action.icon,
+          onSelect: () => action.onSelect!(targets)
+        }
+      }
+      const to = action.to?.(targets[0]!)
       return to ? { label: action.label, icon: action.icon, to } : undefined
     })
     .filter((entry): entry is DropdownMenuItem => !!entry)

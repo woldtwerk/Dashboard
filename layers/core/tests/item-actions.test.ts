@@ -87,4 +87,60 @@ describe('itemActionMenuItems', () => {
   it('is empty when no action applies', () => {
     expect(itemActionMenuItems('mail', context())).toEqual([])
   })
+
+  it('keeps a single-context action working through onSelect', () => {
+    const onSelect = vi.fn()
+    registerItemAction(action({ id: 'select', label: 'Select', to: undefined, onSelect }))
+
+    const menu = itemActionMenuItems('mail', context())
+    expect(menu).toEqual([[{ label: 'Select', icon: 'i-lucide-star', onSelect: expect.any(Function) }]])
+
+    menu[0]![0]!.onSelect!(new Event('select'))
+    expect(onSelect).toHaveBeenCalledWith([context()])
+  })
+
+  it('offers only multiple actions when several contexts are targeted', () => {
+    registerItemAction(action({ id: 'one', label: 'One' }))
+    const select = vi.fn()
+    registerItemAction(action({ id: 'many', label: 'Many', multiple: true, to: undefined, onSelect: select }))
+
+    const first = context()
+    const second = context({ ref: 'mail:mail-1:INBOX%2F2' })
+    const menu = itemActionMenuItems('mail', [first, second])
+
+    expect(menu).toHaveLength(1)
+    expect(menu[0]).toEqual([{ label: 'Many', icon: 'i-lucide-star', onSelect: expect.any(Function) }])
+
+    menu[0]![0]!.onSelect!(new Event('select'))
+    expect(select).toHaveBeenCalledWith([first, second])
+  })
+
+  it('builds a submenu from every target', () => {
+    const children = vi.fn(() => [{ label: 'Workflow A' }])
+    registerItemAction(action({ id: 'run', label: 'Run workflow', multiple: true, to: undefined, children }))
+
+    const targets = [context(), context({ ref: 'mail:mail-1:INBOX%2F2' })]
+    const menu = itemActionMenuItems('mail', targets)
+
+    expect(children).toHaveBeenCalledWith(targets)
+    expect(menu).toEqual([[
+      { label: 'Run workflow', icon: 'i-lucide-star', children: [{ label: 'Workflow A' }] }
+    ]])
+  })
+
+  it('hides an action that is not visible for every target', () => {
+    registerItemAction(action({
+      id: 'some',
+      multiple: true,
+      visible: context => context.ref.endsWith('1')
+    }))
+
+    expect(itemActionMenuItems('mail', [context(), context({ ref: 'mail:mail-1:INBOX%2F2' })])).toEqual([])
+  })
+
+  it('skips an action that has no target, handler or submenu', () => {
+    registerItemAction(action({ id: 'empty', to: undefined }))
+
+    expect(itemActionMenuItems('mail', context())).toEqual([])
+  })
 })
