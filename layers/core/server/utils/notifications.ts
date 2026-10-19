@@ -43,17 +43,33 @@ export function listNotificationCategories(): NotificationCategoryInfo[] {
     .sort((a, b) => a.label.localeCompare(b.label))
 }
 
-/** The defaults of the `notifications` section, including every registered category. */
+/**
+ * The defaults of the `notifications` section. Hidden categories are machinery,
+ * not a user choice, so they are left out.
+ */
 export function notificationSettingsDefaults(): NotificationSettings {
   return {
     doNotDisturb: false,
-    categories: Object.fromEntries([...categories.values()].map(category => [category.id, category.defaultStyle]))
+    categories: Object.fromEntries(
+      [...categories.values()]
+        .filter(category => !category.hidden)
+        .map(category => [category.id, category.defaultStyle])
+    )
   }
 }
 
-/** The user's style for a category, falling back to the category's registration. */
+/**
+ * The user's style for a category, falling back to the category's registration.
+ * A hidden category always keeps its registered style; it is not offered in the
+ * settings, so whatever is stored for it is stale.
+ */
 export function notificationStyle(settings: NotificationSettings, category: string): NotificationStyle {
-  return settings.categories[category] ?? categories.get(category)?.defaultStyle ?? 'in-app'
+  const registered = categories.get(category)
+  if (registered?.hidden) {
+    return registered.defaultStyle
+  }
+
+  return settings.categories[category] ?? registered?.defaultStyle ?? 'in-app'
 }
 
 export interface NotificationInput {
@@ -96,7 +112,8 @@ const appNotificationSchema = z.object({
   domain: z.string().min(1),
   service: z.string().optional(),
   at: z.iso.datetime(),
-  read: z.boolean()
+  read: z.boolean(),
+  style: notificationStyleSchema.optional()
 })
 
 /** Parses one bus payload; malformed values are dropped rather than delivered. */
@@ -168,7 +185,8 @@ export async function notify(input: NotificationInput): Promise<AppNotification 
   }
 
   const notification = toAppNotification(saved)
-  await publishToChannel('notifications', notification)
+  const live = { ...notification, style }
+  await publishToChannel('notifications', live)
 
   // Desktop-style categories also leave the dashboard as Web Push. notify() runs
   // once per event, so this is the one place that sends; the channel subscriber
@@ -181,7 +199,7 @@ export async function notify(input: NotificationInput): Promise<AppNotification 
     })
   }
 
-  return notification
+  return live
 }
 
 export interface NotificationListQuery {

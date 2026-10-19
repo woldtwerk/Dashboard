@@ -17,6 +17,11 @@ export interface AppNotification {
   /** ISO timestamp */
   at: string
   read: boolean
+  /**
+   * The style the server resolved when it sent the notification; only set on
+   * live notifications, not on listed ones.
+   */
+  style?: NotificationStyle
 }
 
 /** A category as the settings UI shows it */

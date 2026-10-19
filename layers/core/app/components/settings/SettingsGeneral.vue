@@ -29,7 +29,7 @@ const followsBrowser = computed(() => !data.value.timeZone)
             Time zone
           </h2>
           <p class="text-sm text-muted">
-            The calendar renders in this zone. By default it follows the browser.
+            The calendar renders in this zone. Defaults to Europe/Berlin.
           </p>
         </div>
       </template>

@@ -8,7 +8,7 @@ const generalSettingsSchema = z.object({
   timeZone: z.string().min(1).nullable()
 })
 
-const generalSettingsDefaults = { timeZone: null }
+const generalSettingsDefaults = { timeZone: 'Europe/Berlin' }
 
 /** Core's own categories and settings; domains register theirs in their own plugins. */
 export default defineNitroPlugin(() => {
@@ -26,7 +26,7 @@ export default defineNitroPlugin(() => {
     domain: 'core',
     label: 'Test notification',
     description: 'Sent from the notifications settings.',
-    defaultStyle: 'in-app',
+    defaultStyle: 'both',
     hidden: true
   })
 

@@ -4,16 +4,22 @@ import type { DomainEvent } from '../shared/types/domain-events'
 import type { NotificationSettings } from '../shared/types/settings'
 import { deliveryFor, desktopPermissionView } from '../app/utils/notifications'
 import { syncFailedNotification } from '../server/utils/notification-events'
-import { notificationSettingsDefaults, registerNotificationCategory } from '../server/utils/notifications'
+import {
+  notificationSettingsDefaults,
+  notificationStyle,
+  parseNotificationValue,
+  registerNotificationCategory
+} from '../server/utils/notifications'
 
-const notification = (category = 'mail-new'): AppNotification => ({
+const notification = (category = 'mail-new', style?: AppNotification['style']): AppNotification => ({
   id: 'n1',
   category,
   title: 'Alice',
   body: 'Hello',
   domain: 'mail',
   at: '2026-10-18T10:00:00.000Z',
-  read: false
+  read: false,
+  style
 })
 
 const settings = (categories: NotificationSettings['categories'], doNotDisturb = false): NotificationSettings => ({
@@ -49,6 +55,13 @@ describe('deliveryFor', () => {
 
   it('falls back to in-app for an unknown category', () => {
     expect(deliveryFor(notification('unknown'), settings({}), 'granted', true)).toEqual({ toast: true, desktop: false })
+  })
+
+  it('uses the style the server stamped over the local settings', () => {
+    // The hidden `test` category is not a user choice: the server sent `both`,
+    // even though an older settings payload still says in-app.
+    expect(deliveryFor(notification('test', 'both'), settings({ test: 'in-app' }), 'granted', false))
+      .toEqual({ toast: false, desktop: true })
   })
 })
 
@@ -102,6 +115,45 @@ describe('notificationSettingsDefaults', () => {
     expect(defaults.doNotDisturb).toBe(false)
     expect(defaults.categories['mail-new']).toBe('both')
     expect(defaults.categories['calendar-reminder']).toBe('in-app')
+  })
+
+  it('leaves hidden categories out', () => {
+    registerNotificationCategory({ id: 'settings-test-hidden', domain: 'core', label: 'Machinery', defaultStyle: 'both', hidden: true })
+
+    expect(notificationSettingsDefaults().categories).not.toHaveProperty('settings-test-hidden')
+  })
+})
+
+describe('notificationStyle', () => {
+  it('keeps a hidden category on its registered style', () => {
+    registerNotificationCategory({ id: 'settings-test-machinery', domain: 'core', label: 'Machinery', defaultStyle: 'both', hidden: true })
+
+    expect(notificationStyle(settings({ 'settings-test-machinery': 'in-app' }), 'settings-test-machinery')).toBe('both')
+  })
+
+  it('follows the settings for a visible category', () => {
+    registerNotificationCategory({ id: 'settings-test-visible', domain: 'mail', label: 'Visible', defaultStyle: 'in-app' })
+
+    expect(notificationStyle(settings({ 'settings-test-visible': 'desktop' }), 'settings-test-visible')).toBe('desktop')
+  })
+})
+
+describe('parseNotificationValue', () => {
+  const payload = {
+    id: 'n1',
+    category: 'test',
+    title: 'Test notification',
+    domain: 'core',
+    at: '2026-10-18T10:00:00.000Z',
+    read: false
+  }
+
+  it('keeps a valid style', () => {
+    expect(parseNotificationValue({ ...payload, style: 'both' })?.style).toBe('both')
+  })
+
+  it('rejects an invalid style', () => {
+    expect(parseNotificationValue({ ...payload, style: 'loud' })).toBeUndefined()
   })
 })
 

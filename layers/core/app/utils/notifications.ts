@@ -32,7 +32,9 @@ export function deliveryFor(
     return { toast: false, desktop: false }
   }
 
-  const style = settings.categories?.[notification.category] ?? IN_APP
+  // The server resolves the style (hidden categories ignore the settings) and
+  // stamps it on the notification, so its value wins over the local settings.
+  const style = notification.style ?? settings.categories?.[notification.category] ?? IN_APP
   const desktop = (style === 'desktop' || style === 'both') && permission === 'granted'
   const toast = style === IN_APP || (style === 'both' && visible)
 
