@@ -17,7 +17,13 @@ FROM python:3.12-slim
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.14.1 \
   && pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu "laya[serve]==0.4.11"
 
-RUN useradd --create-home --uid 1000 laya
+# The `laya-models` volume is mounted at $HF_HOME, so that path must already exist in
+# the image owned by laya: Docker creates a missing mountpoint as root and copies the
+# image directory's ownership into an empty volume on first mount, which would leave
+# the Hugging Face cache root-owned and make the server fail on start.
+RUN useradd --create-home --uid 1000 laya \
+  && mkdir -p /home/laya/.cache/huggingface \
+  && chown -R laya:laya /home/laya/.cache
 
 # Weights, tokenizers and the Hugging Face cache live on the volume; the first start
 # downloads ~1.3 GB for the multilingual checkpoint.

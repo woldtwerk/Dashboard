@@ -5,6 +5,7 @@ services:
     container_name: ddev-${DDEV_SITENAME}-proton-bridge
     build: ./proton-bridge
     image: ddev-${DDEV_SITENAME}-proton-bridge
+    pull_policy: build
     hostname: proton-bridge
     labels:
       com.ddev.site-name: ${DDEV_SITENAME}
