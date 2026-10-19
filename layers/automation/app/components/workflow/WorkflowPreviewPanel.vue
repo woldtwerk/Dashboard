@@ -202,6 +202,13 @@ function scoreEntries(answer: DecisionAnswer | undefined): Array<{ key: string, 
 
       <!-- Free-text answers: every decision node, with all probabilities -->
       <div v-if="activeTab === 'text' && result?.items.length" class="space-y-3">
+        <UAlert
+          v-if="result.items[0]!.error"
+          color="error"
+          variant="soft"
+          icon="i-lucide-triangle-alert"
+          :title="result.items[0]!.error"
+        />
         <div v-for="node in decisionNodes" :key="node.id" class="rounded-md border border-default p-2">
           <button type="button" class="text-left text-xs font-semibold text-highlighted" @click="emit('focus', node.id)">
             {{ nodeTitle(node) }} · {{ node.data.instructions }}
@@ -240,7 +247,15 @@ function scoreEntries(answer: DecisionAnswer | undefined): Array<{ key: string, 
         >
           <div class="flex items-center justify-between gap-2">
             <span class="line-clamp-1 font-medium text-highlighted">{{ item.title }}</span>
-            <UBadge v-if="item.actions.length" size="sm" variant="subtle">
+            <UBadge
+              v-if="item.error"
+              size="sm"
+              variant="subtle"
+              color="error"
+            >
+              error
+            </UBadge>
+            <UBadge v-else-if="item.actions.length" size="sm" variant="subtle">
               {{ item.actions.length }} action{{ item.actions.length === 1 ? '' : 's' }}
             </UBadge>
             <UBadge
@@ -252,6 +267,9 @@ function scoreEntries(answer: DecisionAnswer | undefined): Array<{ key: string, 
               no action
             </UBadge>
           </div>
+          <p v-if="item.error" class="mt-1 text-error">
+            {{ item.error }}
+          </p>
           <p v-if="selectedIndex === index" class="mt-1 text-muted">
             {{ item.path.filter(step => step.nodeId !== 'trigger' && step.nodeId !== 'end').map(step => `${step.nodeId}:${step.output}`).join(' → ') || 'straight to the end' }}
           </p>

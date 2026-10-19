@@ -8,9 +8,9 @@ import type { DecisionAnswer, DecisionQuestion } from '../../../automation/share
  * `questions` schema and answer types, so the fixtures in the tests are real.
  */
 
-/** One question as Laya accepts it */
+/** One question as Laya accepts it; a choice's `criteria` maps each label to its description */
 export type LayaQuestion
-  = | { type: 'choice', instructions: string, criteria: Record<string, null> }
+  = | { type: 'choice', instructions: string, criteria: Record<string, string> }
     | { type: 'noul', instructions: string }
 
 export interface LayaRequestOptions {
@@ -28,15 +28,17 @@ export interface LayaRequestOptions {
 
 // --- Request --------------------------------------------------------------
 
-/** Domain questions to Laya's `questions` object; option keys become choice labels */
+/** Domain questions to Laya's `questions` object; each option's description ships with it */
 export function toLayaQuestions(questions: Record<string, DecisionQuestion>): Record<string, LayaQuestion> {
   return Object.fromEntries(Object.entries(questions).map(([id, question]) => {
     if (question.type === 'choice') {
-      // Laya reads a choice's `criteria` as a label -> description map; `null` is fine
+      // Laya reads a choice's `criteria` as a label -> description map and renders
+      // the description next to the label. Sending `null` (the old behaviour) dropped
+      // every description, so the model only ever saw the terse option keys.
       return [id, {
         type: 'choice',
         instructions: question.instructions,
-        criteria: Object.fromEntries(Object.keys(question.options).map(option => [option, null]))
+        criteria: Object.fromEntries(Object.entries(question.options).map(([option, description]) => [option, description || option]))
       } satisfies LayaQuestion]
     }
     return [id, { type: 'noul', instructions: question.instructions } satisfies LayaQuestion]

@@ -90,6 +90,32 @@ describe('createLayaClient', () => {
     expect(answers).toHaveLength(6)
   })
 
+  it('retries once when the call is aborted, then succeeds', async () => {
+    const abort = Object.assign(new Error('This operation was aborted'), { name: 'AbortError' })
+    const { fetch, calls } = recordingFetch((_call, index) => {
+      if (index === 0) {
+        throw abort
+      }
+      return response(noul)
+    })
+
+    const answers = await createLayaClient({ url: 'http://laya:8000', fetch }).systemOne('x', questions)
+
+    expect(calls).toHaveLength(2)
+    expect(answers.urgent!.yes).toBe(0.9)
+  })
+
+  it('gives up after one abort retry', async () => {
+    const abort = Object.assign(new Error('This operation was aborted'), { name: 'AbortError' })
+    const { fetch, calls } = recordingFetch(() => {
+      throw abort
+    })
+
+    await expect(createLayaClient({ url: 'http://laya:8000', fetch }).systemOne('x', questions))
+      .rejects.toThrow('aborted')
+    expect(calls).toHaveLength(2)
+  })
+
   it('returns nothing for an empty batch', async () => {
     const { fetch, calls } = recordingFetch(() => response(noul))
     expect(await createLayaClient({ url: 'http://laya:8000', fetch }).systemOneBatch([], questions)).toEqual([])

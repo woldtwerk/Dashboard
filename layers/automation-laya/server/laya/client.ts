@@ -12,7 +12,8 @@ import type { LayaRequestOptions } from './mapping'
  *     body: `{ state, questions, model?, max_len?, head_max_len?, task?, lang?,
  *              lang_guess?, min_confidence? }`
  *     `questions` is an object of at most 64 questions; a `choice` takes
- *     `{ type, instructions, criteria: {label: null} }`, a yes/no takes
+ *     `{ type, instructions, criteria: {label: "description"} }` (the value is the
+ *     description the model reads), a yes/no takes
  *     `{ type: 'noul', instructions }` (criteria optional).
  *     returns: `{ model, answers, usage, routing? }` where an answer is
  *     `{ type: 'choice', choice, probabilities, confidence, answer_confidence }`
@@ -33,14 +34,21 @@ export interface LayaClientOptions {
   url: string
   /** Bearer token; empty when the server has no key set */
   apiKey?: string
-  /** Per-request timeout in milliseconds */
-  timeoutMs?: number
+  /** Timeout for one `/v1/systemone` call */
+  singleTimeoutMs?: number
+  /**
+   * Timeout for one `/v1/systemone/batch` call. Batch calls carry many states and
+   * the first call after a cold start also warms the model, so they get longer.
+   */
+  batchTimeoutMs?: number
   /** States per batch request; laya-serve caps one request at 64 */
   batchSize?: number
   /** Forwarded controls (model, max_len, lang_guess) */
   request?: LayaRequestOptions
   /** Retries after a 503, honouring `Retry-After` */
   maxRetries?: number
+  /** Retries after a timeout/abort (the model can be cold or busy) */
+  maxAbortRetries?: number
   /** Injected for tests; defaults to the global fetch */
   fetch?: typeof fetch
 }
@@ -51,9 +59,11 @@ export interface LayaClient {
   systemOneBatch(states: string[], questions: Record<string, DecisionQuestion>): Promise<Array<Record<string, DecisionAnswer>>>
 }
 
-const DEFAULT_TIMEOUT_MS = 15_000
+const DEFAULT_SINGLE_TIMEOUT_MS = 30_000
+const DEFAULT_BATCH_TIMEOUT_MS = 60_000
 const DEFAULT_BATCH_SIZE = 64
 const DEFAULT_MAX_RETRIES = 2
+const DEFAULT_MAX_ABORT_RETRIES = 1
 
 /** How long to wait after a 503 when the server sends no usable `Retry-After` */
 const DEFAULT_RETRY_AFTER_MS = 1000
@@ -64,22 +74,35 @@ function retryAfterMs(response: Response): number {
   return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : DEFAULT_RETRY_AFTER_MS
 }
 
+/** Whether a fetch rejection is our own timeout/abort rather than a server error */
+function isAbort(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
+  }
+  return error.name === 'AbortError' || error.name === 'TimeoutError' || /aborted|timeout/i.test(error.message)
+}
+
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 export function createLayaClient(options: LayaClientOptions): LayaClient {
   const base = options.url.replace(/\/+$/, '')
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const singleTimeoutMs = options.singleTimeoutMs ?? DEFAULT_SINGLE_TIMEOUT_MS
+  const batchTimeoutMs = options.batchTimeoutMs ?? DEFAULT_BATCH_TIMEOUT_MS
   const batchSize = Math.min(options.batchSize ?? DEFAULT_BATCH_SIZE, DEFAULT_BATCH_SIZE)
   const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES
+  const maxAbortRetries = options.maxAbortRetries ?? DEFAULT_MAX_ABORT_RETRIES
   const doFetch = options.fetch ?? fetch
 
-  async function request(path: string, body: Record<string, unknown>): Promise<Response> {
+  async function request(path: string, body: Record<string, unknown>, timeoutMs: number): Promise<Response> {
     const headers: Record<string, string> = { 'content-type': 'application/json' }
     if (options.apiKey) {
       headers.authorization = `Bearer ${options.apiKey}`
     }
 
-    for (let attempt = 0; ; attempt++) {
+    let overloadRetries = 0
+    let abortRetries = 0
+
+    for (;;) {
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), timeoutMs)
 
@@ -91,12 +114,22 @@ export function createLayaClient(options: LayaClientOptions): LayaClient {
           body: JSON.stringify(body),
           signal: controller.signal
         })
+      } catch (error) {
+        // The first call after a cold start loads the model and can overrun the
+        // deadline; one retry is worth it before the item is counted as failed.
+        if (isAbort(error) && abortRetries < maxAbortRetries) {
+          abortRetries++
+          await sleep(500)
+          continue
+        }
+        throw error
       } finally {
         clearTimeout(timer)
       }
 
       // Overload is retryable; the server tells us when a slot is likely free
-      if (response.status === 503 && attempt < maxRetries) {
+      if (response.status === 503 && overloadRetries < maxRetries) {
+        overloadRetries++
         await sleep(retryAfterMs(response))
         continue
       }
@@ -108,7 +141,7 @@ export function createLayaClient(options: LayaClientOptions): LayaClient {
   }
 
   async function systemOne(state: string, questions: Record<string, DecisionQuestion>): Promise<Record<string, DecisionAnswer>> {
-    const response = await request('/v1/systemone', toLayaBody(state, questions, options.request))
+    const response = await request('/v1/systemone', toLayaBody(state, questions, options.request), singleTimeoutMs)
     return fromLayaResponse(await response.json())
   }
 
@@ -120,7 +153,7 @@ export function createLayaClient(options: LayaClientOptions): LayaClient {
     const answers: Array<Record<string, DecisionAnswer>> = []
     for (let start = 0; start < states.length; start += batchSize) {
       const chunk = states.slice(start, start + batchSize)
-      const response = await request('/v1/systemone/batch', toLayaBatchBody(chunk, questions, options.request))
+      const response = await request('/v1/systemone/batch', toLayaBatchBody(chunk, questions, options.request), batchTimeoutMs)
       answers.push(...fromLayaBatchResponse(await response.json()))
     }
     return answers

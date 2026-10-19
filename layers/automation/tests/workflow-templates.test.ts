@@ -48,6 +48,23 @@ describe('workflowTemplates', () => {
       }
     }
   })
+
+  it('gives every choice question an explicit, described catch-all option', () => {
+    for (const entry of workflowTemplates) {
+      for (const node of entry.graph.nodes) {
+        if (node.type !== 'decision' || node.data.question !== 'choice') {
+          continue
+        }
+        const where = `${entry.id}:${node.id}`
+        expect(Object.keys(node.data.options), where).toContain('other')
+        expect(node.data.options.other, where).toBeTruthy()
+        // Discriminative descriptions: the model reads these, not just the keys
+        for (const [key, description] of Object.entries(node.data.options)) {
+          expect(description.trim().length, `${where}:${key}`).toBeGreaterThan(10)
+        }
+      }
+    }
+  })
 })
 
 describe('instantiateWorkflowTemplate', () => {

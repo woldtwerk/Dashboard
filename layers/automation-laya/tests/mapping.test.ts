@@ -41,15 +41,41 @@ const systemOneFixture = {
 }
 
 describe('toLayaQuestions', () => {
-  it('maps a choice to criteria and a yes/no to noul', () => {
+  it('sends every option with its description as criteria', () => {
     expect(toLayaQuestions(questions)).toEqual({
       kind: {
         type: 'choice',
         instructions: 'What kind of mail is this?',
-        criteria: { invoice: null, other: null }
+        criteria: { invoice: 'An invoice', other: 'Anything else' }
       },
       urgent: { type: 'noul', instructions: 'Is this urgent?' }
     })
+  })
+
+  it('keeps every option of a template choice, including the catch-all', () => {
+    const templateQuestion: DecisionQuestion = {
+      type: 'choice',
+      instructions: 'invoice, receipt or anything else?',
+      options: {
+        invoice: 'A bill or invoice asking for payment',
+        receipt: 'An order or payment confirmation',
+        other: 'Anything else: personal mail, newsletters, notifications'
+      }
+    }
+
+    const criteria = toLayaQuestions({ kind: templateQuestion }).kind
+    expect(criteria).toMatchObject({
+      criteria: {
+        invoice: 'A bill or invoice asking for payment',
+        receipt: 'An order or payment confirmation',
+        other: 'Anything else: personal mail, newsletters, notifications'
+      }
+    })
+  })
+
+  it('falls back to the option key when a description is empty', () => {
+    const mapped = toLayaQuestions({ kind: { type: 'choice', instructions: 'x', options: { invoice: '' } } })
+    expect(mapped).toMatchObject({ kind: { criteria: { invoice: 'invoice' } } })
   })
 })
 

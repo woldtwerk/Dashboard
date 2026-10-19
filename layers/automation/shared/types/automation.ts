@@ -257,6 +257,8 @@ export interface WorkflowPreviewItem {
   /** Answers per decision node id */
   answers: Record<string, DecisionAnswer>
   actions: PlannedAction[]
+  /** Set when the decision engine failed for this item; the other items still preview */
+  error?: string
 }
 
 /** Where a preview takes its items from */

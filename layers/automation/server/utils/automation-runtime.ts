@@ -4,15 +4,14 @@ import type {
   AutomationItem,
   AutomationRun,
   AutomationWorkflow,
-  WorkflowPreviewItem,
   WorkflowPreviewRequest,
   WorkflowPreviewResult
 } from '../../shared/types/automation'
-import { runDecisionNodes, runWorkflow, validateWorkflow } from '../../shared/workflow'
-import type { WorkflowDecide } from '../../shared/workflow'
+import { runDecisionNodesBatch, runWorkflowBatch, validateWorkflow } from '../../shared/workflow'
+import type { WorkflowDecide, WorkflowDecideBatch } from '../../shared/workflow'
 import { createDocumentsApplier, createMailApplier, toMailActionProvider } from './appliers'
 import type { AutomationApplier, AutomationDeps, AutomationLogger } from './engine'
-import { applyRunActions, evaluateCandidates, runService, undoPlan } from './engine'
+import { applyRunActions, errorMessage, evaluateCandidates, runService, undoPlan } from './engine'
 import { sweepAll } from './automation-sweep'
 import type { SweepDeps } from './automation-sweep'
 import { hasDecisionEngine, useDecisionEngine } from './decision-engine'
@@ -42,6 +41,15 @@ function workflowDecide(): WorkflowDecide | undefined {
   }
   const engine = useDecisionEngine()
   return (state, questions) => engine.decide(state, questions)
+}
+
+/** The batch decision function from the registered engine, or undefined without one */
+function workflowDecideBatch(): WorkflowDecideBatch | undefined {
+  if (!hasDecisionEngine()) {
+    return undefined
+  }
+  const engine = useDecisionEngine()
+  return (states, questions) => engine.decideBatch(states, questions)
 }
 
 /** Builds the domain applier from the configured provider */
@@ -96,6 +104,7 @@ function automationDeps(service: string): AutomationDeps {
   return {
     store: { due: dueItems, markEvaluated, recordAttempt, record: recordRun },
     decide: workflowDecide(),
+    decideBatch: workflowDecideBatch(),
     loadItems: (domain, id, limit) => loadItems(domain, id, limit),
     applierFor,
     notify: notifySuggestion,
@@ -132,18 +141,26 @@ export async function previewWorkflow(request: WorkflowPreviewRequest, lockKey: 
     throw createError({ status: 400, statusText: errors[0]!.message })
   }
 
-  const decide = workflowDecide()
+  const decideBatch = workflowDecideBatch()
   const hasDecision = request.graph.nodes.some(node => node.type === 'decision')
 
   const result = await withLock(`automation:preview:${lockKey}`, PREVIEW_LOCK_TTL_MS, async (): Promise<WorkflowPreviewResult> => {
     if (request.source.kind === 'text') {
-      if (!decide) {
+      if (!decideBatch) {
         return { items: [], aiUnavailable: true }
       }
-      const answers = await runDecisionNodes(request.graph, request.source.text, decide)
-      return {
-        items: [{ ref: 'text', title: request.source.text.slice(0, 80), path: [], answers, actions: [] }],
-        aiUnavailable: false
+      try {
+        const answers = await runDecisionNodesBatch(request.graph, request.source.text, decideBatch)
+        return {
+          items: [{ ref: 'text', title: request.source.text.slice(0, 80), path: [], answers, actions: [] }],
+          aiUnavailable: false
+        }
+      } catch (error) {
+        // A failed decision must not fail the whole preview
+        return {
+          items: [{ ref: 'text', title: request.source.text.slice(0, 80), path: [], answers: {}, actions: [], error: errorMessage(error) }],
+          aiUnavailable: false
+        }
       }
     }
 
@@ -157,21 +174,20 @@ export async function previewWorkflow(request: WorkflowPreviewRequest, lockKey: 
       ? [await loadItemByRef(request.source.ref)]
       : await loadRecentItems(request.domain, service, limit)
 
-    const decideFn: WorkflowDecide = decide ?? (async () => ({}))
-    const previewed: WorkflowPreviewItem[] = []
+    // One batched walk for the whole set: decision nodes are grouped by question
+    const results = await runWorkflowBatch(request.graph, items, decideBatch ?? emptyPreviewDecide)
 
-    for (const item of items) {
-      const run = await runWorkflow(request.graph, item, decideFn)
-      previewed.push({
-        ref: itemRef(item),
-        title: item.title,
+    return {
+      items: results.map((run, index) => ({
+        ref: itemRef(items[index]!),
+        title: items[index]!.title,
         path: run.path,
         answers: run.answers,
-        actions: run.actions
-      })
+        actions: run.actions,
+        error: run.error
+      })),
+      aiUnavailable: hasDecision && !decideBatch
     }
-
-    return { items: previewed, aiUnavailable: hasDecision && !decide }
   })
 
   if (result === undefined) {
@@ -180,6 +196,9 @@ export async function previewWorkflow(request: WorkflowPreviewRequest, lockKey: 
 
   return result
 }
+
+/** Used when no engine is configured: decisions fall through to `other`/`unsure` */
+const emptyPreviewDecide: WorkflowDecideBatch = async () => []
 
 /** Applies a recorded suggestion */
 export async function applySuggestion(id: string): Promise<AutomationRun> {

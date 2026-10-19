@@ -12,7 +12,8 @@ export default defineNitroPlugin(() => {
   const client = createLayaClient({
     url: laya.url,
     apiKey: laya.apiKey,
-    timeoutMs: laya.timeoutMs,
+    batchTimeoutMs: laya.timeoutMs,
+    singleTimeoutMs: laya.singleTimeoutMs,
     batchSize: laya.batchSize,
     request: {
       maxLen: laya.maxLen,

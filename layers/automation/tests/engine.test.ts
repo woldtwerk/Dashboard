@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { runService } from '../server/utils/engine'
 import type { AutomationApplier, AutomationDeps, AutomationStore } from '../server/utils/engine'
 import type { SeenState } from '../server/utils/runs'
-import type { WorkflowDecide } from '../shared/workflow'
+import type { WorkflowDecide, WorkflowDecideBatch } from '../shared/workflow'
 import type {
   AppliedAction,
   AutomationItem,
@@ -273,6 +273,39 @@ describe('runService', () => {
 })
 
 describe('runService retries', () => {
+  it('uses one batch call per decision node for a wave of items', async () => {
+    const store = fakeStore()
+    const decideBatch = vi.fn<WorkflowDecideBatch>(async (states, questions) => states.map(() => ({ [Object.keys(questions)[0]!]: { yes: 0.95, confidence: 0.9 } })))
+    const decide = vi.fn<WorkflowDecide>(async () => {
+      throw new Error('the single decider must not be called when a batch one exists')
+    })
+
+    const runs = await runService('mail', 'mail-1', [workflow({ graph: decisionGraph() })], deps({
+      store,
+      decide,
+      decideBatch,
+      loadItems: async () => [item('a'), item('b'), item('c')]
+    }))
+
+    expect(decideBatch).toHaveBeenCalledTimes(1)
+    expect(decideBatch.mock.calls[0]![0]).toEqual(['state', 'state', 'state'])
+    expect(decide).not.toHaveBeenCalled()
+    expect(runs).toHaveLength(3)
+    expect(store.evaluated).toEqual(['a', 'b', 'c'])
+  })
+
+  it('retries the item when a batch decision call fails', async () => {
+    const store = fakeStore()
+    const decideBatch = vi.fn<WorkflowDecideBatch>(async () => {
+      throw new Error('laya-serve answered 503')
+    })
+
+    await runService('mail', 'mail-1', [workflow({ graph: decisionGraph() })], deps({ store, decideBatch }))
+
+    expect(store.evaluated).toEqual([])
+    expect(store.attempts[0]!.attempts).toBe(1)
+  })
+
   it('does not evaluate an item when the engine is down, and retries it after the backoff', async () => {
     const store = fakeStore()
     const decide = vi.fn<WorkflowDecide>(async () => {

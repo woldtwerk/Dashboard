@@ -7,6 +7,7 @@ import {
   nodeOutputs,
   runDecisionNodes,
   runWorkflow,
+  runWorkflowBatch,
   validateWorkflow
 } from '../shared/workflow'
 import type { WorkflowDecide } from '../shared/workflow'
@@ -78,6 +79,15 @@ function yesnoGraph(thresholds = { yes: 0.85, no: 0.85 }): WorkflowGraph {
 describe('nodeOutputs', () => {
   it('names a choice\'s outputs after the options plus other', () => {
     const node = choiceGraph().nodes.find(candidate => candidate.id === 'kind')!
+    expect(nodeOutputs(node)).toEqual(['invoice', 'receipt', 'other'])
+  })
+
+  it('does not repeat the other output when the node offers it as an option', () => {
+    const graph = choiceGraph()
+    const node = graph.nodes.find(candidate => candidate.id === 'kind')!
+    if (node.type === 'decision' && node.data.question === 'choice') {
+      node.data.options.other = 'Anything else'
+    }
     expect(nodeOutputs(node)).toEqual(['invoice', 'receipt', 'other'])
   })
 
@@ -216,6 +226,89 @@ describe('runDecisionNodes', () => {
 
     expect(decide).toHaveBeenCalledTimes(1)
     expect(answers.kind).toEqual({ choice: 'invoice', confidence: 0.9 })
+  })
+})
+
+describe('runWorkflowBatch', () => {
+  /** Items with distinct keys, one per state */
+  function items(count: number): AutomationItem[] {
+    return Array.from({ length: count }, (_, index) => ({
+      ...item({ subject: 'Invoice' }, `state ${index}`),
+      key: `INBOX|${index}|m${index}`,
+      uid: index
+    }))
+  }
+
+  it('asks one batch call for the whole wave at a decision node', async () => {
+    const calls: Array<{ states: string[], questions: Record<string, unknown> }> = []
+    const decideBatch = vi.fn(async (states: string[], questions: Record<string, unknown>) => {
+      calls.push({ states, questions })
+      return states.map(() => ({ [Object.keys(questions)[0]!]: { choice: 'invoice', confidence: 0.9 } }))
+    })
+
+    const results = await runWorkflowBatch(choiceGraph(), items(3), decideBatch)
+
+    expect(decideBatch).toHaveBeenCalledTimes(1)
+    expect(calls[0]!.states).toEqual(['state 0', 'state 1', 'state 2'])
+    expect(results.every(result => result.actions.length === 1)).toBe(true)
+    expect(results.every(result => result.path.some(step => step.nodeId === 'kind'))).toBe(true)
+  })
+
+  it('walks two decision nodes in two waves', async () => {
+    const graph = choiceGraph()
+    // A second decision node after the first action's path
+    graph.nodes.push({
+      id: 'second',
+      type: 'decision',
+      position: { x: 0, y: 260 },
+      data: { question: 'yesno', instructions: 'Urgent?', thresholds: { yes: 0.8, no: 0.8 } }
+    })
+    graph.edges = graph.edges.map(edge => edge.id === 'e4' ? { ...edge, target: 'second' } : edge)
+    graph.edges.push({ id: 'e5', source: 'second', sourceHandle: 'yes', target: 'end' })
+
+    const decideBatch = vi.fn(async (states: string[], questions: Record<string, unknown>) => {
+      const key = Object.keys(questions)[0]!
+      const isChoice = (questions[key] as { type: string }).type === 'choice'
+      return states.map(() => ({ [key]: isChoice ? { choice: 'invoice', confidence: 0.9 } : { yes: 0.9, confidence: 0.9 } }))
+    })
+
+    await runWorkflowBatch(graph, items(2), decideBatch)
+
+    // Wave 1 answers `kind` for both items, wave 2 answers `second` for both
+    expect(decideBatch).toHaveBeenCalledTimes(2)
+  })
+
+  it('isolates a failed batch call to the items waiting on that node', async () => {
+    const graph: WorkflowGraph = {
+      version: 1,
+      nodes: [
+        { id: 'trigger', type: 'trigger', position: { x: 0, y: 0 }, data: { kind: 'new-item', mailbox: 'INBOX' } },
+        { id: 'cond', type: 'condition', position: { x: 0, y: 50 }, data: { conditions: { combine: 'all', conditions: [{ field: 'subject', op: 'contains', value: 'x' }] } } },
+        { id: 'a', type: 'decision', position: { x: 0, y: 100 }, data: { question: 'yesno', instructions: 'a?', thresholds: { yes: 0.5, no: 0.5 } } },
+        { id: 'b', type: 'decision', position: { x: 200, y: 100 }, data: { question: 'yesno', instructions: 'b?', thresholds: { yes: 0.5, no: 0.5 } } },
+        { id: 'end', type: 'end', position: { x: 0, y: 200 }, data: {} }
+      ],
+      edges: [
+        { id: 'e1', source: 'trigger', sourceHandle: 'next', target: 'cond' },
+        { id: 'e2', source: 'cond', sourceHandle: 'true', target: 'a' },
+        { id: 'e3', source: 'cond', sourceHandle: 'false', target: 'b' },
+        { id: 'e4', source: 'a', sourceHandle: 'yes', target: 'end' },
+        { id: 'e5', source: 'b', sourceHandle: 'yes', target: 'end' }
+      ]
+    }
+
+    const decideBatch = vi.fn(async (states: string[], questions: Record<string, unknown>) => {
+      const key = Object.keys(questions)[0]!
+      if ((questions[key] as { instructions: string }).instructions === 'a?') {
+        throw new Error('engine down')
+      }
+      return states.map(() => ({ [key]: { yes: 0.9, confidence: 0.9 } }))
+    })
+
+    const results = await runWorkflowBatch(graph, [item({ subject: 'x' }, 'a-state'), item({ subject: 'y' }, 'b-state')], decideBatch)
+
+    expect(results[0]!.error).toBe('engine down')
+    expect(results[1]!.error).toBeUndefined()
   })
 })
 

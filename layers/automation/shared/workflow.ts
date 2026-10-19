@@ -12,8 +12,15 @@ import type {
 import { CHOICE_OTHER } from './types/automation'
 import { matchesConditions } from './automation'
 
-/** A decision engine caller; the automaiton layer injects Laya through this */
+/** A decision engine caller; the automation layer injects Laya through this */
 export type WorkflowDecide = (state: string, questions: Record<string, DecisionQuestion>) => Promise<Record<string, DecisionAnswer>>
+
+/**
+ * The batch form of {@link WorkflowDecide}: the same questions are asked about many
+ * states in one call (Laya collates them into one forward pass). Used by the engine
+ * and the preview so a wave of items at the same decision node costs one call.
+ */
+export type WorkflowDecideBatch = (states: string[], questions: Record<string, DecisionQuestion>) => Promise<Array<Record<string, DecisionAnswer>>>
 
 export interface WorkflowValidationError {
   /** The node the error belongs to, when it is node-local */
@@ -25,6 +32,11 @@ export interface WorkflowResult {
   path: WorkflowPathStep[]
   answers: Record<string, DecisionAnswer>
   actions: PlannedAction[]
+}
+
+/** One item's walk result; `error` is set when a batch decision call failed for it */
+export interface WorkflowBatchResult extends WorkflowResult {
+  error?: string
 }
 
 const MAIL_ACTIONS = new Set(['move-to', 'label', 'mark-read', 'star'])
@@ -39,8 +51,10 @@ export function nodeOutputs(node: WorkflowNode): string[] {
     case 'condition':
       return ['true', 'false']
     case 'decision':
+      // An explicit catch-all option is a real option; the `other` output is only
+      // appended when the node does not already offer one, so handles never repeat.
       return node.data.question === 'choice'
-        ? [...Object.keys(node.data.options), CHOICE_OTHER]
+        ? [...new Set([...Object.keys(node.data.options), CHOICE_OTHER])]
         : ['yes', 'no', 'unsure']
     case 'end':
       return []
@@ -223,10 +237,142 @@ export interface WorkflowRunOptions {
   onAnswer?: (nodeId: string, answer: DecisionAnswer | undefined) => void
 }
 
+interface WalkState {
+  item: AutomationItem
+  node: WorkflowNode | undefined
+  steps: number
+  done: boolean
+  path: WorkflowPathStep[]
+  answers: Record<string, DecisionAnswer>
+  /** Answers already received, keyed by the question's shape, so a repeated question is not asked twice */
+  cache: Map<string, DecisionAnswer | undefined>
+  actions: PlannedAction[]
+  error?: string
+}
+
 /**
- * Walks the graph once for one item. Decision nodes are asked lazily (the path
- * depends on earlier answers) and answers are cached by question, so asking the
- * same question twice costs one call. A missing edge ends the walk.
+ * Walks the graph for a group of items, batching decision nodes: items are advanced
+ * until each reaches its next unanswered question, then one batch call answers every
+ * item waiting on the same question. The per-item walk stays lazy (the path depends
+ * on earlier answers); a missing edge ends an item's walk and a failed batch call
+ * marks the items that were waiting on it with `error` without failing the others.
+ */
+export async function runWorkflowBatch(
+  graph: WorkflowGraph,
+  items: AutomationItem[],
+  decideBatch: WorkflowDecideBatch
+): Promise<WorkflowBatchResult[]> {
+  const byId = new Map(graph.nodes.map(node => [node.id, node]))
+  const trigger = graph.nodes.find(node => node.type === 'trigger')
+  const limit = graph.nodes.length + 1
+  const states: WalkState[] = items.map(item => ({
+    item,
+    node: trigger,
+    steps: 0,
+    done: !trigger,
+    path: [],
+    answers: {},
+    cache: new Map(),
+    actions: []
+  }))
+
+  for (;;) {
+    // Advance every item to its next unanswered question (or its end)
+    const pending = new Map<string, { question: DecisionQuestion, waiting: Array<{ state: WalkState, nodeId: string, hash: string }> }>()
+
+    for (const state of states) {
+      while (!state.done && state.node) {
+        const node = state.node
+        state.steps++
+
+        if (state.steps > limit) {
+          state.error ??= 'The walk did not terminate'
+          state.done = true
+          break
+        }
+
+        if (node.type === 'end') {
+          state.path.push({ nodeId: node.id, output: 'done' })
+          state.done = true
+          break
+        }
+
+        if (node.type === 'decision') {
+          const question = questionForNode(node)
+          const hash = JSON.stringify(question)
+
+          if (!state.cache.has(hash)) {
+            const group = pending.get(hash) ?? { question, waiting: [] }
+            group.waiting.push({ state, nodeId: node.id, hash })
+            pending.set(hash, group)
+            break
+          }
+
+          const answer = state.cache.get(hash)
+          if (answer) {
+            state.answers[node.id] = answer
+          }
+          const output = decisionOutput(node.data, answer)
+          state.path.push({ nodeId: node.id, output, answer })
+          state.node = follow(graph, byId, node.id, output)
+          state.done = !state.node
+          continue
+        }
+
+        const output = node.type === 'condition'
+          ? (matchesConditions(state.item, node.data.conditions) ? 'true' : 'false')
+          : 'next'
+
+        if (node.type === 'action') {
+          state.actions.push({ nodeId: node.id, action: node.data.action })
+        }
+
+        state.path.push({ nodeId: node.id, output })
+        state.node = follow(graph, byId, node.id, output)
+        state.done = !state.node
+      }
+    }
+
+    if (!pending.size) {
+      break
+    }
+
+    // One batch call per question per wave; sequential so several nodes do not
+    // overload the single-worker inference server
+    for (const group of pending.values()) {
+      const questions = { [group.waiting[0]!.hash]: group.question }
+      const batchStates = group.waiting.map(entry => entry.state.item.state)
+      let results: Array<Record<string, DecisionAnswer>> | undefined
+      let failure: unknown
+
+      try {
+        results = await decideBatch(batchStates, questions)
+      } catch (error) {
+        failure = error
+      }
+
+      group.waiting.forEach((entry, index) => {
+        if (failure !== undefined) {
+          entry.state.error ??= failure instanceof Error ? failure.message : String(failure)
+          entry.state.done = true
+          return
+        }
+        entry.state.cache.set(entry.hash, results?.[index]?.[entry.hash])
+      })
+    }
+  }
+
+  return states.map(state => ({ path: state.path, answers: state.answers, actions: state.actions, error: state.error }))
+}
+
+function follow(graph: WorkflowGraph, byId: Map<string, WorkflowNode>, nodeId: string, output: string): WorkflowNode | undefined {
+  const edge = graph.edges.find(candidate => candidate.source === nodeId && candidate.sourceHandle === output)
+  return edge ? byId.get(edge.target) : undefined
+}
+
+/**
+ * Walks the graph once for one item. Thin wrapper over {@link runWorkflowBatch} so
+ * there is one walk implementation; a batch failure is thrown, not returned.
  */
 export async function runWorkflow(
   graph: WorkflowGraph,
@@ -234,51 +380,34 @@ export async function runWorkflow(
   decide: WorkflowDecide,
   options: WorkflowRunOptions = {}
 ): Promise<WorkflowResult> {
-  const byId = new Map(graph.nodes.map(node => [node.id, node]))
-  const cache = new Map<string, DecisionAnswer | undefined>()
-  const path: WorkflowPathStep[] = []
-  const answers: Record<string, DecisionAnswer> = {}
-  const actions: PlannedAction[] = []
+  const [result] = await runWorkflowBatch(graph, [item], async (states, questions) => [await decide(states[0]!, questions)])
+  for (const step of result?.path ?? []) {
+    options.onAnswer?.(step.nodeId, step.answer)
+  }
+  if (result?.error) {
+    throw new Error(result.error)
+  }
+  return { path: result?.path ?? [], answers: result?.answers ?? {}, actions: result?.actions ?? [] }
+}
 
-  let node: WorkflowNode | undefined = graph.nodes.find(candidate => candidate.type === 'trigger')
-
-  for (let step = 0; node && step <= graph.nodes.length; step++) {
-    if (node.type === 'end') {
-      path.push({ nodeId: node.id, output: 'done' })
-      break
+/** Asks every decision node of the graph about one text, in one batch call */
+export async function runDecisionNodesBatch(
+  graph: WorkflowGraph,
+  text: string,
+  decideBatch: WorkflowDecideBatch
+): Promise<Record<string, DecisionAnswer>> {
+  const questions: Record<string, DecisionQuestion> = {}
+  for (const node of graph.nodes) {
+    if (node.type === 'decision') {
+      questions[node.id] = questionForNode(node)
     }
-
-    let output: string
-    let answer: DecisionAnswer | undefined
-
-    if (node.type === 'trigger') {
-      output = 'next'
-    } else if (node.type === 'condition') {
-      output = matchesConditions(item, node.data.conditions) ? 'true' : 'false'
-    } else if (node.type === 'action') {
-      actions.push({ nodeId: node.id, action: node.data.action })
-      output = 'next'
-    } else {
-      const question = questionForNode(node)
-      const hash = JSON.stringify(question)
-      if (!cache.has(hash)) {
-        const result = await decide(item.state, { [hash]: question })
-        cache.set(hash, result[hash])
-      }
-      answer = cache.get(hash)
-      if (answer) {
-        answers[node.id] = answer
-      }
-      options.onAnswer?.(node.id, answer)
-      output = decisionOutput(node.data, answer)
-    }
-
-    path.push({ nodeId: node.id, output, answer })
-    const edge = graph.edges.find(candidate => candidate.source === node!.id && candidate.sourceHandle === output)
-    node = edge ? byId.get(edge.target) : undefined
+  }
+  if (!Object.keys(questions).length) {
+    return {}
   }
 
-  return { path, answers, actions }
+  const [answers] = await decideBatch([text], questions)
+  return answers ?? {}
 }
 
 /** Asks every decision node of the graph about one text, without walking edges */
@@ -287,20 +416,7 @@ export async function runDecisionNodes(
   text: string,
   decide: WorkflowDecide
 ): Promise<Record<string, DecisionAnswer>> {
-  const answers: Record<string, DecisionAnswer> = {}
-
-  for (const node of graph.nodes) {
-    if (node.type !== 'decision') {
-      continue
-    }
-    const question = questionForNode(node)
-    const result = await decide(text, { [node.id]: question })
-    if (result[node.id]) {
-      answers[node.id] = result[node.id]!
-    }
-  }
-
-  return answers
+  return await runDecisionNodesBatch(graph, text, async (states, questions) => [await decide(states[0]!, questions)])
 }
 
 /** All action nodes of a graph, for a quick summary */

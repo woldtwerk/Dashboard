@@ -109,12 +109,13 @@ const invoiceReceipts: WorkflowTemplate = {
     triggerNode('INBOX', 0, 0),
     choiceNode(
       'kind',
-      'Is this mail an invoice, a receipt/order confirmation, or neither?',
+      'Which of these fits the mail best?',
       {
-        invoice: 'A bill asking for payment',
-        receipt: 'A receipt or order confirmation for something already paid'
+        invoice: 'Asks for money to be paid: a bill, invoice or payment reminder (Rechnung, Zahlungserinnerung, Mahnung)',
+        receipt: 'Confirms something already bought or paid: an order confirmation, receipt or shipping notice for a purchase',
+        other: 'Neither: private mail, newsletters, notifications, security advisories or marketing'
       },
-      { invoice: 0.8, receipt: 0.8 },
+      { invoice: 0.8, receipt: 0.8, other: 0.5 },
       0,
       140
     ),
@@ -185,10 +186,11 @@ const adsNewsletters: WorkflowTemplate = {
       'kind',
       'Is this mail advertising/marketing, a newsletter the user subscribed to, or personal/transactional?',
       {
-        ads: 'Advertising or marketing for a product or service',
-        newsletter: 'A newsletter the user subscribed to'
+        ads: 'Advertising or marketing for a product or service: promotions, sales and discount offers',
+        newsletter: 'A newsletter the user subscribed to, with recurring editorial content',
+        other: 'Neither: private mail, transactional mail, invoices, notifications or security advisories'
       },
-      { ads: 0.85, newsletter: 0.8 },
+      { ads: 0.85, newsletter: 0.8, other: 0.5 },
       0,
       140
     ),
@@ -227,12 +229,13 @@ const securityUpdates: WorkflowTemplate = {
       'severity',
       'How severe is this security notice?',
       {
-        critical: 'Critical, remotely exploitable or already exploited',
-        high: 'High severity',
-        moderate: 'Moderate severity',
-        low: 'Low severity or informational'
+        critical: 'Critical, remotely exploitable or already exploited in the wild',
+        high: 'High severity, exploitable with some effort or prerequisites',
+        moderate: 'Moderate severity with limited impact or hard prerequisites',
+        low: 'Low severity or purely informational',
+        other: 'Not a security notice, or no severity can be told from the text'
       },
-      { critical: 0.6, high: 0.5, moderate: 0.5, low: 0.5 },
+      { critical: 0.6, high: 0.5, moderate: 0.5, low: 0.5, other: 0.5 },
       0,
       280
     ),
@@ -313,15 +316,16 @@ const classifyInvoices: WorkflowTemplate = {
     triggerNode('INBOX', 0, 0),
     choiceNode(
       'kind',
-      'What kind of document is this: invoice, contract, payslip, certificate, letter, other?',
+      'What kind of document is this: invoice, contract, payslip, certificate, letter, or anything else?',
       {
-        invoice: 'An invoice or bill',
-        contract: 'A contract or agreement',
-        payslip: 'A payslip or salary statement',
-        certificate: 'A certificate or official record',
-        letter: 'A letter or other correspondence'
+        invoice: 'Asks for money to be paid: a bill or invoice (Rechnung), incl. payment reminders',
+        contract: 'A contract or agreement between parties',
+        payslip: 'A payslip, salary statement or wage statement',
+        certificate: 'A certificate, diploma or official record',
+        letter: 'A letter or other written correspondence',
+        other: 'None of these: receipts, tax assessments, forms, manuals or photos'
       },
-      { invoice: 0.8, contract: 0.8, payslip: 0.8, certificate: 0.8, letter: 0.8 },
+      { invoice: 0.8, contract: 0.8, payslip: 0.8, certificate: 0.8, letter: 0.8, other: 0.5 },
       0,
       140
     ),

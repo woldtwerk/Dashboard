@@ -11,8 +11,8 @@ import type {
   WorkflowPathStep
 } from '../../shared/types/automation'
 import { nextAttempt, planUndo, selectActions } from '../../shared/automation'
-import { runWorkflow } from '../../shared/workflow'
-import type { WorkflowDecide } from '../../shared/workflow'
+import { runWorkflowBatch } from '../../shared/workflow'
+import type { WorkflowDecide, WorkflowDecideBatch } from '../../shared/workflow'
 import type { SeenState } from './runs'
 
 /**
@@ -70,6 +70,8 @@ export interface AutomationDeps {
   store: AutomationStore
   /** Absent when no engine is configured: a workflow with a decision node cannot run */
   decide?: WorkflowDecide
+  /** The batch form of `decide`; preferred so one wave of items costs one call */
+  decideBatch?: WorkflowDecideBatch
   /** Candidate items of one service, newest first */
   loadItems: (domain: AutomationDomain, service: string, limit: number) => Promise<AutomationItem[]>
   /** The applier of one service; the runtime builds it from the domain provider */
@@ -135,32 +137,36 @@ export async function evaluateCandidates(
   }
 
   const serviceWorkflows = workflowsForService(workflows, domain, service).filter(workflow => workflow.enabled)
+  const evaluations = await evaluateItems(domain, items, serviceWorkflows, deps)
   const runs: AutomationRun[] = []
 
-  for (const item of items) {
-    const attempts = attemptsByKey.get(item.key) ?? 0
+  for (const evaluation of evaluations) {
+    const attempts = attemptsByKey.get(evaluation.item.key) ?? 0
 
     try {
-      runs.push(...await evaluateItem(domain, service, item, serviceWorkflows, deps))
-      await deps.store.markEvaluated(domain, service, item.key, now)
+      if (evaluation.error) {
+        throw evaluation.error
+      }
+      runs.push(...await recordTriggered(domain, service, evaluation.item, evaluation.triggered, deps))
+      await deps.store.markEvaluated(domain, service, evaluation.item.key, now)
     } catch (error) {
       const next = nextAttempt(attempts + 1, now)
-      await deps.store.recordAttempt(domain, service, item.key, attempts + 1, next, now)
+      await deps.store.recordAttempt(domain, service, evaluation.item.key, attempts + 1, next, now)
 
       if (next) {
         deps.logger?.warn?.('Automation evaluation failed, will retry', {
-          item: item.key,
+          item: evaluation.item.key,
           attempts: attempts + 1,
           error: errorMessage(error)
         })
         continue
       }
 
-      deps.logger?.warn?.('Automation evaluation gave up', { item: item.key, error: errorMessage(error) })
-      runs.push(...await recordGiveUp(domain, service, item, serviceWorkflows, error, deps))
+      deps.logger?.warn?.('Automation evaluation gave up', { item: evaluation.item.key, error: errorMessage(error) })
+      runs.push(...await recordGiveUp(domain, service, evaluation.item, serviceWorkflows, error, deps))
 
       try {
-        await deps.notifyFailed?.(domain, service, item, error)
+        await deps.notifyFailed?.(domain, service, evaluation.item, error)
       } catch (notifyError) {
         deps.logger?.warn?.('Could not send the automation failure notification', { error: errorMessage(notifyError) })
       }
@@ -174,27 +180,92 @@ export async function evaluateCandidates(
   return runs
 }
 
-/** Evaluates one item against every enabled workflow and records its runs */
-async function evaluateItem(
+/** One workflow that would act on an item */
+interface TriggeredWorkflow {
+  workflow: AutomationWorkflow
+  path: WorkflowPathStep[]
+  answers: Record<string, DecisionAnswer>
+  actions: PlannedAction[]
+}
+
+/** What the walk produced for one item */
+interface ItemEvaluation {
+  item: AutomationItem
+  triggered: TriggeredWorkflow[]
+  error?: unknown
+}
+
+/**
+ * Walks every workflow for the whole group of items, batching decision nodes (one
+ * call per node per wave). An item's walk error is captured on its evaluation and
+ * never affects the other items.
+ */
+async function evaluateItems(
+  domain: AutomationDomain,
+  items: AutomationItem[],
+  workflows: AutomationWorkflow[],
+  deps: AutomationDeps
+): Promise<ItemEvaluation[]> {
+  const evaluations: ItemEvaluation[] = items.map(item => ({ item, triggered: [] }))
+  const byKey = new Map(evaluations.map(evaluation => [evaluation.item.key, evaluation]))
+  const decideBatch = resolveDecideBatch(deps)
+
+  if (workflows.some(hasDecisionNode) && !decideBatch) {
+    const error = new TransientEvaluationError('No decision engine is configured')
+    for (const evaluation of evaluations) {
+      evaluation.error = error
+    }
+    return evaluations
+  }
+
+  for (const workflow of workflows) {
+    const results = await runWorkflowBatch(workflow.graph, items, decideBatch ?? emptyDecideBatch)
+
+    results.forEach((result, index) => {
+      const evaluation = byKey.get(items[index]!.key)
+      if (!evaluation) {
+        return
+      }
+      if (result.error) {
+        evaluation.error ??= new TransientEvaluationError(result.error)
+        return
+      }
+      if (result.actions.length) {
+        evaluation.triggered.push({ workflow, path: result.path, answers: result.answers, actions: result.actions })
+      }
+    })
+  }
+
+  return evaluations
+}
+
+/** The batch decider from the deps; a single decider is adapted into one */
+function resolveDecideBatch(deps: AutomationDeps): WorkflowDecideBatch | undefined {
+  if (deps.decideBatch) {
+    return deps.decideBatch
+  }
+  const decide = deps.decide
+  if (!decide) {
+    return undefined
+  }
+
+  return async (states, questions) => {
+    const answers: Array<Record<string, DecisionAnswer>> = []
+    for (const state of states) {
+      answers.push(await decide(state, questions))
+    }
+    return answers
+  }
+}
+
+const emptyDecideBatch: WorkflowDecideBatch = async () => []/** Selects the first-wins actions and records one run per triggered workflow */
+async function recordTriggered(
   domain: AutomationDomain,
   service: string,
   item: AutomationItem,
-  workflows: AutomationWorkflow[],
+  triggered: TriggeredWorkflow[],
   deps: AutomationDeps
 ): Promise<AutomationRun[]> {
-  const triggered: Array<{ workflow: AutomationWorkflow, path: WorkflowPathStep[], answers: Record<string, DecisionAnswer>, actions: PlannedAction[] }> = []
-
-  for (const workflow of workflows) {
-    if (hasDecisionNode(workflow) && !deps.decide) {
-      throw new TransientEvaluationError('No decision engine is configured')
-    }
-
-    const result = await runWorkflow(workflow.graph, item, deps.decide ?? emptyDecide)
-    if (result.actions.length) {
-      triggered.push({ workflow, ...result })
-    }
-  }
-
   if (!triggered.length) {
     return []
   }
@@ -327,8 +398,6 @@ async function recordWorkflow(
     })
   }
 }
-
-const emptyDecide: WorkflowDecide = async () => ({})
 
 /** Applies the actions of a suggestion and returns what a reversal needs */
 export async function applyRunActions(run: AutomationRun, applier: AutomationApplier) {
