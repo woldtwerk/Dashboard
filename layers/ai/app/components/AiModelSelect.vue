@@ -7,6 +7,7 @@ const props = defineProps<{
   services: AiServiceModels[]
   loading?: boolean
   disabled?: boolean
+  placeholder?: string
 }>()
 
 /** The chosen `serviceId:modelId`; the page wires this to the URL */
@@ -22,11 +23,11 @@ const items = computed<SelectItem[][]>(() => buildModelChoices(props.services))
     :filter-fields="['label', 'description']"
     :loading="loading"
     :disabled="disabled"
+    :placeholder="placeholder ?? 'Select a model'"
     value-key="value"
     size="sm"
     color="neutral"
     variant="ghost"
-    placeholder="Select a model"
     class="data-[state=open]:bg-elevated"
     :ui="{
       trailingIcon: 'group-data-[state=open]:rotate-180 transition-transform duration-200'

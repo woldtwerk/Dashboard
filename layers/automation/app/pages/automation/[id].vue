@@ -3,6 +3,7 @@ import type { AutomationDomain, AutomationWorkflow, WorkflowGraph, WorkflowNode,
 import { createDefaultGraph, validateWorkflow } from '#layers/automation/shared/workflow'
 import { DRAFT_ACTION_ID, draftFromItem } from '#layers/automation/shared/workflow-draft'
 import type { DraftItemContext } from '#layers/automation/shared/workflow-draft'
+import { availableVariables } from '#layers/automation/app/utils/workflow-view'
 import {
   addWorkflowNode,
   canRedoWorkflow,
@@ -57,13 +58,16 @@ const enabled = ref(workflow.value?.enabled ?? !isDraft)
 const mode = ref(workflow.value?.mode ?? 'suggest')
 
 const { data: services } = useServices()
+
+// Reka rejects an empty select value, so "no service" is a sentinel that maps to `null`
+const ALL_SERVICES = 'all'
 const serviceItems = computed(() => [
-  { label: 'All services', value: '' },
+  { label: 'All services', value: ALL_SERVICES },
   ...services.value.filter(entry => entry.domain === domain.value).map(entry => ({ label: entry.name, value: entry.id }))
 ])
 const serviceSelection = computed({
-  get: () => service.value ?? '',
-  set: (value) => { service.value = value || null }
+  get: () => service.value ?? ALL_SERVICES,
+  set: (value) => { service.value = value === ALL_SERVICES ? null : value }
 })
 
 const history = ref<WorkflowHistory>(createWorkflowHistory(workflow.value?.graph ?? draft?.graph ?? createDefaultGraph('mail')))
@@ -218,151 +222,158 @@ function focusNode(nodeId: string | null) {
 
 <template>
   <UDashboardPanel id="automation-editor">
-    <UDashboardNavbar :title="name || 'Workflow'">
-      <template #leading>
-        <UButton
-          icon="i-lucide-arrow-left"
-          color="neutral"
-          variant="ghost"
-          to="/automation"
-          aria-label="Back to automation"
-        />
-      </template>
-      <template #right>
-        <UButton
-          icon="i-lucide-undo-2"
-          color="neutral"
-          variant="ghost"
-          size="sm"
-          :disabled="!canUndoWorkflow(history)"
-          aria-label="Undo"
-          @click="undo"
-        />
-        <UButton
-          icon="i-lucide-redo-2"
-          color="neutral"
-          variant="ghost"
-          size="sm"
-          :disabled="!canRedoWorkflow(history)"
-          aria-label="Redo"
-          @click="redo"
-        />
-        <UButton
-          :label="previewOpen ? 'Hide preview' : 'Preview'"
-          icon="i-lucide-eye"
-          color="neutral"
-          variant="soft"
-          size="sm"
-          @click="previewOpen = !previewOpen"
-        />
-        <UButton
-          v-if="!isDraft"
-          icon="i-lucide-trash-2"
-          color="error"
-          variant="ghost"
-          size="sm"
-          aria-label="Delete workflow"
-          data-testid="delete-workflow"
-          @click="deleteOpen = true"
-        />
-        <UButton
-          label="Save"
-          icon="i-lucide-save"
-          size="sm"
-          :disabled="!valid || !dirty"
-          @click="save"
-        />
-      </template>
-
-      <template #body>
-        <div class="flex flex-wrap items-center gap-2">
-          <UInput
-            v-model="name"
-            size="sm"
-            class="w-56"
-            placeholder="Workflow name"
+    <template #header>
+      <UDashboardNavbar :title="name || 'Workflow'">
+        <template #leading>
+          <UButton
+            icon="i-lucide-arrow-left"
+            color="neutral"
+            variant="ghost"
+            to="/automation"
+            aria-label="Back to automation"
           />
-          <USelect
-            v-model="mode"
-            :items="[{ label: 'Suggest', value: 'suggest' }, { label: 'Auto', value: 'auto' }]"
+        </template>
+        <template #right>
+          <UButton
+            icon="i-lucide-undo-2"
+            color="neutral"
+            variant="ghost"
             size="sm"
-            class="w-28"
+            :disabled="!canUndoWorkflow(history)"
+            aria-label="Undo"
+            @click="undo"
           />
-          <USelect
-            v-model="serviceSelection"
-            :items="serviceItems"
+          <UButton
+            icon="i-lucide-redo-2"
+            color="neutral"
+            variant="ghost"
             size="sm"
-            class="w-40"
+            :disabled="!canRedoWorkflow(history)"
+            aria-label="Redo"
+            @click="redo"
           />
-          <UBadge size="sm" variant="subtle" color="neutral">
-            {{ domain }}
-          </UBadge>
-          <USwitch v-model="enabled" label="Enabled" />
-          <UBadge
-            v-if="valid"
+          <UButton
+            :label="previewOpen ? 'Hide preview' : 'Preview'"
+            icon="i-lucide-eye"
+            color="neutral"
+            variant="soft"
             size="sm"
-            variant="subtle"
-            color="success"
-          >
-            valid
-          </UBadge>
-          <UBadge
-            v-else
-            size="sm"
-            variant="subtle"
+            @click="previewOpen = !previewOpen"
+          />
+          <UButton
+            v-if="!isDraft"
+            icon="i-lucide-trash-2"
             color="error"
-          >
-            {{ errors.length }} issue{{ errors.length === 1 ? '' : 's' }}
-          </UBadge>
-        </div>
-      </template>
-    </UDashboardNavbar>
-
-    <div class="flex min-h-0 flex-1">
-      <div class="flex min-w-0 flex-1 flex-col">
-        <div class="border-b border-default p-2">
-          <WorkflowPalette :domain="domain" @add="addNode" />
-        </div>
-        <div class="min-h-0 flex-1">
-          <WorkflowCanvas
-            :graph="graph"
-            :errors="errors"
-            :highlighted-nodes="highlightedNodes"
-            :highlighted-edges="highlightedEdges"
-            :selected-id="selectedId"
-            :tone="tone"
-            @select="focusNode"
-            @select-edge="edgeId => { selectedEdgeId = edgeId; selectedId = null }"
-            @move="moveNode"
-            @connect="connect"
-            @add-node="addNode"
+            variant="ghost"
+            size="sm"
+            aria-label="Delete workflow"
+            data-testid="delete-workflow"
+            @click="deleteOpen = true"
           />
+          <UButton
+            label="Save"
+            icon="i-lucide-save"
+            size="sm"
+            :disabled="!valid || !dirty"
+            @click="save"
+          />
+        </template>
+      </UDashboardNavbar>
+
+      <UDashboardToolbar>
+        <template #left>
+          <div class="flex flex-wrap items-center gap-2">
+            <UInput
+              v-model="name"
+              size="sm"
+              class="w-56"
+              placeholder="Workflow name"
+            />
+            <USelect
+              v-model="mode"
+              :items="[{ label: 'Suggest', value: 'suggest' }, { label: 'Auto', value: 'auto' }]"
+              size="sm"
+              class="w-28"
+            />
+            <USelect
+              v-model="serviceSelection"
+              :items="serviceItems"
+              size="sm"
+              class="w-40"
+            />
+            <UBadge size="sm" variant="subtle" color="neutral">
+              {{ domain }}
+            </UBadge>
+            <USwitch v-model="enabled" label="Enabled" />
+            <UBadge
+              v-if="valid"
+              size="sm"
+              variant="subtle"
+              color="success"
+            >
+              valid
+            </UBadge>
+            <UBadge
+              v-else
+              size="sm"
+              variant="subtle"
+              color="error"
+            >
+              {{ errors.length }} issue{{ errors.length === 1 ? '' : 's' }}
+            </UBadge>
+          </div>
+        </template>
+      </UDashboardToolbar>
+    </template>
+
+    <template #body>
+      <div class="flex min-h-0 flex-1">
+        <div class="flex min-w-0 flex-1 flex-col">
+          <div class="border-b border-default p-2">
+            <WorkflowPalette :domain="domain" @add="addNode" />
+          </div>
+          <div class="min-h-0 flex-1">
+            <WorkflowCanvas
+              :graph="graph"
+              :errors="errors"
+              :highlighted-nodes="highlightedNodes"
+              :highlighted-edges="highlightedEdges"
+              :selected-id="selectedId"
+              :tone="tone"
+              @select="focusNode"
+              @select-edge="edgeId => { selectedEdgeId = edgeId; selectedId = null }"
+              @move="moveNode"
+              @connect="connect"
+              @add-node="addNode"
+            />
+          </div>
+          <div v-if="previewOpen" class="h-96 border-t border-default">
+            <WorkflowPreviewPanel
+              :graph="graph"
+              :domain="domain"
+              :service="service"
+              :initial-ref="draftRef || undefined"
+              @highlight="highlight"
+              @focus="focusNode"
+            />
+          </div>
         </div>
-        <div v-if="previewOpen" class="h-96 border-t border-default">
-          <WorkflowPreviewPanel
-            :graph="graph"
+
+        <aside class="hidden w-80 shrink-0 border-l border-default lg:block">
+          <WorkflowInspector
+            :node="selectedNode"
+            :edge="selectedEdge"
             :domain="domain"
             :service="service"
-            :initial-ref="draftRef || undefined"
-            @highlight="highlight"
-            @focus="focusNode"
+            :errors="errors"
+            :variables="availableVariables(graph)"
+            @update="updateNode"
+            @remove="removeNode"
+            @remove-edge="removeEdge"
           />
-        </div>
+        </aside>
       </div>
-
-      <aside class="hidden w-80 shrink-0 border-l border-default lg:block">
-        <WorkflowInspector
-          :node="selectedNode"
-          :edge="selectedEdge"
-          :domain="domain"
-          :service="service"
-          :errors="errors"
-          @update="updateNode"
-          @remove="removeNode"
-          @remove-edge="removeEdge"
-        />
-      </aside>
-    </div>
+    </template>
   </UDashboardPanel>
 
   <UModal v-if="!isDraft" v-model:open="deleteOpen" title="Delete workflow">

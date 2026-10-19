@@ -4,6 +4,8 @@ import type {
   AutomationItem,
   UndoOperation
 } from '../../shared/types/automation'
+import type { Mailbox } from '../../../mail/shared/types/mail'
+import { trashTarget } from '../../../mail/shared/mail-delete'
 import type { MailProvider } from '../../../mail/server/utils/mail-provider'
 import type { AutomationApplier, AutomationLogger } from './engine'
 
@@ -16,6 +18,8 @@ export interface MailActionProvider {
   setSeen(mailbox: string, uid: number, seen: boolean): Promise<void>
   setFlagged(mailbox: string, uid: number, flagged: boolean): Promise<void>
   deleteMessage(mailbox: string, uid: number): Promise<void>
+  /** The account's mailboxes; `trash` resolves the trash folder from them */
+  listMailboxes(): Promise<Mailbox[]>
   /**
    * Creates an IMAP folder. Proton keeps labels as folders under `Labels/`, and
    * `addLabel` copies into an existing one, so a label used for the first time is
@@ -36,6 +40,7 @@ export function toMailActionProvider(provider: MailProvider): MailActionProvider
     setSeen: (mailbox, uid, seen) => provider.setSeen(mailbox, uid, seen),
     setFlagged: (mailbox, uid, flagged) => provider.setFlagged(mailbox, uid, flagged),
     deleteMessage: (mailbox, uid) => provider.deleteMessage(mailbox, uid),
+    listMailboxes: () => provider.listMailboxes(),
     ...(createMailbox ? { createMailbox: (mailbox: string) => createMailbox(mailbox) } : {})
   }
 }
@@ -49,6 +54,19 @@ export interface MailApplierContext {
 
 /** The Proton folder a label is filed under */
 export const labelMailbox = (label: string) => `Labels/${label}`
+
+/**
+ * The trash folder a `trash` action moves a mail to. Throws when the account has
+ * no trash at all or the mail already sits in it, so the run fails and the mail
+ * is left where it is rather than silently deleted.
+ */
+async function trashFor(provider: MailActionProvider, mailbox: string): Promise<string> {
+  const target = trashTarget(await provider.listMailboxes(), mailbox)
+  if (!target) {
+    throw new Error('This mail cannot be moved to the trash')
+  }
+  return target.path
+}
 
 /**
  * Makes sure the label's folder exists before the copy is filed into it. Most
@@ -83,12 +101,14 @@ export function createMailApplier(context: MailApplierContext): AutomationApplie
         }
 
         switch (action.type) {
-          case 'move-to': {
-            const { uid } = await context.provider.moveMessage(current.mailbox, current.uid, action.folder)
-            applied.push({ type: 'move-to', folder: action.folder, from: current.mailbox, uid })
+          case 'move-to':
+          case 'trash': {
+            const folder = action.type === 'move-to' ? action.folder : await trashFor(context.provider, current.mailbox)
+            const { uid } = await context.provider.moveMessage(current.mailbox, current.uid, folder)
+            applied.push({ type: 'move-to', folder, from: current.mailbox, uid })
             await context.publish(current.mailbox)
-            await context.publish(action.folder)
-            current = { ...current, mailbox: action.folder, uid: uid ?? current.uid }
+            await context.publish(folder)
+            current = { ...current, mailbox: folder, uid: uid ?? current.uid }
             break
           }
           case 'label': {

@@ -88,6 +88,20 @@ describe('selectActions', () => {
       { workflow: 'second', nodeId: 'b2', action: { type: 'label', label: 'L' } }
     ])
   })
+
+  it('keeps every generic action, so several notifications are not collapsed', () => {
+    const actions: PlannedAction[] = [
+      { nodeId: 'e1', action: { type: 'extract', variable: 'code', extractor: 'login-code' } },
+      { nodeId: 'n1', action: { type: 'notify', title: 'One' } },
+      { nodeId: 'n2', action: { type: 'notify', title: 'Two' } }
+    ]
+
+    expect(selectActions([{ id: 'w1', actions }])).toEqual([
+      { workflow: 'w1', nodeId: 'e1', action: { type: 'extract', variable: 'code', extractor: 'login-code' } },
+      { workflow: 'w1', nodeId: 'n1', action: { type: 'notify', title: 'One' } },
+      { workflow: 'w1', nodeId: 'n2', action: { type: 'notify', title: 'Two' } }
+    ])
+  })
 })
 
 describe('planUndo', () => {
@@ -124,6 +138,13 @@ describe('planUndo', () => {
 
   it('drops a reversal it cannot perform without a uid', () => {
     expect(planUndo([{ type: 'move-to', folder: 'Archive', from: 'INBOX' }])).toEqual([])
+  })
+
+  it('reverses nothing for an extract or a notification', () => {
+    expect(planUndo([
+      { type: 'extract', variable: 'code', value: '482913' },
+      { type: 'notify', nodeId: 'notify', title: 'Login code', modal: { text: '482913', copy: true } }
+    ])).toEqual([])
   })
 })
 
@@ -219,5 +240,30 @@ describe('toCorrectionExample', () => {
       feedback: 'rejected',
       answers: { d1: { choice: 'invoice', confidence: 0.9 } }
     })
+  })
+
+  it('labels the node a human decided and keeps the answered feedback', () => {
+    const example = toCorrectionExample({
+      id: 'run-2',
+      workflow: 'w1',
+      workflowName: 'Invoices',
+      domain: 'mail',
+      service: 'mail-1',
+      itemKey: 'k',
+      item: mailItem(),
+      path: [
+        { nodeId: 'd1', output: 'other', source: 'engine', attempts: [{ source: 'engine', output: 'other' }] },
+        { nodeId: 'd2', output: 'invoice', source: 'human', attempts: [{ source: 'ai', output: 'other' }] }
+      ],
+      answers: { d2: { choice: 'invoice', confidence: 0.9 } },
+      outcome: 'applied',
+      actions: [{ nodeId: 'a1', action: { type: 'star' } }],
+      applied: [],
+      feedback: 'answered',
+      at: new Date().toISOString()
+    })
+
+    expect(example.labels).toEqual({ d2: 'invoice' })
+    expect(example.feedback).toBe('answered')
   })
 })

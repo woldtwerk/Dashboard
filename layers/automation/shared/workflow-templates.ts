@@ -304,6 +304,43 @@ const calendarInvitations: WorkflowTemplate = {
   bindings: []
 }
 
+const loginCodes: WorkflowTemplate = {
+  id: 'mail-login-codes',
+  name: 'Login codes',
+  description: 'Extracts the one-time login or verification code from a mail, sends a notification with it in a pop-up that has a copy button, and moves the mail to the trash. Mail without a recognisable code stays where it is. Created disabled and in suggest mode; it is meant to run in automatic mode.',
+  domain: 'mail',
+  icon: 'i-lucide-key-round',
+  graph: graph([
+    triggerNode('INBOX', 0, 0),
+    yesnoNode(
+      'is-code',
+      'Is this mail a one-time login, sign-in, verification or two-factor authentication code (OTP, TAN, security token) sent to the user right now?',
+      0.8,
+      0.8,
+      0,
+      140
+    ),
+    actionNode('extract-code', { type: 'extract', variable: 'code', extractor: 'login-code' }, 0, 280),
+    actionNode('notify-code', {
+      type: 'notify',
+      title: 'Login code from {{from}}',
+      body: '{{subject}}',
+      modal: { title: 'Login code', text: '{{code}}', copy: true, expiresInMinutes: 15 }
+    }, 0, 420),
+    actionNode('trash', { type: 'trash' }, 0, 560),
+    endNode(320, 560)
+  ], [
+    edge('trigger', 'next', 'is-code'),
+    edge('is-code', 'yes', 'extract-code'),
+    edge('is-code', 'no', 'end'),
+    edge('is-code', 'unsure', 'end'),
+    edge('extract-code', 'next', 'notify-code'),
+    edge('notify-code', 'next', 'trash'),
+    edge('trash', 'next', 'end')
+  ]),
+  bindings: []
+}
+
 // --- Document templates ---------------------------------------------------
 
 const classifyInvoices: WorkflowTemplate = {
@@ -392,6 +429,7 @@ export const workflowTemplates: WorkflowTemplate[] = [
   securityUpdates,
   shipping,
   calendarInvitations,
+  loginCodes,
   classifyInvoices,
   taxRelevant
 ]

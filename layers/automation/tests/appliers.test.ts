@@ -48,6 +48,12 @@ function mailProvider(): FakeMailProvider {
     },
     async deleteMessage(mailbox, uid) {
       calls.push(['deleteMessage', mailbox, uid])
+    },
+    async listMailboxes() {
+      return [
+        { path: 'INBOX', name: 'Inbox', total: 0, unread: 0 },
+        { path: 'Trash', name: 'Trash', total: 0, unread: 0, specialUse: '\\Trash' }
+      ]
     }
   }
 }
@@ -123,6 +129,27 @@ describe('createMailApplier', () => {
   it('refuses a document action on a mail item', async () => {
     const applier = createMailApplier({ provider: mailProvider(), publish: vi.fn() })
     await expect(applier.apply([{ type: 'add-tag', tag: 1 }], mailItem())).rejects.toThrow('not a mail action')
+  })
+
+  it('refuses a generic action on a mail item', async () => {
+    const applier = createMailApplier({ provider: mailProvider(), publish: vi.fn() })
+    await expect(applier.apply([{ type: 'notify', title: 'Hi' }], mailItem())).rejects.toThrow('not a mail action')
+  })
+
+  it('refuses to trash a mail that already sits in the trash', async () => {
+    const provider = mailProvider()
+    const applier = createMailApplier({ provider, publish: vi.fn() })
+
+    await expect(applier.apply([{ type: 'trash' }], mailItem({ mailbox: 'Trash' }))).rejects.toThrow('cannot be moved to the trash')
+    expect(provider.calls).toEqual([])
+  })
+
+  it('refuses to trash when the account has no trash folder', async () => {
+    const provider = mailProvider()
+    provider.listMailboxes = async () => [{ path: 'INBOX', name: 'Inbox', total: 0, unread: 0 }]
+    const applier = createMailApplier({ provider, publish: vi.fn() })
+
+    await expect(applier.apply([{ type: 'trash' }], mailItem())).rejects.toThrow('cannot be moved to the trash')
   })
 })
 

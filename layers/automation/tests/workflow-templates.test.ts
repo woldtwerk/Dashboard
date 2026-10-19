@@ -122,3 +122,31 @@ describe('instantiateWorkflowTemplate', () => {
     expect(graph).toEqual(mail.graph)
   })
 })
+
+describe('login code template', () => {
+  it('extracts the code, notifies with a pop-up and then trashes the mail, and says it is meant for automatic mode', () => {
+    const entry = template('mail-login-codes')
+
+    expect(entry.domain).toBe('mail')
+    expect(validateWorkflow(entry.graph, 'mail')).toEqual([])
+
+    const actions = entry.graph.nodes
+      .filter(node => node.type === 'action')
+      .map(node => node.data.action)
+    expect(actions.map(action => action.type)).toEqual(['extract', 'notify', 'trash'])
+
+    const extract = actions[0]!
+    expect(extract).toMatchObject({ type: 'extract', variable: 'code', extractor: 'login-code' })
+
+    const notify = actions[1]!
+    expect(notify.type).toBe('notify')
+    if (notify.type === 'notify') {
+      expect(notify.title).toBe('Login code from {{from}}')
+      expect(notify.body).toBe('{{subject}}')
+      expect(notify.modal).toEqual({ title: 'Login code', text: '{{code}}', copy: true, expiresInMinutes: 15 })
+    }
+
+    expect(entry.description).toContain('automatic mode')
+    expect(entry.icon).toBe('i-lucide-key-round')
+  })
+})

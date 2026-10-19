@@ -4,6 +4,7 @@ import { createError } from 'nuxt/server'
 import { z } from 'zod'
 import type { AutomationWorkflow, AutomationWorkflowInput, WorkflowGraph } from '../../shared/types/automation'
 import { createDefaultGraph, validateWorkflow } from '../../shared/workflow'
+import { MAX_EXTRACT_PATTERN_LENGTH, VARIABLE_NAME_RE } from '../../shared/extractors'
 import { automationWorkflows } from '../db/schema'
 import type { AutomationWorkflowRow } from '../db/schema'
 import { forgetWorkflowRuns } from './runs'
@@ -29,9 +30,30 @@ export const automationActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('label'), label: z.string().trim().min(1).max(200) }),
   z.object({ type: z.literal('mark-read') }),
   z.object({ type: z.literal('star') }),
+  z.object({ type: z.literal('trash') }),
   z.object({ type: z.literal('add-tag'), tag: z.number().int().positive() }),
   z.object({ type: z.literal('set-correspondent'), correspondent: z.number().int().positive() }),
-  z.object({ type: z.literal('set-type'), documentType: z.number().int().positive() })
+  z.object({ type: z.literal('set-type'), documentType: z.number().int().positive() }),
+  // Generic actions: bounded like the shared validation, so a graph that the
+  // builder and the engine accept is never rejected at the API boundary.
+  z.object({
+    type: z.literal('extract'),
+    variable: z.string().regex(VARIABLE_NAME_RE, 'Invalid variable name'),
+    extractor: z.enum(['login-code', 'regex']),
+    pattern: z.string().max(MAX_EXTRACT_PATTERN_LENGTH).optional(),
+    source: z.enum(['text', 'subject']).optional()
+  }),
+  z.object({
+    type: z.literal('notify'),
+    title: z.string().max(300),
+    body: z.string().max(2000).optional(),
+    modal: z.object({
+      title: z.string().trim().max(300).optional(),
+      text: z.string().max(4000),
+      copy: z.boolean().optional(),
+      expiresInMinutes: z.number().int().positive().max(1440).optional()
+    }).optional()
+  })
 ])
 
 const triggerNodeSchema = z.object({
@@ -48,6 +70,13 @@ const conditionNodeSchema = z.object({
   data: z.object({ conditions: automationConditionsSchema })
 })
 
+const decisionFallbackSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('ai'), model: z.string().trim().max(200).optional() }),
+  z.object({ type: z.literal('human') })
+])
+
+const decisionFallbacksSchema = z.array(decisionFallbackSchema).max(10).optional()
+
 const choiceDecisionNodeSchema = z.object({
   id: nodeIdSchema,
   type: z.literal('decision'),
@@ -59,7 +88,8 @@ const choiceDecisionNodeSchema = z.object({
       .refine(options => Object.keys(options).length >= 1 && Object.keys(options).length <= 100, {
         message: 'A choice needs between 1 and 100 options'
       }),
-    thresholds: z.record(z.string(), z.number().min(0).max(1))
+    thresholds: z.record(z.string(), z.number().min(0).max(1)),
+    fallbacks: decisionFallbacksSchema
   })
 })
 
@@ -70,7 +100,8 @@ const yesnoDecisionNodeSchema = z.object({
   data: z.object({
     question: z.literal('yesno'),
     instructions: z.string().trim().min(1).max(1000),
-    thresholds: z.object({ yes: z.number().min(0).max(1), no: z.number().min(0).max(1) })
+    thresholds: z.object({ yes: z.number().min(0).max(1), no: z.number().min(0).max(1) }),
+    fallbacks: decisionFallbacksSchema
   })
 })
 

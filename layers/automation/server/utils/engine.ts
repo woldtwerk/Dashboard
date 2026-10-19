@@ -8,11 +8,16 @@ import type {
   DecisionAnswer,
   PlannedAction,
   UndoOperation,
-  WorkflowPathStep
+  WorkflowPathStep,
+  WorkflowRunItemResult
 } from '../../shared/types/automation'
+import { createError } from 'nuxt/server'
 import { nextAttempt, planUndo, selectActions } from '../../shared/automation'
-import { runWorkflowBatch } from '../../shared/workflow'
-import type { WorkflowDecide, WorkflowDecideBatch } from '../../shared/workflow'
+import { nodeOutputs, runWorkflowBatch } from '../../shared/workflow'
+import type { PresetDecision, WorkflowDecide, WorkflowDecideBatch, WorkflowFallbackDecideBatch } from '../../shared/workflow'
+import { runActions } from './action-runner'
+import { itemRef } from './automation-items'
+import { MANUAL_RUN_LOST_LOCK } from './manual-run'
 import type { SeenState } from './runs'
 
 /**
@@ -50,6 +55,18 @@ export interface AutomationStore {
     error?: string
     at?: Date
   }): Promise<AutomationRun>
+  /** Rewrites an existing run, e.g. when a paused review was answered */
+  update(id: string, patch: {
+    outcome?: AutomationRun['outcome']
+    path?: WorkflowPathStep[]
+    answers?: Record<string, DecisionAnswer>
+    actions?: PlannedAction[]
+    applied?: AppliedAction[]
+    feedback?: AutomationRun['feedback'] | null
+    error?: string | null
+  }): Promise<AutomationRun>
+  /** One stored run; throws 404 when it is gone */
+  get(id: string): Promise<AutomationRun>
 }
 
 /** Applies a workflow's actions to one item and reverses them later */
@@ -72,12 +89,20 @@ export interface AutomationDeps {
   decide?: WorkflowDecide
   /** The batch form of `decide`; preferred so one wave of items costs one call */
   decideBatch?: WorkflowDecideBatch
+  /** Answers a decision node's AI fallbacks when the engine is unsure */
+  fallbackDecideBatch?: WorkflowFallbackDecideBatch
   /** Candidate items of one service, newest first */
   loadItems: (domain: AutomationDomain, service: string, limit: number) => Promise<AutomationItem[]>
   /** The applier of one service; the runtime builds it from the domain provider */
   applierFor: (domain: AutomationDomain, service: string) => AutomationApplier | Promise<AutomationApplier>
   /** Announces a suggestion; a failure never fails the run */
   notify?: (run: AutomationRun) => Promise<void>
+  /**
+   * Announces the notifications an applied run produced; called after the run is
+   * recorded, so the notification can be tied to its run id. A failure never fails
+   * the run.
+   */
+  announceNotifications?: (run: AutomationRun) => Promise<void>
   /** Announces that an item was given up after repeated transient failures */
   notifyFailed?: (domain: AutomationDomain, service: string, item: AutomationItem, error: unknown) => Promise<void>
   logger?: AutomationLogger
@@ -180,12 +205,125 @@ export async function evaluateCandidates(
   return runs
 }
 
+/** Lease renewal for a manual run; every item is checked before it is touched */
+export interface WorkflowManualRunOptions {
+  /**
+   * Renews the caller's lease. Called before the walk and before each following
+   * item; false means the lease was lost and the rest must not be applied.
+   */
+  beforeItem?: () => Promise<boolean>
+}
+
+/**
+ * Runs exactly one workflow against items the user picked, with the new-item
+ * rules: one batched walk with the engine and its fallbacks, `recordWorkflow`
+ * semantics per mode, review runs and notifications. Unlike the trigger path it
+ * never consults or writes the seen/retry table — a manual run must not hide the
+ * item from future automation — and a decision-engine failure becomes a failed
+ * result instead of a retry.
+ */
+export async function runWorkflowOnItems(
+  workflow: AutomationWorkflow,
+  items: AutomationItem[],
+  deps: AutomationDeps,
+  options: WorkflowManualRunOptions = {}
+): Promise<WorkflowRunItemResult[]> {
+  if (!items.length) {
+    return []
+  }
+
+  const beforeItem = options.beforeItem
+  if (beforeItem && !(await beforeItem())) {
+    return items.map(lostLockResult)
+  }
+
+  const decideBatch = resolveDecideBatch(deps)
+  if (hasDecisionNode(workflow) && !decideBatch) {
+    const results: WorkflowRunItemResult[] = []
+    for (const [index, item] of items.entries()) {
+      if (index > 0 && beforeItem && !(await beforeItem())) {
+        results.push(...items.slice(index).map(lostLockResult))
+        break
+      }
+      results.push(await recordManualFailure(workflow, item, 'No decision engine is configured', deps))
+    }
+    return results
+  }
+
+  const results = await runWorkflowBatch(workflow.graph, items, decideBatch ?? emptyDecideBatch, {
+    fallback: deps.fallbackDecideBatch
+  })
+
+  const output: WorkflowRunItemResult[] = []
+  for (const [index, item] of items.entries()) {
+    if (index > 0 && beforeItem && !(await beforeItem())) {
+      output.push(...items.slice(index).map(lostLockResult))
+      break
+    }
+
+    const result = results[index]
+
+    if (!result || result.error) {
+      output.push(await recordManualFailure(workflow, item, result?.error ?? 'The workflow could not be evaluated', deps))
+      continue
+    }
+
+    // No first-wins selection: the user picked this workflow, so its actions run
+    const run = await recordWorkflow(
+      workflow.domain,
+      item.service,
+      workflow,
+      item,
+      result.path,
+      result.answers,
+      result.actions,
+      deps,
+      result.review
+    )
+    output.push({ ref: itemRef(item), outcome: run.outcome, runId: run.id, error: run.error })
+  }
+
+  return output
+}
+
+/** The result of an item that was not touched because the lease is gone */
+function lostLockResult(item: AutomationItem): WorkflowRunItemResult {
+  return { ref: itemRef(item), outcome: 'failed', error: MANUAL_RUN_LOST_LOCK }
+}
+
+/** A manual run that could not evaluate an item records a failed run, but no retry */
+async function recordManualFailure(
+  workflow: AutomationWorkflow,
+  item: AutomationItem,
+  error: unknown,
+  deps: AutomationDeps
+): Promise<WorkflowRunItemResult> {
+  const message = errorMessage(error)
+  const run = await deps.store.record({
+    workflow: workflow.id,
+    workflowName: workflow.name,
+    domain: workflow.domain,
+    service: item.service,
+    item,
+    path: [],
+    answers: {},
+    outcome: 'failed',
+    actions: [],
+    error: message,
+    at: deps.now?.()
+  })
+
+  return { ref: itemRef(item), outcome: 'failed', runId: run.id, error: message }
+}
+
 /** One workflow that would act on an item */
 interface TriggeredWorkflow {
   workflow: AutomationWorkflow
   path: WorkflowPathStep[]
   answers: Record<string, DecisionAnswer>
   actions: PlannedAction[]
+  /** Set when the walk paused for a human; the node awaiting an answer */
+  review?: string
 }
 
 /** What the walk produced for one item */
@@ -219,7 +357,9 @@ async function evaluateItems(
   }
 
   for (const workflow of workflows) {
-    const results = await runWorkflowBatch(workflow.graph, items, decideBatch ?? emptyDecideBatch)
+    const results = await runWorkflowBatch(workflow.graph, items, decideBatch ?? emptyDecideBatch, {
+      fallback: deps.fallbackDecideBatch
+    })
 
     results.forEach((result, index) => {
       const evaluation = byKey.get(items[index]!.key)
@@ -230,8 +370,14 @@ async function evaluateItems(
         evaluation.error ??= new TransientEvaluationError(result.error)
         return
       }
-      if (result.actions.length) {
-        evaluation.triggered.push({ workflow, path: result.path, answers: result.answers, actions: result.actions })
+      if (result.actions.length || result.review) {
+        evaluation.triggered.push({
+          workflow,
+          path: result.path,
+          answers: result.answers,
+          actions: result.actions,
+          review: result.review
+        })
       }
     })
   }
@@ -270,7 +416,10 @@ async function recordTriggered(
     return []
   }
 
-  const selected = selectActions(triggered.map(entry => ({ id: entry.workflow.id, actions: entry.actions })))
+  // A paused review acts later, on its own: it must not claim an action type from
+  // the workflows that are ready now
+  const actionable = triggered.filter(entry => !entry.review)
+  const selected = selectActions(actionable.map(entry => ({ id: entry.workflow.id, actions: entry.actions })))
   const chosenByWorkflow = new Map<string, PlannedAction[]>()
   for (const { workflow: id, nodeId, action } of selected) {
     chosenByWorkflow.set(id, [...(chosenByWorkflow.get(id) ?? []), { nodeId, action }])
@@ -279,7 +428,7 @@ async function recordTriggered(
   const runs: AutomationRun[] = []
   for (const entry of triggered) {
     const chosen = chosenByWorkflow.get(entry.workflow.id) ?? []
-    runs.push(await recordWorkflow(domain, service, entry.workflow, item, entry.path, entry.answers, chosen, deps))
+    runs.push(await recordWorkflow(domain, service, entry.workflow, item, entry.path, entry.answers, chosen, deps, entry.review))
   }
   return runs
 }
@@ -322,8 +471,33 @@ async function recordWorkflow(
   path: WorkflowPathStep[],
   answers: Record<string, DecisionAnswer>,
   actions: PlannedAction[],
-  deps: AutomationDeps
+  deps: AutomationDeps,
+  review?: string
 ): Promise<AutomationRun> {
+  // A paused review has no actions yet: the resume plans them from the human's answer
+  if (review) {
+    const run = await deps.store.record({
+      workflow: workflow.id,
+      workflowName: workflow.name,
+      domain,
+      service,
+      item,
+      path,
+      answers,
+      outcome: 'review',
+      actions: [],
+      at: deps.now?.()
+    })
+
+    try {
+      await deps.notify?.(run)
+    } catch (error) {
+      deps.logger?.warn?.('Could not send the automation review request', { error: errorMessage(error) })
+    }
+
+    return run
+  }
+
   if (!actions.length) {
     return await deps.store.record({
       workflow: workflow.id,
@@ -365,7 +539,7 @@ async function recordWorkflow(
   const applier = await deps.applierFor(domain, service)
 
   try {
-    const { applied } = await applier.apply(actions.map(planned => planned.action), item)
+    const { applied } = await runActions(actions, item, applier, { workflow: workflow.name, now: deps.now })
     const run = await deps.store.record({
       workflow: workflow.id,
       workflowName: workflow.name,
@@ -380,6 +554,7 @@ async function recordWorkflow(
       at: deps.now?.()
     })
     deps.logger?.info?.('Automation applied', { workflow: workflow.name })
+    await announceRunNotifications(run, deps)
     return run
   } catch (error) {
     deps.logger?.warn?.('Automation action failed', { workflow: workflow.name, error: errorMessage(error) })
@@ -399,9 +574,166 @@ async function recordWorkflow(
   }
 }
 
+/** The dependencies answering a paused review needs; `store` is the same runs store */
+export interface AutomationReviewDeps {
+  store: Pick<AutomationStore, 'get' | 'update'>
+  /** The workflow that paused; undefined when it was deleted meanwhile */
+  loadWorkflow: (id: string) => Promise<AutomationWorkflow | undefined>
+  decideBatch?: WorkflowDecideBatch
+  fallbackDecideBatch?: WorkflowFallbackDecideBatch
+  applierFor: AutomationDeps['applierFor']
+  notify?: AutomationDeps['notify']
+  announceNotifications?: AutomationDeps['announceNotifications']
+  logger?: AutomationLogger
+  now?: () => Date
+}
+
+/**
+ * Answers a paused review with one of the node's outputs and resumes the run: the
+ * stored path's decisions become presets, so the walk does not ask them again, and
+ * the chosen output is the human's answer for the paused node. The same run row is
+ * rewritten: another human fallback leaves it in `review`, otherwise the workflow's
+ * mode decides whether the planned actions are applied or suggested.
+ *
+ * The caller holds the run's lock and re-reads the run inside it, so two workers or
+ * a double click cannot answer the same review twice.
+ */
+export async function answerReview(runId: string, output: string, deps: AutomationReviewDeps): Promise<AutomationRun> {
+  const run = await deps.store.get(runId)
+  if (run.outcome !== 'review') {
+    throw createError({ status: 409, statusText: 'Only a run that awaits a review can be answered' })
+  }
+
+  const workflow = await deps.loadWorkflow(run.workflow)
+  if (!workflow) {
+    throw createError({ status: 409, statusText: 'The workflow of this review no longer exists' })
+  }
+
+  const paused = run.path.find(step => step.output === 'review')
+  const node = paused ? workflow.graph.nodes.find(candidate => candidate.id === paused.nodeId) : undefined
+  if (!paused || !node || node.type !== 'decision') {
+    throw createError({ status: 409, statusText: 'The decision that asked for a review no longer exists' })
+  }
+
+  if (!nodeOutputs(node).includes(output)) {
+    throw createError({ status: 400, statusText: `"${output}" is not an output of this decision` })
+  }
+
+  const preset: Record<string, PresetDecision> = {}
+  for (const step of run.path) {
+    if (step.output === 'review' || !step.source) {
+      continue
+    }
+    preset[step.nodeId] = {
+      output: step.output,
+      source: step.source,
+      answer: step.answer,
+      attempts: step.attempts
+    }
+  }
+  preset[paused.nodeId] = { output, source: 'human', attempts: paused.attempts }
+
+  const decideBatch = deps.decideBatch ?? emptyDecideBatch
+  const [result] = await runWorkflowBatch(workflow.graph, [run.item], decideBatch, {
+    fallback: deps.fallbackDecideBatch,
+    preset
+  })
+
+  if (!result || result.error) {
+    throw createError({ status: 502, statusText: result?.error ?? 'The workflow could not be resumed' })
+  }
+
+  if (result.review) {
+    const updated = await deps.store.update(runId, {
+      outcome: 'review',
+      path: result.path,
+      answers: result.answers,
+      actions: [],
+      feedback: 'answered'
+    })
+    try {
+      await deps.notify?.(updated)
+    } catch (error) {
+      deps.logger?.warn?.('Could not send the automation review request', { error: errorMessage(error) })
+    }
+    return updated
+  }
+
+  if (!result.actions.length) {
+    return await deps.store.update(runId, {
+      outcome: 'skipped',
+      path: result.path,
+      answers: result.answers,
+      actions: [],
+      feedback: 'answered'
+    })
+  }
+
+  if (workflow.mode === 'suggest') {
+    const updated = await deps.store.update(runId, {
+      outcome: 'suggested',
+      path: result.path,
+      answers: result.answers,
+      actions: result.actions,
+      feedback: 'answered'
+    })
+    try {
+      await deps.notify?.(updated)
+    } catch (error) {
+      deps.logger?.warn?.('Could not send the automation suggestion', { error: errorMessage(error) })
+    }
+    return updated
+  }
+
+  const applier = await deps.applierFor(run.domain, run.service)
+
+  try {
+    const { applied } = await runActions(result.actions, run.item, applier, { workflow: workflow.name, now: deps.now })
+    const updated = await deps.store.update(runId, {
+      outcome: 'applied',
+      path: result.path,
+      answers: result.answers,
+      actions: result.actions,
+      applied,
+      feedback: 'answered'
+    })
+    await announceRunNotifications(updated, deps)
+    return updated
+  } catch (error) {
+    deps.logger?.warn?.('Automation action failed', { workflow: workflow.name, error: errorMessage(error) })
+    return await deps.store.update(runId, {
+      outcome: 'failed',
+      path: result.path,
+      answers: result.answers,
+      actions: result.actions,
+      error: errorMessage(error),
+      feedback: 'answered'
+    })
+  }
+}
+
 /** Applies the actions of a suggestion and returns what a reversal needs */
-export async function applyRunActions(run: AutomationRun, applier: AutomationApplier) {
-  return await applier.apply(run.actions.map(planned => planned.action), run.item)
+export async function applyRunActions(run: AutomationRun, applier: AutomationApplier, now?: () => Date) {
+  return await runActions(run.actions, run.item, applier, { workflow: run.workflowName, now })
+}
+
+/**
+ * Announces the notifications an applied run produced, after the run was recorded
+ * so the notification and the live modal can address it by id. Best-effort, like
+ * `notify`: a failure is logged and never fails the run.
+ */
+export async function announceRunNotifications(
+  run: AutomationRun,
+  deps: { announceNotifications?: AutomationDeps['announceNotifications'], logger?: AutomationLogger }
+): Promise<void> {
+  if (!run.applied.some(action => action.type === 'notify')) {
+    return
+  }
+  try {
+    await deps.announceNotifications?.(run)
+  } catch (error) {
+    deps.logger?.warn?.('Could not send the workflow notifications', { error: errorMessage(error) })
+  }
 }
 
 /** The reversal steps of an applied run */

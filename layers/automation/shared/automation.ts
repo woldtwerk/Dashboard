@@ -8,9 +8,39 @@ import type {
   AutomationRun,
   CorrectionExample,
   DecisionAnswer,
+  GenericAction,
   PlannedAction,
-  UndoOperation
+  UndoOperation,
+  WorkflowPathStep
 } from './types/automation'
+
+// --- Actions --------------------------------------------------------------
+
+/** The action types the runner handles itself rather than a domain applier */
+export const GENERIC_ACTION_TYPES = ['extract', 'notify'] as const
+
+/**
+ * Every action type, as a runtime list the schemas and tests can walk.
+ * `satisfies` makes the compiler reject a new member of the `AutomationAction`
+ * union that is missing here, so a schema entry cannot silently fall behind.
+ */
+export const ACTION_TYPES = {
+  'move-to': true,
+  'label': true,
+  'mark-read': true,
+  'star': true,
+  'trash': true,
+  'add-tag': true,
+  'set-correspondent': true,
+  'set-type': true,
+  'extract': true,
+  'notify': true
+} as const satisfies Record<AutomationAction['type'], true>
+
+/** Whether an action is handled by the runner itself rather than a domain applier */
+export function isGenericAction(action: Pick<AutomationAction, 'type'>): action is GenericAction {
+  return (GENERIC_ACTION_TYPES as readonly string[]).includes(action.type)
+}
 
 // --- Conditions -----------------------------------------------------------
 
@@ -63,7 +93,10 @@ export function matchesConditions(item: AutomationItem, conditions: AutomationCo
 /**
  * Picks the actions of the triggered workflows in order: workflows run by position
  * and the first to offer an action type owns it, so a later workflow cannot move
- * the same mail a second time. Returns the chosen actions with their workflow.
+ * the same mail a second time. Generic actions (`extract`, `notify`) are not
+ * exclusive: a workflow may send several notifications and another may extract its
+ * own variables, so they are always kept. Returns the chosen actions with their
+ * workflow.
  */
 export function selectActions(
   workflows: Array<{ id: string, actions: PlannedAction[] }>
@@ -73,10 +106,12 @@ export function selectActions(
 
   for (const { id, actions } of workflows) {
     for (const planned of actions) {
-      if (seen.has(planned.action.type)) {
-        continue
+      if (!isGenericAction(planned.action)) {
+        if (seen.has(planned.action.type)) {
+          continue
+        }
+        seen.add(planned.action.type)
       }
-      seen.add(planned.action.type)
       chosen.push({ workflow: id, nodeId: planned.nodeId, action: planned.action })
     }
   }
@@ -142,6 +177,10 @@ export function planUndo(applied: AppliedAction[]): UndoOperation[] {
       case 'set-type':
         operations.push({ op: 'set-document-type', document: action.document, documentType: action.previous })
         break
+      case 'extract':
+      case 'notify':
+        // Reading a value and announcing it changed nothing to reverse
+        break
     }
   }
 
@@ -174,7 +213,7 @@ export function runConfidence(answers: Record<string, DecisionAnswer>): number |
 // --- Workflow deletion ----------------------------------------------------
 
 /** The outcomes that are still waiting for a user; they cannot outlive their workflow */
-export const PENDING_RUN_OUTCOMES: AutomationOutcome[] = ['suggested']
+export const PENDING_RUN_OUTCOMES: AutomationOutcome[] = ['suggested', 'review']
 
 /** Whether a recorded run is still pending (a suggestion nobody applied or rejected) */
 export function isPendingRun(run: Pick<AutomationRun, 'outcome'>): boolean {
@@ -205,6 +244,18 @@ export function toCorrectionExample(run: AutomationRun): CorrectionExample {
     workflowName: run.workflowName,
     answers: run.answers,
     actions: run.actions,
+    labels: humanLabels(run.path),
     feedback: run.feedback ?? 'rejected'
   }
+}
+
+/** The outputs a human picked, per decision node; the label a fine-tune learns from */
+export function humanLabels(path: WorkflowPathStep[]): Record<string, string> {
+  const labels: Record<string, string> = {}
+  for (const step of path) {
+    if (step.source === 'human' && step.output !== 'review') {
+      labels[step.nodeId] = step.output
+    }
+  }
+  return labels
 }

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   createDefaultGraph,
   decisionOutput,
+  decisionVerdict,
+  FallbackUnavailableError,
   graphActions,
   hasCycle,
   nodeOutputs,
@@ -10,8 +12,8 @@ import {
   runWorkflowBatch,
   validateWorkflow
 } from '../shared/workflow'
-import type { WorkflowDecide } from '../shared/workflow'
-import type { AutomationItem, DecisionAnswer, WorkflowGraph } from '../shared/types/automation'
+import type { WorkflowDecide, WorkflowFallbackDecideBatch } from '../shared/workflow'
+import type { AutomationItem, DecisionAnswer, DecisionAttempt, DecisionFallback, WorkflowGraph } from '../shared/types/automation'
 
 function item(fields: Record<string, string> = {}, state = 'state'): AutomationItem {
   return {
@@ -127,6 +129,40 @@ describe('decisionOutput', () => {
     expect(decisionOutput(yesnoData(), { yes: 0.9, confidence: 0.9 })).toBe('yes')
     expect(decisionOutput(yesnoData(), { yes: 0.1, confidence: 0.9 })).toBe('no')
     expect(decisionOutput(yesnoData(), { yes: 0.5, confidence: 0.5 })).toBe('unsure')
+  })
+})
+
+describe('decisionVerdict', () => {
+  function choiceData() {
+    const node = choiceGraph().nodes.find(candidate => candidate.id === 'kind')!
+    if (node.type !== 'decision') {
+      throw new Error('expected a decision node')
+    }
+    return node.data
+  }
+
+  function yesnoData() {
+    const node = yesnoGraph().nodes.find(candidate => candidate.id === 'urgent')!
+    if (node.type !== 'decision') {
+      throw new Error('expected a decision node')
+    }
+    return node.data
+  }
+
+  it('is sure at or above the option threshold', () => {
+    expect(decisionVerdict(choiceData(), { choice: 'invoice', confidence: 0.8 })).toEqual({ output: 'invoice', sure: true })
+    expect(decisionVerdict(choiceData(), { choice: 'invoice', confidence: 0.79 })).toEqual({ output: 'other', sure: false })
+  })
+
+  it('is unsure without an answer or for an unknown option', () => {
+    expect(decisionVerdict(choiceData(), undefined)).toEqual({ output: 'other', sure: false })
+    expect(decisionVerdict(choiceData(), { choice: 'nope', confidence: 1 })).toEqual({ output: 'other', sure: false })
+  })
+
+  it('branches a yes/no answer and marks unsure in between', () => {
+    expect(decisionVerdict(yesnoData(), { yes: 0.9, confidence: 0.9 })).toEqual({ output: 'yes', sure: true })
+    expect(decisionVerdict(yesnoData(), { yes: 0.1, confidence: 0.9 })).toEqual({ output: 'no', sure: true })
+    expect(decisionVerdict(yesnoData(), { yes: 0.5, confidence: 0.5 })).toEqual({ output: 'unsure', sure: false })
   })
 })
 
@@ -278,6 +314,48 @@ describe('runWorkflowBatch', () => {
     expect(decideBatch).toHaveBeenCalledTimes(2)
   })
 
+  it('reports each decision call and each item once, as soon as its walk ends', async () => {
+    const graph = choiceGraph()
+    // Item 1 has no subject match and skips the decision through a condition
+    graph.nodes.push({
+      id: 'gate',
+      type: 'condition',
+      position: { x: 0, y: 50 },
+      data: { conditions: { combine: 'all', conditions: [{ field: 'subject', op: 'contains', value: 'invoice' }] } }
+    })
+    graph.edges = graph.edges.map(edge => edge.id === 'e1' ? { ...edge, target: 'gate' } : edge)
+    graph.edges.push(
+      { id: 'g1', source: 'gate', sourceHandle: 'true', target: 'kind' },
+      { id: 'g2', source: 'gate', sourceHandle: 'false', target: 'end' }
+    )
+
+    const events: string[] = []
+    const decideBatch = vi.fn(async (states: string[], questions: Record<string, unknown>) => {
+      events.push('call')
+      return states.map(() => ({ [Object.keys(questions)[0]!]: { choice: 'invoice', confidence: 0.9 } }))
+    })
+    const batch = [item({ subject: 'Invoice' }, 'a'), { ...item({ subject: 'Hello' }, 'b'), key: 'INBOX|2|m2', uid: 2 }]
+
+    const results = await runWorkflowBatch(graph, batch, decideBatch, {
+      onDecide: (nodeId, count) => events.push(`decide ${nodeId} ${count}`),
+      onItemDone: (index, result) => events.push(`done ${index} ${result.actions.length}`)
+    })
+
+    // The gated item ends before the call; the asked item right after it
+    expect(events).toEqual(['done 1 0', 'decide kind 1', 'call', 'done 0 1'])
+    expect(results[0]!.actions).toHaveLength(1)
+  })
+
+  it('stops before the next decision call once aborted', async () => {
+    const abort = new AbortController()
+    const decideBatch = vi.fn(async (states: string[], questions: Record<string, unknown>) =>
+      states.map(() => ({ [Object.keys(questions)[0]!]: { choice: 'invoice', confidence: 0.9 } })))
+    abort.abort(new Error('stopped'))
+
+    await expect(runWorkflowBatch(choiceGraph(), items(2), decideBatch, { signal: abort.signal })).rejects.toThrow('stopped')
+    expect(decideBatch).not.toHaveBeenCalled()
+  })
+
   it('isolates a failed batch call to the items waiting on that node', async () => {
     const graph: WorkflowGraph = {
       version: 1,
@@ -365,10 +443,243 @@ describe('validateWorkflow', () => {
     expect(validateWorkflow(graph).some(error => error.message.includes('at least one option'))).toBe(true)
     expect(validateWorkflow(graph).some(error => error.message.includes('between 0 and 1'))).toBe(true)
   })
+
+  it('accepts generic actions in both domains', () => {
+    const graph = choiceGraph()
+    graph.nodes.find(node => node.id === 'star')!.data = {
+      action: { type: 'extract', variable: 'code', extractor: 'login-code' }
+    } as never
+    expect(validateWorkflow(graph, 'mail')).toEqual([])
+    expect(validateWorkflow(graph, 'documents')).toEqual([])
+  })
+
+  it('rejects an invalid extract variable name and regex', () => {
+    const nameGraph = choiceGraph()
+    nameGraph.nodes.find(node => node.id === 'star')!.data = {
+      action: { type: 'extract', variable: 'Bad Name', extractor: 'login-code' }
+    } as never
+    expect(validateWorkflow(nameGraph, 'mail').some(error => error.message.includes('not a valid variable name'))).toBe(true)
+
+    const regexGraph = choiceGraph()
+    regexGraph.nodes.find(node => node.id === 'star')!.data = {
+      action: { type: 'extract', variable: 'code', extractor: 'regex', pattern: '(' }
+    } as never
+    expect(validateWorkflow(regexGraph, 'mail').some(error => error.message.includes('not a valid regular expression'))).toBe(true)
+  })
+
+  it('rejects a notify variable that no extract node defines', () => {
+    const graph = choiceGraph()
+    graph.nodes.find(node => node.id === 'star')!.data = {
+      action: { type: 'notify', title: 'Code {{code}}', modal: { text: '{{code}} in {{title}}' } }
+    } as never
+
+    const errors = validateWorkflow(graph, 'mail').filter(error => error.nodeId === 'star')
+    expect(errors).toEqual([{ nodeId: 'star', message: '{{code}} is never extracted' }])
+  })
+
+  it('accepts a notify once an extract node defines its variable', () => {
+    const graph = choiceGraph()
+    graph.nodes.push({
+      id: 'extract',
+      type: 'action',
+      position: { x: 0, y: 150 },
+      data: { action: { type: 'extract', variable: 'code', extractor: 'login-code' } }
+    })
+    graph.nodes.find(node => node.id === 'star')!.data = {
+      action: { type: 'notify', title: 'Code {{code}} from {{from}}', body: '{{workflow}} · {{subject}}' }
+    } as never
+
+    expect(validateWorkflow(graph, 'mail')).toEqual([])
+  })
 })
 
 describe('createDefaultGraph', () => {
   it('is a valid trigger feeding an end', () => {
     expect(validateWorkflow(createDefaultGraph('mail'), 'mail')).toEqual([])
+  })
+})
+
+describe('decision fallbacks', () => {
+  /** The choice graph with a fallback chain on its decision node */
+  function fallbackGraph(fallbacks: DecisionFallback[], threshold = 0.8): WorkflowGraph {
+    const graph = choiceGraph(threshold)
+    const node = graph.nodes.find(candidate => candidate.id === 'kind')!
+    if (node.type === 'decision') {
+      node.data.fallbacks = fallbacks
+    }
+    return graph
+  }
+
+  function decideWith(answer: DecisionAnswer): WorkflowDecide {
+    return async (_state, questions) => ({ [Object.keys(questions)[0]!]: answer })
+  }
+
+  it('a sure primary answer skips the fallbacks entirely', async () => {
+    const fallback = vi.fn<WorkflowFallbackDecideBatch>()
+    const result = await runWorkflow(
+      fallbackGraph([{ type: 'ai', model: '' }, { type: 'human' }]),
+      item(),
+      decideWith({ choice: 'invoice', confidence: 0.9 }),
+      { fallback }
+    )
+
+    const step = result.path.find(candidate => candidate.nodeId === 'kind')!
+    expect(step.output).toBe('invoice')
+    expect(step.source).toBe('engine')
+    expect(step.attempts).toBeUndefined()
+    expect(result.actions).toHaveLength(1)
+    expect(fallback).not.toHaveBeenCalled()
+  })
+
+  it('an unsure primary hands over to the AI fallback and continues on its answer', async () => {
+    const fallback = vi.fn<WorkflowFallbackDecideBatch>(async (entry, states, questions) =>
+      states.map(() => ({ [Object.keys(questions)[0]!]: { choice: 'invoice', confidence: 0.95 } })))
+
+    const result = await runWorkflow(
+      fallbackGraph([{ type: 'ai', model: '' }]),
+      item(),
+      decideWith({ choice: 'invoice', confidence: 0.5 }),
+      { fallback }
+    )
+
+    const step = result.path.find(candidate => candidate.nodeId === 'kind')!
+    expect(step.output).toBe('invoice')
+    expect(step.source).toBe('ai')
+    expect(step.answer).toEqual({ choice: 'invoice', confidence: 0.95 })
+    expect(step.attempts).toEqual([{ source: 'engine', output: 'other', answer: { choice: 'invoice', confidence: 0.5 } }])
+    expect(result.actions).toHaveLength(1)
+    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(fallback.mock.calls[0]![0]).toEqual({ type: 'ai', model: '' })
+  })
+
+  it('pauses with a review when the AI is unsure too and a human check follows', async () => {
+    const fallback = vi.fn<WorkflowFallbackDecideBatch>(async (entry, states, questions) =>
+      states.map(() => ({ [Object.keys(questions)[0]!]: { choice: 'invoice', confidence: 0.5 } })))
+
+    const result = await runWorkflow(
+      fallbackGraph([{ type: 'ai', model: '' }, { type: 'human' }]),
+      item(),
+      decideWith({ choice: 'invoice', confidence: 0.4 }),
+      { fallback }
+    )
+
+    expect(result.review).toBe('kind')
+    expect(result.actions).toEqual([])
+    const step = result.path.at(-1)!
+    expect(step.output).toBe('review')
+    expect(step.attempts).toEqual([
+      { source: 'engine', output: 'other', answer: { choice: 'invoice', confidence: 0.4 } },
+      { source: 'ai', output: 'other', answer: { choice: 'invoice', confidence: 0.5 } }
+    ])
+    expect(step.review).toEqual({
+      instructions: 'What kind of mail is this?',
+      outputs: ['invoice', 'receipt', 'other'],
+      options: { invoice: 'An invoice', receipt: 'A receipt' }
+    })
+  })
+
+  it('records an unavailable AI fallback as an attempt and moves to the next one', async () => {
+    const fallback = vi.fn<WorkflowFallbackDecideBatch>(async () => {
+      throw new FallbackUnavailableError('No AI service is set up')
+    })
+
+    const result = await runWorkflow(
+      fallbackGraph([{ type: 'ai', model: '' }, { type: 'human' }]),
+      item(),
+      decideWith({ choice: 'invoice', confidence: 0.4 }),
+      { fallback }
+    )
+
+    expect(result.review).toBe('kind')
+    const step = result.path.at(-1)!
+    expect(step.attempts).toEqual([
+      { source: 'engine', output: 'other', answer: { choice: 'invoice', confidence: 0.4 } },
+      { source: 'ai', output: 'other', error: 'No AI service is set up' }
+    ])
+  })
+
+  it('skips an AI fallback that cannot run when no fallback batch is provided', async () => {
+    const result = await runWorkflow(
+      fallbackGraph([{ type: 'ai', model: '' }]),
+      item(),
+      decideWith({ choice: 'invoice', confidence: 0.4 })
+    )
+
+    const step = result.path.find(candidate => candidate.nodeId === 'kind')!
+    expect(step.output).toBe('other')
+    expect(step.source).toBe('ai')
+    expect(step.attempts).toEqual([
+      { source: 'engine', output: 'other', answer: { choice: 'invoice', confidence: 0.4 } }
+    ])
+  })
+
+  it('takes the other edge once the whole chain was unsure', async () => {
+    const fallback = vi.fn<WorkflowFallbackDecideBatch>(async (entry, states, questions) =>
+      states.map(() => ({ [Object.keys(questions)[0]!]: { choice: 'receipt', confidence: 0.4 } })))
+
+    const result = await runWorkflow(
+      fallbackGraph([{ type: 'ai', model: '' }]),
+      item(),
+      decideWith({ choice: 'invoice', confidence: 0.5 }),
+      { fallback }
+    )
+
+    const step = result.path.find(candidate => candidate.nodeId === 'kind')!
+    expect(step.output).toBe('other')
+    expect(step.source).toBe('ai')
+    expect(step.attempts).toEqual([{ source: 'engine', output: 'other', answer: { choice: 'invoice', confidence: 0.5 } }])
+    expect(result.actions).toEqual([])
+  })
+
+  it('takes a preset without asking and resumes the walk', async () => {
+    const fallback = vi.fn<WorkflowFallbackDecideBatch>()
+    const decide = vi.fn(decideWith({ choice: 'invoice', confidence: 0.9 }))
+    const attempts: DecisionAttempt[] = [{ source: 'engine', output: 'other', answer: { choice: 'invoice', confidence: 0.4 } }]
+
+    const result = await runWorkflow(
+      fallbackGraph([{ type: 'human' }]),
+      item(),
+      decide,
+      { fallback, preset: { kind: { output: 'invoice', source: 'human', attempts } } }
+    )
+
+    const step = result.path.find(candidate => candidate.nodeId === 'kind')!
+    expect(step.output).toBe('invoice')
+    expect(step.source).toBe('human')
+    expect(step.attempts).toEqual(attempts)
+    expect(result.actions).toHaveLength(1)
+    expect(decide).not.toHaveBeenCalled()
+    expect(fallback).not.toHaveBeenCalled()
+  })
+
+  it('batches one AI fallback call per (model, question) for a wave of items', async () => {
+    const calls: Array<{ fallback: DecisionFallback, states: string[] }> = []
+    const fallback = vi.fn<WorkflowFallbackDecideBatch>(async (entry, states, questions) => {
+      calls.push({ fallback: entry, states })
+      return states.map(() => ({ [Object.keys(questions)[0]!]: { choice: 'invoice', confidence: 0.95 } }))
+    })
+
+    const batchItems = Array.from({ length: 3 }, (_, index) => ({
+      ...item({ subject: 'Invoice' }, `state ${index}`),
+      key: `INBOX|${index}|m${index}`,
+      uid: index
+    }))
+
+    const results = await runWorkflowBatch(
+      fallbackGraph([{ type: 'ai', model: 'svc:gpt' }]),
+      batchItems,
+      async (states, questions) => states.map(() => ({ [Object.keys(questions)[0]!]: { choice: 'invoice', confidence: 0.4 } })),
+      { fallback }
+    )
+
+    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(calls[0]!.fallback).toEqual({ type: 'ai', model: 'svc:gpt' })
+    expect(calls[0]!.states).toEqual(['state 0', 'state 1', 'state 2'])
+    expect(results.every(result => result.path.some(step => step.nodeId === 'kind' && step.source === 'ai'))).toBe(true)
+  })
+
+  it('rejects a human fallback that is not the last entry', () => {
+    const graph = fallbackGraph([{ type: 'human' }, { type: 'ai', model: '' }])
+    expect(validateWorkflow(graph).some(error => error.message.includes('Nothing after a human check'))).toBe(true)
   })
 })

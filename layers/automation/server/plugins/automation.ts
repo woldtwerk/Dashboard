@@ -16,6 +16,14 @@ export default defineNitroPlugin(() => {
     defaultStyle: 'in-app'
   })
 
+  registerNotificationCategory({
+    id: 'automation-notify',
+    domain: 'automation',
+    label: 'Workflow notifications',
+    description: 'A workflow sends a notification, optionally with a pop-up.',
+    defaultStyle: 'both'
+  })
+
   useDomainEventBus().subscribe((event) => {
     if (event.type !== 'changed') {
       return

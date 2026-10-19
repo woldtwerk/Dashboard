@@ -28,7 +28,7 @@ export const automationRuns = sqliteTable('automation_runs', {
   path: text('path', { mode: 'json' }).$type<WorkflowPathStep[]>().notNull(),
   /** The engine's answer per decision node */
   answers: text('answers', { mode: 'json' }).$type<Record<string, DecisionAnswer>>().notNull(),
-  outcome: text('outcome', { enum: ['suggested', 'applied', 'failed', 'undone', 'skipped'] })
+  outcome: text('outcome', { enum: ['suggested', 'applied', 'failed', 'undone', 'skipped', 'review'] })
     .$type<AutomationOutcome>().notNull(),
   /** The actions the workflow planned; a suggestion carries them until it is applied */
   actions: text('actions', { mode: 'json' }).$type<PlannedAction[]>().notNull(),
@@ -36,7 +36,7 @@ export const automationRuns = sqliteTable('automation_runs', {
   applied: text('applied', { mode: 'json' }).$type<AppliedAction[]>().notNull(),
   error: text('error'),
   /** A user's reaction; the labelled examples the corrections export reads */
-  feedback: text('feedback', { enum: ['accepted', 'rejected'] }).$type<AutomationFeedback>(),
+  feedback: text('feedback', { enum: ['accepted', 'rejected', 'answered'] }).$type<AutomationFeedback>(),
   at: integer('at', { mode: 'timestamp_ms' }).notNull()
 }, table => [
   index('automation_runs_at_idx').on(table.at),

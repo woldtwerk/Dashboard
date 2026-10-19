@@ -2,7 +2,11 @@ import type {
   AutomationDomain,
   AutomationItem,
   DecisionAnswer,
+  DecisionAttempt,
+  DecisionFallback,
   DecisionQuestion,
+  DecisionReview,
+  DecisionSource,
   PlannedAction,
   WorkflowGraph,
   WorkflowNode,
@@ -10,7 +14,8 @@ import type {
   WorkflowPathStep
 } from './types/automation'
 import { CHOICE_OTHER } from './types/automation'
-import { matchesConditions } from './automation'
+import { isGenericAction, matchesConditions } from './automation'
+import { BUILTIN_VARIABLES, extractActionError, templateVariables } from './extractors'
 
 /** A decision engine caller; the automation layer injects Laya through this */
 export type WorkflowDecide = (state: string, questions: Record<string, DecisionQuestion>) => Promise<Record<string, DecisionAnswer>>
@@ -22,6 +27,50 @@ export type WorkflowDecide = (state: string, questions: Record<string, DecisionQ
  */
 export type WorkflowDecideBatch = (states: string[], questions: Record<string, DecisionQuestion>) => Promise<Array<Record<string, DecisionAnswer>>>
 
+/**
+ * The batch form of a fallback: the same question is asked about many states in one
+ * call. The automation layer builds it from the registered fallback engine, so a
+ * wave of items at one AI fallback costs one call per (model, question).
+ */
+export type WorkflowFallbackDecideBatch = (
+  fallback: Extract<DecisionFallback, { type: 'ai' }>,
+  states: string[],
+  questions: Record<string, DecisionQuestion>
+) => Promise<Array<Record<string, DecisionAnswer>>>
+
+/**
+ * A fallback cannot answer at all (no engine registered, no AI service configured).
+ * The walk records it as an attempt and moves on to the next fallback instead of
+ * failing the item, which a transient provider error still does.
+ */
+export class FallbackUnavailableError extends Error {
+  constructor(message = 'No AI fallback is configured') {
+    super(message)
+    this.name = 'FallbackUnavailableError'
+  }
+}
+
+/** An answer a resumed walk takes without asking, e.g. the human's answer to a paused node */
+export interface PresetDecision {
+  output: string
+  source: DecisionSource
+  answer?: DecisionAnswer
+  attempts?: DecisionAttempt[]
+}
+
+export interface WorkflowBatchOptions {
+  /** Answers an unsure node's AI fallbacks; absent when no AI layer is installed */
+  fallback?: WorkflowFallbackDecideBatch
+  /** Answers keyed by node id; a preset is taken without asking (resume path) */
+  preset?: Record<string, PresetDecision>
+  /** Called before each batch call with the node asked and how many items wait on it */
+  onDecide?: (nodeId: string, items: number) => void
+  /** Called once per item as soon as its walk ends, with its index in `items` */
+  onItemDone?: (index: number, result: WorkflowBatchResult) => void
+  /** Checked before each batch call; an aborted walk throws the signal's reason */
+  signal?: AbortSignal
+}
+
 export interface WorkflowValidationError {
   /** The node the error belongs to, when it is node-local */
   nodeId?: string
@@ -32,6 +81,8 @@ export interface WorkflowResult {
   path: WorkflowPathStep[]
   answers: Record<string, DecisionAnswer>
   actions: PlannedAction[]
+  /** The decision node that paused the walk for a human, when one did */
+  review?: string
 }
 
 /** One item's walk result; `error` is set when a batch decision call failed for it */
@@ -39,8 +90,10 @@ export interface WorkflowBatchResult extends WorkflowResult {
   error?: string
 }
 
-const MAIL_ACTIONS = new Set(['move-to', 'label', 'mark-read', 'star'])
-const DOCUMENT_ACTIONS = new Set(['add-tag', 'set-correspondent', 'set-type'])
+/** The mail actions; the schema and the tests walk the same list */
+export const MAIL_ACTIONS = new Set(['move-to', 'label', 'mark-read', 'star', 'trash'])
+/** The document actions; the schema and the tests walk the same list */
+export const DOCUMENT_ACTIONS = new Set(['add-tag', 'set-correspondent', 'set-type'])
 
 /** The output handles a node offers; the UI draws one handle per entry */
 export function nodeOutputs(node: WorkflowNode): string[] {
@@ -71,22 +124,48 @@ export function questionForNode(node: Extract<WorkflowNode, { type: 'decision' }
 
 /** The output a decision node takes for one answer; the threshold decides `other`/`unsure` */
 export function decisionOutput(data: Extract<WorkflowNode, { type: 'decision' }>['data'], answer: DecisionAnswer | undefined): string {
+  return decisionVerdict(data, answer).output
+}
+
+/**
+ * The output a decision node takes for one answer and whether the answer was sure
+ * enough for it. A choice is sure when it names a real option and reaches that
+ * option's threshold; a yes/no question is sure when P(true) or P(false) reaches
+ * its threshold. A sure answer's output is the option / `yes` / `no`; an unsure
+ * one's is `other` or `unsure`.
+ */
+export function decisionVerdict(
+  data: Extract<WorkflowNode, { type: 'decision' }>['data'],
+  answer: DecisionAnswer | undefined
+): { output: string, sure: boolean } {
   if (data.question === 'choice') {
     const choice = answer?.choice
     if (choice && choice in data.options && answer!.confidence >= (data.thresholds[choice] ?? 0)) {
-      return choice
+      return { output: choice, sure: true }
     }
-    return CHOICE_OTHER
+    return { output: CHOICE_OTHER, sure: false }
   }
 
   const yes = answer?.yes
   if (yes === undefined) {
-    return 'unsure'
+    return { output: 'unsure', sure: false }
   }
   if (yes >= data.thresholds.yes) {
-    return 'yes'
+    return { output: 'yes', sure: true }
   }
-  return (1 - yes) >= data.thresholds.no ? 'no' : 'unsure'
+  if ((1 - yes) >= data.thresholds.no) {
+    return { output: 'no', sure: true }
+  }
+  return { output: 'unsure', sure: false }
+}
+
+/** What a paused decision asks the user: the node's instructions and its outputs */
+export function reviewForNode(node: Extract<WorkflowNode, { type: 'decision' }>): DecisionReview {
+  return {
+    instructions: node.data.instructions,
+    outputs: nodeOutputs(node),
+    options: node.data.question === 'choice' ? { ...node.data.options } : undefined
+  }
 }
 
 function outputCount(edges: WorkflowGraph['edges'], nodeId: string, output: string): number {
@@ -123,6 +202,15 @@ export function validateWorkflow(graph: WorkflowGraph, domain?: AutomationDomain
     errors.push({ message: `A workflow needs exactly one trigger, found ${triggers.length}` })
   }
 
+  // Every variable an extract node defines anywhere in the graph; a notify may use
+  // it regardless of whether that node sits before it on every path.
+  const extracted = new Set<string>()
+  for (const node of graph.nodes) {
+    if (node.type === 'action' && node.data.action.type === 'extract' && !extractActionError(node.data.action)) {
+      extracted.add(node.data.action.variable)
+    }
+  }
+
   for (const node of graph.nodes) {
     if (node.type === 'decision' && node.data.question === 'choice') {
       if (!Object.keys(node.data.options).length) {
@@ -141,9 +229,15 @@ export function validateWorkflow(graph: WorkflowGraph, domain?: AutomationDomain
         }
       }
     }
+    if (node.type === 'decision') {
+      const fallbacks = node.data.fallbacks ?? []
+      if (fallbacks.some((fallback, index) => fallback.type === 'human' && index < fallbacks.length - 1)) {
+        errors.push({ nodeId: node.id, message: 'Nothing after a human check is ever reached' })
+      }
+    }
     if (node.type === 'action' && domain) {
       const allowed = domain === 'mail' ? MAIL_ACTIONS : DOCUMENT_ACTIONS
-      if (!allowed.has(node.data.action.type)) {
+      if (!isGenericAction(node.data.action) && !allowed.has(node.data.action.type)) {
         errors.push({ nodeId: node.id, message: `Action "${node.data.action.type}" does not belong to the ${domain} domain` })
       }
     }
@@ -159,6 +253,22 @@ export function validateWorkflow(graph: WorkflowGraph, domain?: AutomationDomain
       }
       if (action.type === 'set-type' && !isPositiveId(action.documentType)) {
         errors.push({ nodeId: node.id, message: 'The document type action needs a document type' })
+      }
+      if (action.type === 'extract') {
+        const error = extractActionError(action)
+        if (error) {
+          errors.push({ nodeId: node.id, message: error })
+        }
+      }
+      if (action.type === 'notify') {
+        const text = [action.title, action.body, action.modal?.title, action.modal?.text]
+          .filter((value): value is string => typeof value === 'string')
+          .join('\n')
+        for (const variable of templateVariables(text)) {
+          if (!(BUILTIN_VARIABLES as readonly string[]).includes(variable) && !extracted.has(variable)) {
+            errors.push({ nodeId: node.id, message: `{{${variable}}} is never extracted` })
+          }
+        }
       }
     }
   }
@@ -232,22 +342,118 @@ export function createDefaultGraph(domain: AutomationDomain, mailbox = 'INBOX'):
   }
 }
 
-export interface WorkflowRunOptions {
+export interface WorkflowRunOptions extends WorkflowBatchOptions {
   /** Called for each decision node reached; useful for progress or per-node answers */
   onAnswer?: (nodeId: string, answer: DecisionAnswer | undefined) => void
+}
+
+/** The decision node one item is currently answering, across the waves of a batch walk */
+interface PendingDecision {
+  nodeId: string
+  question: DecisionQuestion
+  /** The question's shape; the primary answer is cached under it */
+  hash: string
+  /** 0 = the node's own engine, 1.. = the fallback at that index */
+  stage: number
+  /** The unsure answers the walk moved past, in order */
+  attempts: DecisionAttempt[]
 }
 
 interface WalkState {
   item: AutomationItem
   node: WorkflowNode | undefined
   steps: number
+  /** The node the last step counted, so a wave that resumes the same decision does not count again */
+  lastNodeId?: string
   done: boolean
   path: WorkflowPathStep[]
   answers: Record<string, DecisionAnswer>
-  /** Answers already received, keyed by the question's shape, so a repeated question is not asked twice */
+  /** Answers already received, keyed by stage and question shape, so a repeated question is not asked twice */
   cache: Map<string, DecisionAnswer | undefined>
+  /** Stage keys a fallback could not answer at all, with the reason; skipped on the next pass */
+  unavailable: Map<string, string>
+  decision?: PendingDecision
   actions: PlannedAction[]
+  /** The decision node that paused the walk for a human */
+  review?: string
   error?: string
+}
+
+/** What answering the current stage of a decision produced */
+type StageOutcome
+  = | { kind: 'ask', cacheKey: string, question: DecisionQuestion, fallback?: Extract<DecisionFallback, { type: 'ai' }> }
+    | { kind: 'advance' }
+    | { kind: 'done', output: string, source: DecisionSource, answer?: DecisionAnswer, attempts: DecisionAttempt[] }
+    | { kind: 'review', review: DecisionReview }
+
+/** The cache key of a stage: the primary engine, or one AI fallback and its model */
+function stageKey(stage: number, fallback: DecisionFallback | undefined, hash: string): string {
+  if (stage === 0 || !fallback) {
+    return `engine|${hash}`
+  }
+  return `ai|${fallback.type === 'ai' ? fallback.model ?? '' : ''}|${hash}`
+}
+
+/**
+ * The next thing to do at a decision node: ask the current stage, move to the next
+ * one, finish on a sure answer (or an exhausted chain), or pause for a human.
+ */
+function stageOutcome(state: WalkState, decision: PendingDecision, node: Extract<WorkflowNode, { type: 'decision' }>): StageOutcome {
+  const data = node.data
+  const fallbacks = data.fallbacks ?? []
+
+  if (decision.stage > fallbacks.length) {
+    // Every fallback was unsure; the chain's last attempt names the output, the
+    // attempts before it stay in the step's chain
+    const last = decision.attempts.at(-1)
+    return {
+      kind: 'done',
+      output: last?.output ?? decisionVerdict(data, undefined).output,
+      source: last?.source ?? 'engine',
+      answer: last?.answer,
+      attempts: decision.attempts.slice(0, -1)
+    }
+  }
+
+  const fallback = decision.stage === 0 ? undefined : fallbacks[decision.stage - 1]
+  const key = stageKey(decision.stage, fallback, decision.hash)
+
+  if (fallback?.type === 'human') {
+    return { kind: 'review', review: reviewForNode(node) }
+  }
+
+  // A fallback that cannot answer is recorded and skipped, not fatal
+  const unavailable = state.unavailable.get(key)
+  if (unavailable !== undefined) {
+    decision.attempts.push({
+      source: 'ai',
+      output: decisionVerdict(data, undefined).output,
+      error: unavailable
+    })
+    decision.stage++
+    return { kind: 'advance' }
+  }
+
+  if (!state.cache.has(key)) {
+    return {
+      kind: 'ask',
+      cacheKey: key,
+      question: decision.question,
+      fallback: fallback?.type === 'ai' ? fallback : undefined
+    }
+  }
+
+  const answer = state.cache.get(key)
+  const verdict = decisionVerdict(data, answer)
+  const source: DecisionSource = decision.stage === 0 ? 'engine' : 'ai'
+
+  if (verdict.sure) {
+    return { kind: 'done', output: verdict.output, source, answer, attempts: [...decision.attempts] }
+  }
+
+  decision.attempts.push({ source, output: verdict.output, answer })
+  decision.stage++
+  return { kind: 'advance' }
 }
 
 /**
@@ -256,15 +462,23 @@ interface WalkState {
  * item waiting on the same question. The per-item walk stays lazy (the path depends
  * on earlier answers); a missing edge ends an item's walk and a failed batch call
  * marks the items that were waiting on it with `error` without failing the others.
+ *
+ * A decision node that is unsure hands the item to its fallbacks in order (an AI
+ * model, then a human); a human fallback pauses the walk with `review`, and the
+ * caller resumes it later with the human's answer as a preset.
  */
 export async function runWorkflowBatch(
   graph: WorkflowGraph,
   items: AutomationItem[],
-  decideBatch: WorkflowDecideBatch
+  decideBatch: WorkflowDecideBatch,
+  options: WorkflowBatchOptions = {}
 ): Promise<WorkflowBatchResult[]> {
   const byId = new Map(graph.nodes.map(node => [node.id, node]))
   const trigger = graph.nodes.find(node => node.type === 'trigger')
-  const limit = graph.nodes.length + 1
+  // Every decision node costs one visit per stage (its engine plus each fallback)
+  const fallbackCount = graph.nodes.reduce((total, node) =>
+    total + (node.type === 'decision' ? node.data.fallbacks?.length ?? 0 : 0), 0)
+  const limit = graph.nodes.length + fallbackCount + 1
   const states: WalkState[] = items.map(item => ({
     item,
     node: trigger,
@@ -273,17 +487,49 @@ export async function runWorkflowBatch(
     path: [],
     answers: {},
     cache: new Map(),
+    unavailable: new Map(),
     actions: []
   }))
 
+  const resultOf = (state: WalkState): WorkflowBatchResult => ({
+    path: state.path,
+    answers: state.answers,
+    actions: state.actions,
+    review: state.review,
+    error: state.error
+  })
+
+  // Every item is reported once, as soon as its walk ends
+  const reported = new Set<number>()
+  const reportDone = () => {
+    if (!options.onItemDone) {
+      return
+    }
+    states.forEach((state, index) => {
+      if (state.done && !reported.has(index)) {
+        reported.add(index)
+        options.onItemDone!(index, resultOf(state))
+      }
+    })
+  }
+
   for (;;) {
     // Advance every item to its next unanswered question (or its end)
-    const pending = new Map<string, { question: DecisionQuestion, waiting: Array<{ state: WalkState, nodeId: string, hash: string }> }>()
+    const pending = new Map<string, {
+      nodeId: string
+      hash: string
+      question: DecisionQuestion
+      fallback?: Extract<DecisionFallback, { type: 'ai' }>
+      waiting: Array<{ state: WalkState, cacheKey: string }>
+    }>()
 
     for (const state of states) {
       while (!state.done && state.node) {
         const node = state.node
-        state.steps++
+        if (state.lastNodeId !== node.id) {
+          state.steps++
+          state.lastNodeId = node.id
+        }
 
         if (state.steps > limit) {
           state.error ??= 'The walk did not terminate'
@@ -298,23 +544,79 @@ export async function runWorkflowBatch(
         }
 
         if (node.type === 'decision') {
-          const question = questionForNode(node)
-          const hash = JSON.stringify(question)
+          const preset = options.preset?.[node.id]
+          if (preset && !state.decision) {
+            state.path.push({
+              nodeId: node.id,
+              output: preset.output,
+              answer: preset.answer,
+              source: preset.source,
+              attempts: preset.attempts?.length ? preset.attempts : undefined
+            })
+            if (preset.answer) {
+              state.answers[node.id] = preset.answer
+            }
+            state.node = follow(graph, byId, node.id, preset.output)
+            state.done = !state.node
+            continue
+          }
 
-          if (!state.cache.has(hash)) {
-            const group = pending.get(hash) ?? { question, waiting: [] }
-            group.waiting.push({ state, nodeId: node.id, hash })
-            pending.set(hash, group)
+          const question = questionForNode(node)
+          const decision = state.decision ?? {
+            nodeId: node.id,
+            question,
+            hash: JSON.stringify(question),
+            stage: 0,
+            attempts: []
+          }
+          state.decision = decision
+
+          const outcome = stageOutcome(state, decision, node)
+
+          if (outcome.kind === 'ask') {
+            const group = pending.get(outcome.cacheKey) ?? {
+              nodeId: node.id,
+              hash: decision.hash,
+              question: outcome.question,
+              fallback: outcome.fallback,
+              waiting: []
+            }
+            group.waiting.push({ state, cacheKey: outcome.cacheKey })
+            pending.set(outcome.cacheKey, group)
             break
           }
 
-          const answer = state.cache.get(hash)
-          if (answer) {
-            state.answers[node.id] = answer
+          if (outcome.kind === 'advance') {
+            continue
           }
-          const output = decisionOutput(node.data, answer)
-          state.path.push({ nodeId: node.id, output, answer })
-          state.node = follow(graph, byId, node.id, output)
+
+          if (outcome.kind === 'review') {
+            // A paused walk keeps its path, but its planned actions are dropped: the
+            // resume recomputes them from the human's answer
+            state.path.push({
+              nodeId: node.id,
+              output: 'review',
+              attempts: decision.attempts.length ? decision.attempts : undefined,
+              review: outcome.review
+            })
+            state.review = node.id
+            state.actions = []
+            state.done = true
+            break
+          }
+
+          if (outcome.answer) {
+            state.answers[node.id] = outcome.answer
+          }
+          state.path.push({
+            nodeId: node.id,
+            output: outcome.output,
+            answer: outcome.answer,
+            source: outcome.source,
+            attempts: outcome.attempts.length ? outcome.attempts : undefined
+          })
+          state.decision = undefined
+          state.node = follow(graph, byId, node.id, outcome.output)
           state.done = !state.node
           continue
         }
@@ -333,36 +635,65 @@ export async function runWorkflowBatch(
       }
     }
 
+    reportDone()
+
     if (!pending.size) {
       break
     }
 
-    // One batch call per question per wave; sequential so several nodes do not
-    // overload the single-worker inference server
+    // One batch call per stage per question per wave; sequential so several nodes do
+    // not overload the single-worker inference server
     for (const group of pending.values()) {
-      const questions = { [group.waiting[0]!.hash]: group.question }
+      options.signal?.throwIfAborted()
+      options.onDecide?.(group.nodeId, group.waiting.length)
+      const questions = { [group.hash]: group.question }
       const batchStates = group.waiting.map(entry => entry.state.item.state)
       let results: Array<Record<string, DecisionAnswer>> | undefined
       let failure: unknown
+      let unavailable: unknown
 
       try {
-        results = await decideBatch(batchStates, questions)
+        if (group.fallback) {
+          results = options.fallback
+            ? await options.fallback(group.fallback, batchStates, questions)
+            : undefined
+          if (!options.fallback) {
+            unavailable = new FallbackUnavailableError()
+          }
+        } else {
+          results = await decideBatch(batchStates, questions)
+        }
       } catch (error) {
-        failure = error
+        if (group.fallback && error instanceof FallbackUnavailableError) {
+          unavailable = error
+        } else {
+          failure = error
+        }
       }
 
       group.waiting.forEach((entry, index) => {
         if (failure !== undefined) {
-          entry.state.error ??= failure instanceof Error ? failure.message : String(failure)
+          entry.state.error ??= failureMessage(failure)
           entry.state.done = true
           return
         }
-        entry.state.cache.set(entry.hash, results?.[index]?.[entry.hash])
+        if (unavailable !== undefined) {
+          entry.state.unavailable.set(entry.cacheKey, failureMessage(unavailable))
+          return
+        }
+        entry.state.cache.set(entry.cacheKey, results?.[index]?.[group.hash])
       })
+      // Items whose batch call failed end here
+      reportDone()
     }
   }
 
-  return states.map(state => ({ path: state.path, answers: state.answers, actions: state.actions, error: state.error }))
+  return states.map(resultOf)
+}
+
+/** The message of a thrown value, for an attempt's `error` */
+function failureMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function follow(graph: WorkflowGraph, byId: Map<string, WorkflowNode>, nodeId: string, output: string): WorkflowNode | undefined {
@@ -380,14 +711,19 @@ export async function runWorkflow(
   decide: WorkflowDecide,
   options: WorkflowRunOptions = {}
 ): Promise<WorkflowResult> {
-  const [result] = await runWorkflowBatch(graph, [item], async (states, questions) => [await decide(states[0]!, questions)])
+  const [result] = await runWorkflowBatch(
+    graph,
+    [item],
+    async (states, questions) => [await decide(states[0]!, questions)],
+    { fallback: options.fallback, preset: options.preset }
+  )
   for (const step of result?.path ?? []) {
     options.onAnswer?.(step.nodeId, step.answer)
   }
   if (result?.error) {
     throw new Error(result.error)
   }
-  return { path: result?.path ?? [], answers: result?.answers ?? {}, actions: result?.actions ?? [] }
+  return { path: result?.path ?? [], answers: result?.answers ?? {}, actions: result?.actions ?? [], review: result?.review }
 }
 
 /** Asks every decision node of the graph about one text, in one batch call */

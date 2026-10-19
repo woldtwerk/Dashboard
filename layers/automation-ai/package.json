@@ -1,0 +1,18 @@
+{
+  "name": "@allmight/automation-ai",
+  "private": true,
+  "type": "module",
+  "description": "AI model fallback for automation decision nodes",
+  "main": "./nuxt.config.ts",
+  "dependencies": {
+    "@allmight/ai": "workspace:*",
+    "@allmight/automation": "workspace:*",
+    "@allmight/core": "workspace:*",
+    "@nuxt/ui": "catalog:",
+    "ai": "catalog:",
+    "zod": "catalog:"
+  },
+  "peerDependencies": {
+    "nuxt": "catalog:"
+  }
+}

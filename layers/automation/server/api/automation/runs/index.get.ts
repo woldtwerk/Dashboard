@@ -3,7 +3,7 @@ import { z } from 'zod'
 
 const querySchema = z.object({
   domain: z.enum(['mail', 'documents']).optional(),
-  outcome: z.enum(['suggested', 'applied', 'failed', 'undone', 'skipped']).optional(),
+  outcome: z.enum(['suggested', 'applied', 'failed', 'undone', 'skipped', 'review']).optional(),
   since: z.iso.datetime().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50)
 })

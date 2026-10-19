@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm'
+import { and, count, desc, eq, gte, inArray, sql } from 'drizzle-orm'
 import { createError } from 'nuxt/server'
 import type {
   AppliedAction,
@@ -103,6 +103,9 @@ export async function getRun(id: string): Promise<AutomationRun> {
 
 export async function updateRun(id: string, patch: {
   outcome?: AutomationOutcome
+  path?: WorkflowPathStep[]
+  answers?: Record<string, DecisionAnswer>
+  actions?: PlannedAction[]
   applied?: AppliedAction[]
   feedback?: AutomationFeedback | null
   error?: string | null
@@ -158,6 +161,19 @@ export async function listRuns(query: AutomationRunQuery): Promise<AutomationRun
     .limit(query.limit)
 
   return rows.map(toAutomationRun)
+}
+
+/**
+ * How many runs wait for a human answer. One count on the indexed outcome column,
+ * so the Activity badges can ask for it on every page without the run payload.
+ */
+export async function countRunsAwaitingReview(): Promise<number> {
+  const [row] = await (await automationCacheDb())
+    .select({ count: count() })
+    .from(automationRuns)
+    .where(eq(automationRuns.outcome, 'review'))
+
+  return row?.count ?? 0
 }
 
 /** The runs a user reacted to; the labelled examples a fine-tune export reads */

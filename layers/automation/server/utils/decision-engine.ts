@@ -1,5 +1,5 @@
 import { createError } from 'nuxt/server'
-import type { DecisionAnswer, DecisionQuestion } from '../../shared/types/automation'
+import type { DecisionAnswer, DecisionFallback, DecisionQuestion } from '../../shared/types/automation'
 
 /**
  * Port every decision engine implements. The engine answers typed questions about
@@ -38,4 +38,24 @@ function firstEngine(): DecisionEngineFactory | undefined {
     return factory
   }
   return undefined
+}
+
+// --- Fallbacks ------------------------------------------------------------
+
+/**
+ * A fallback engine answers the same question again when the primary engine is
+ * unsure, e.g. a cloud language model after the local one. Registered by a layer
+ * that knows how to talk to it; the automation layer only holds the registry.
+ */
+export type FallbackEngineFactory = (fallback: Extract<DecisionFallback, { type: 'ai' }>) => DecisionEngine
+
+const fallbackEngines = new Map<string, FallbackEngineFactory>()
+
+export function registerFallbackEngine(id: string, create: FallbackEngineFactory): void {
+  fallbackEngines.set(id, create)
+}
+
+/** The registered fallback engine, or undefined when no layer provides one */
+export function fallbackEngine(id: string): FallbackEngineFactory | undefined {
+  return fallbackEngines.get(id)
 }

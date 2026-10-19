@@ -1,5 +1,14 @@
-import type { AutomationAction, DecisionNodeData, WorkflowGraph, WorkflowNode } from '../../shared/types/automation'
+import type {
+  AutomationAction,
+  DecisionAttempt,
+  DecisionNodeData,
+  DecisionSource,
+  WorkflowGraph,
+  WorkflowNode,
+  WorkflowPathStep
+} from '../../shared/types/automation'
 import type { WorkflowValidationError } from '../../shared/workflow'
+import { BUILTIN_VARIABLES, isVariableName } from '../../shared/extractors'
 
 /** The data every custom Vue Flow node receives */
 export interface FlowNodeData {
@@ -60,6 +69,12 @@ export function actionSummary(action: AutomationAction): string {
       return 'Mark as read'
     case 'star':
       return 'Star'
+    case 'trash':
+      return 'Move to trash'
+    case 'extract':
+      return `Extract {{${action.variable}}}`
+    case 'notify':
+      return 'Send notification'
     case 'add-tag':
       return `Add tag #${action.tag}`
     case 'set-correspondent':
@@ -79,6 +94,12 @@ export function actionIcon(action: AutomationAction): string {
       return 'i-lucide-mail-open'
     case 'star':
       return 'i-lucide-star'
+    case 'trash':
+      return 'i-lucide-trash-2'
+    case 'extract':
+      return 'i-lucide-scan-text'
+    case 'notify':
+      return 'i-lucide-bell'
     case 'add-tag':
       return 'i-lucide-tag'
     case 'set-correspondent':
@@ -113,11 +134,29 @@ export function nodeSubtitle(node: WorkflowNode): string {
     }
     case 'decision':
       return node.data.instructions
-    case 'action':
-      return node.data.action.type
+    case 'action': {
+      const action = node.data.action
+      if (action.type === 'extract') {
+        return `${action.extractor === 'login-code' ? 'Login code' : 'Regex'} → {{${action.variable}}}`
+      }
+      if (action.type === 'notify') {
+        return action.title || 'Notification'
+      }
+      return action.type
+    }
     case 'end':
       return 'Stop'
   }
+}
+
+/** Every variable a template in this graph may use, without duplicates */
+export function availableVariables(graph: WorkflowGraph): string[] {
+  const extracted = graph.nodes.flatMap(node =>
+    node.type === 'action' && node.data.action.type === 'extract' && isVariableName(node.data.action.variable)
+      ? [node.data.action.variable]
+      : []
+  )
+  return [...new Set([...BUILTIN_VARIABLES, ...extracted])]
 }
 
 /** The threshold shown on a choice output, e.g. `Rechnung ≥ 0.80` */
@@ -148,6 +187,45 @@ export function outputLabel(node: WorkflowNode, output: string): string {
 
 export function formatThreshold(value: number): string {
   return Number.isFinite(value) ? value.toFixed(2) : '0.00'
+}
+
+// --- Decision chain -------------------------------------------------------
+
+/** How one answer source reads in the chain, e.g. `Laya 0.42 → AI 0.55 → you` */
+export function decisionSourceLabel(source: DecisionSource): string {
+  switch (source) {
+    case 'engine':
+      return 'Laya'
+    case 'ai':
+      return 'AI'
+    case 'human':
+      return 'you'
+  }
+}
+
+function attemptLabel(attempt: DecisionAttempt): string {
+  const label = decisionSourceLabel(attempt.source)
+  if (attempt.error) {
+    return `${label} unavailable`
+  }
+  if (attempt.answer && Number.isFinite(attempt.answer.confidence)) {
+    return `${label} ${attempt.answer.confidence.toFixed(2)}`
+  }
+  return label
+}
+
+/**
+ * The answers a decision step went through, in order, ending with who gave the one
+ * it took: `Laya 0.42 → AI 0.55 → you`. Empty when there is nothing to tell.
+ */
+export function decisionChainLabel(step: Pick<WorkflowPathStep, 'output' | 'source' | 'answer' | 'attempts'>): string {
+  const parts = (step.attempts ?? []).map(attemptLabel)
+  if (step.output === 'review') {
+    parts.push('you')
+  } else if (step.source) {
+    parts.push(attemptLabel({ source: step.source, output: step.output, answer: step.answer }))
+  }
+  return parts.join(' → ')
 }
 
 export function outputLabels(node: WorkflowNode): string[] {

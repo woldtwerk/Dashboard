@@ -1,8 +1,15 @@
 <script setup lang="ts">
 import type { MailFolders } from '#layers/mail/shared/types/mail'
 import type { DocumentsCorrespondent, DocumentsDocumentType, DocumentsTag } from '#layers/documents/shared/types/documents'
-import type { WorkflowEdge, WorkflowNode } from '../../../shared/types/automation'
+import type { DecisionFallback, ExtractAction, NotifyAction, NotifyModal, WorkflowEdge, WorkflowNode } from '../../../shared/types/automation'
 import type { WorkflowValidationError } from '../../../shared/workflow'
+import type { DecisionFallbackType } from '../../utils/decision-fallbacks'
+import {
+  addFallback,
+  decisionFallbackTypes,
+  moveFallback,
+  removeFallback
+} from '../../utils/decision-fallbacks'
 
 const props = defineProps<{
   node: WorkflowNode | null
@@ -10,6 +17,8 @@ const props = defineProps<{
   domain: 'mail' | 'documents'
   service: string | null
   errors: WorkflowValidationError[]
+  /** The `{{variables}}` a template may use in this graph, built-ins first */
+  variables?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -132,9 +141,10 @@ function setQuestionType(question: 'choice' | 'yesno') {
     return
   }
   const instructions = node.data.instructions
+  const fallbacks = node.data.fallbacks
   node.data = question === 'choice'
-    ? { question: 'choice', instructions, options: { invoice: 'An invoice' }, thresholds: { invoice: 0.8 } }
-    : { question: 'yesno', instructions, thresholds: { yes: 0.85, no: 0.85 } }
+    ? { question: 'choice', instructions, options: { invoice: 'An invoice' }, thresholds: { invoice: 0.8 }, fallbacks }
+    : { question: 'yesno', instructions, thresholds: { yes: 0.85, no: 0.85 }, fallbacks }
   commit()
 }
 
@@ -183,15 +193,31 @@ const MAIL_ACTION_TYPES = [
   { label: 'Move to folder', value: 'move-to' },
   { label: 'Add label', value: 'label' },
   { label: 'Mark as read', value: 'mark-read' },
-  { label: 'Star', value: 'star' }
+  { label: 'Star', value: 'star' },
+  { label: 'Move to trash', value: 'trash' }
 ]
 const DOCUMENT_ACTION_TYPES = [
   { label: 'Add tag', value: 'add-tag' },
   { label: 'Set correspondent', value: 'set-correspondent' },
   { label: 'Set document type', value: 'set-type' }
 ]
+const GENERIC_ACTION_TYPES = [
+  { label: 'Extract value', value: 'extract', icon: 'i-lucide-scan-text' },
+  { label: 'Send notification', value: 'notify', icon: 'i-lucide-bell' }
+]
 
-const actionTypes = computed(() => props.domain === 'mail' ? MAIL_ACTION_TYPES : DOCUMENT_ACTION_TYPES)
+const actionTypes = computed(() => props.domain === 'mail'
+  ? [...MAIL_ACTION_TYPES, ...GENERIC_ACTION_TYPES]
+  : [...DOCUMENT_ACTION_TYPES, ...GENERIC_ACTION_TYPES])
+
+const EXTRACT_SOURCES = [
+  { label: 'Body', value: 'text' },
+  { label: 'Subject', value: 'subject' }
+]
+const EXTRACTORS = [
+  { label: 'Login code', value: 'login-code' },
+  { label: 'Regex', value: 'regex' }
+]
 
 function setActionType(type: string) {
   const node = actionNode.value
@@ -202,8 +228,12 @@ function setActionType(type: string) {
     node.data.action = { type: 'move-to', folder: folders.value[0] ?? 'Archive' }
   } else if (type === 'label') {
     node.data.action = { type: 'label', label: '' }
-  } else if (type === 'mark-read' || type === 'star') {
+  } else if (type === 'mark-read' || type === 'star' || type === 'trash') {
     node.data.action = { type }
+  } else if (type === 'extract') {
+    node.data.action = { type: 'extract', variable: 'value', extractor: 'login-code' }
+  } else if (type === 'notify') {
+    node.data.action = { type: 'notify', title: '{{title}}' }
   } else if (type === 'add-tag') {
     node.data.action = { type: 'add-tag', tag: tags.value[0]?.id ?? 0 }
   } else if (type === 'set-correspondent') {
@@ -214,10 +244,115 @@ function setActionType(type: string) {
   commit()
 }
 
+/** The template hints this graph offers, built-ins plus every extract variable */
+const availableVariables = computed(() => props.variables ?? [])
+
+/** A chip label like `{{code}}`; built here so the template has no literal braces */
+function variableLabel(name: string): string {
+  return `{{${name}}}`
+}
+
+/** Turn the notification pop-up on with an empty text, or off again */
+function setNotifyModal(on: boolean) {
+  const node = actionNode.value
+  if (!node || node.data.action.type !== 'notify') {
+    return
+  }
+  node.data.action.modal = on ? { text: '', copy: false } : undefined
+  commit()
+}
+
+/** A typed patch of the extract action the inspector is editing */
+function setExtractField(patch: Partial<ExtractAction>) {
+  const current = action.value
+  if (current?.type !== 'extract') {
+    return
+  }
+  Object.assign(current, patch)
+  commit()
+}
+
+/** A typed patch of the notify action the inspector is editing */
+function setNotifyField(patch: Partial<NotifyAction>) {
+  const current = action.value
+  if (current?.type !== 'notify') {
+    return
+  }
+  Object.assign(current, patch)
+  commit()
+}
+
+/** A typed patch of the notify action's pop-up */
+function setNotifyModalField(patch: Partial<NotifyModal>) {
+  const current = action.value
+  if (current?.type !== 'notify' || !current.modal) {
+    return
+  }
+  Object.assign(current.modal, patch)
+  commit()
+}
+
+function setModalExpiry(value: string) {
+  const node = actionNode.value
+  if (!node || node.data.action.type !== 'notify' || !node.data.action.modal) {
+    return
+  }
+  const minutes = Number(value)
+  node.data.action.modal.expiresInMinutes = Number.isFinite(minutes) && minutes > 0 ? minutes : undefined
+  commit()
+}
+
 const folderItems = computed(() => folders.value.map(folder => ({ label: folder, value: folder })))
 const tagItems = computed(() => tags.value.map(tag => ({ label: tag.name, value: tag.id })))
 const correspondentItems = computed(() => correspondents.value.map(entry => ({ label: entry.name, value: entry.id })))
 const documentTypeItems = computed(() => documentTypes.value.map(type => ({ label: type.name, value: type.id })))
+
+// --- Fallbacks (when the engine is unsure) ---
+
+/** The fallback kinds a layer registered; `ai` only exists when the AI layer is installed */
+const fallbackTypes = ref<DecisionFallbackType[]>(decisionFallbackTypes())
+
+const addFallbackItems = computed(() => fallbackTypes.value.map(entry => ({
+  label: entry.label,
+  icon: entry.icon,
+  onSelect: () => addFallbackEntry(entry.type)
+})))
+
+/** The decision node's chain; a node always has a data object, so the list is never null */
+const fallbacks = computed<DecisionFallback[]>(() => decisionNode.value?.data.fallbacks ?? [])
+
+function fallbackType(type: DecisionFallback['type']): DecisionFallbackType | undefined {
+  return fallbackTypes.value.find(entry => entry.type === type)
+}
+
+/** The chain is the node's own data: mutate it and commit, as every other editor does */
+function setFallbacks(next: DecisionFallback[]) {
+  const node = decisionNode.value
+  if (!node) {
+    return
+  }
+  node.data.fallbacks = next.length ? next : undefined
+  commit()
+}
+
+function addFallbackEntry(type: DecisionFallback['type']) {
+  setFallbacks(addFallback(decisionNode.value?.data.fallbacks, type))
+}
+
+function removeFallbackEntry(index: number) {
+  setFallbacks(removeFallback(decisionNode.value?.data.fallbacks, index))
+}
+
+function moveFallbackEntry(index: number, delta: -1 | 1) {
+  setFallbacks(moveFallback(decisionNode.value?.data.fallbacks, index, delta))
+}
+
+/** An editor writes its own `model` (or another field) into the entry it was given */
+function updateFallbackEntry(index: number, entry: DecisionFallback) {
+  const next = [...(decisionNode.value?.data.fallbacks ?? [])]
+  next[index] = entry
+  setFallbacks(next)
+}
 </script>
 
 <template>
@@ -391,10 +526,9 @@ const documentTypeItems = computed(() => documentTypes.value.map(type => ({ labe
               />
             </div>
             <p class="text-xs text-muted">
-              The <code>other</code> output takes every answer below an option's threshold.
+              The <code>other</code> output takes every answer below an option's threshold once every fallback was unsure.
             </p>
           </template>
-
           <template v-if="yesnoData">
             <UFormField label="Yes at P(true) ≥">
               <div class="flex items-center gap-3">
@@ -423,9 +557,80 @@ const documentTypeItems = computed(() => documentTypes.value.map(type => ({ labe
               </div>
             </UFormField>
             <p class="text-xs text-muted">
-              Between the two, the answer is <code>unsure</code>.
+              Between the two, the answer is <code>unsure</code> once every fallback was unsure.
             </p>
           </template>
+
+          <!-- When unsure: the ordered fallback chain -->
+          <div class="space-y-2 border-t border-default pt-3">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-semibold text-highlighted">When unsure</span>
+              <UDropdownMenu :items="[addFallbackItems]">
+                <UButton
+                  label="Add fallback"
+                  icon="i-lucide-plus"
+                  size="xs"
+                  color="neutral"
+                  variant="soft"
+                  :disabled="!addFallbackItems.length"
+                />
+              </UDropdownMenu>
+            </div>
+
+            <ul v-if="fallbacks.length" class="space-y-2">
+              <li
+                v-for="(fallback, index) in fallbacks"
+                :key="`${fallback.type}-${index}`"
+                class="space-y-1.5 rounded-md border border-default p-2"
+              >
+                <div class="flex items-center gap-2">
+                  <UIcon :name="fallbackType(fallback.type)?.icon ?? 'i-lucide-help-circle'" class="size-4 shrink-0 text-muted" />
+                  <span class="min-w-0 flex-1 truncate text-xs font-medium text-highlighted">
+                    {{ fallbackType(fallback.type)?.label ?? fallback.type }}
+                  </span>
+                  <UButton
+                    icon="i-lucide-arrow-up"
+                    color="neutral"
+                    variant="ghost"
+                    size="xs"
+                    aria-label="Move fallback up"
+                    :disabled="index === 0"
+                    @click="moveFallbackEntry(index, -1)"
+                  />
+                  <UButton
+                    icon="i-lucide-arrow-down"
+                    color="neutral"
+                    variant="ghost"
+                    size="xs"
+                    aria-label="Move fallback down"
+                    :disabled="index === fallbacks.length - 1"
+                    @click="moveFallbackEntry(index, 1)"
+                  />
+                  <UButton
+                    icon="i-lucide-trash-2"
+                    color="error"
+                    variant="ghost"
+                    size="xs"
+                    aria-label="Remove fallback"
+                    @click="removeFallbackEntry(index)"
+                  />
+                </div>
+                <p v-if="fallbackType(fallback.type)?.description" class="text-[11px] text-muted">
+                  {{ fallbackType(fallback.type)!.description }}
+                </p>
+                <component
+                  :is="fallbackType(fallback.type)!.editor"
+                  v-if="fallbackType(fallback.type)?.editor"
+                  :model-value="fallback"
+                  @update:model-value="(entry: DecisionFallback) => updateFallbackEntry(index, entry)"
+                />
+              </li>
+            </ul>
+
+            <p class="text-xs text-muted">
+              Tried in order until one is sure; a human check pauses the run until you answer.
+            </p>
+          </div>
         </template>
 
         <!-- Action -->
@@ -438,6 +643,128 @@ const documentTypeItems = computed(() => documentTypes.value.map(type => ({ labe
               @update:model-value="value => setActionType(value as string)"
             />
           </UFormField>
+
+          <template v-if="action.type === 'extract'">
+            <UFormField label="Variable" description="Templates use it as {{name}}; lower-case letters, digits and _.">
+              <UInput
+                :model-value="action.variable"
+                placeholder="code"
+                class="w-full font-mono"
+                @update:model-value="value => setExtractField({ variable: String(value) })"
+              />
+            </UFormField>
+            <UFormField label="Extractor">
+              <USelect
+                v-model="action.extractor"
+                :items="EXTRACTORS"
+                class="w-full"
+                @update:model-value="commit"
+              />
+            </UFormField>
+            <UFormField
+              v-if="action.extractor === 'regex'"
+              label="Pattern"
+              description="Case-insensitive; the first capture group, or the whole match."
+            >
+              <UInput
+                :model-value="action.pattern ?? ''"
+                placeholder="\\b(\\d{6})\\b"
+                class="w-full font-mono"
+                @update:model-value="value => setExtractField({ pattern: String(value) })"
+              />
+            </UFormField>
+            <UFormField label="Read from">
+              <USelect
+                :model-value="action.source ?? 'text'"
+                :items="EXTRACT_SOURCES"
+                class="w-full"
+                @update:model-value="value => setExtractField({ source: value as 'text' | 'subject' })"
+              />
+            </UFormField>
+          </template>
+
+          <template v-if="action.type === 'notify'">
+            <UFormField label="Title">
+              <UInput
+                :model-value="action.title"
+                placeholder="Login code from {{from}}"
+                class="w-full"
+                @update:model-value="value => setNotifyField({ title: String(value) })"
+              />
+            </UFormField>
+            <UFormField label="Body">
+              <UTextarea
+                :model-value="action.body ?? ''"
+                :rows="2"
+                class="w-full"
+                @update:model-value="value => setNotifyField({ body: String(value) })"
+              />
+            </UFormField>
+
+            <div class="flex items-center justify-between">
+              <span class="text-sm font-medium text-highlighted">Show a pop-up</span>
+              <USwitch
+                :model-value="!!action.modal"
+                @update:model-value="setNotifyModal"
+              />
+            </div>
+
+            <template v-if="action.modal">
+              <UFormField label="Pop-up title">
+                <UInput
+                  :model-value="action.modal.title ?? ''"
+                  class="w-full"
+                  @update:model-value="value => setNotifyModalField({ title: String(value) })"
+                />
+              </UFormField>
+              <UFormField label="Pop-up text" description="Shown in a large monospace block when the copy button is on.">
+                <UTextarea
+                  :model-value="action.modal.text"
+                  :rows="3"
+                  class="w-full"
+                  @update:model-value="value => setNotifyModalField({ text: String(value) })"
+                />
+              </UFormField>
+              <div class="flex items-center justify-between">
+                <span class="text-sm font-medium text-highlighted">Copy button</span>
+                <USwitch
+                  :model-value="!!action.modal.copy"
+                  @update:model-value="value => setNotifyModalField({ copy: value })"
+                />
+              </div>
+              <UFormField label="Expires after (minutes)" description="Leave empty to keep the pop-up available.">
+                <UInput
+                  :model-value="action.modal.expiresInMinutes ? String(action.modal.expiresInMinutes) : ''"
+                  type="number"
+                  min="1"
+                  class="w-full"
+                  @update:model-value="value => setModalExpiry(String(value))"
+                />
+              </UFormField>
+            </template>
+
+            <p class="text-xs text-muted">
+              The title and body leave this machine through a desktop push, so keep secrets out of them. The pop-up text stays on the server and is fetched when it opens.
+            </p>
+          </template>
+
+          <div v-if="action.type === 'extract' || action.type === 'notify'" class="space-y-1">
+            <p class="text-xs font-medium text-muted">
+              Available variables
+            </p>
+            <div class="flex flex-wrap gap-1">
+              <UBadge
+                v-for="variable in availableVariables"
+                :key="variable"
+                size="sm"
+                variant="subtle"
+                color="neutral"
+                class="font-mono"
+              >
+                {{ variableLabel(variable) }}
+              </UBadge>
+            </div>
+          </div>
 
           <UFormField v-if="action.type === 'move-to'" label="Folder">
             <USelect

@@ -68,13 +68,52 @@ export type MailAction
     | { type: 'label', label: string }
     | { type: 'mark-read' }
     | { type: 'star' }
+    | { type: 'trash' }
 
 export type DocumentsAction
   = | { type: 'add-tag', tag: number }
     | { type: 'set-correspondent', correspondent: number }
     | { type: 'set-type', documentType: number }
 
-export type AutomationAction = MailAction | DocumentsAction
+/** Where an `extract` action reads its text from */
+export type ExtractSource = 'text' | 'subject'
+
+/** The built-in extractors; `regex` uses the action's own pattern */
+export type ExtractorType = 'login-code' | 'regex'
+
+/** Reads a value from the item into a run variable, e.g. a login code */
+export interface ExtractAction {
+  type: 'extract'
+  /** `[a-z][a-z0-9_]{0,31}`; templates address it as `{{variable}}` */
+  variable: string
+  extractor: ExtractorType
+  /** Required for `regex`; case-insensitive, first capture group or whole match */
+  pattern?: string
+  /** Defaults to `text` */
+  source?: ExtractSource
+}
+
+/** The optional pop-up a notification opens, shown by every open tab */
+export interface NotifyModal {
+  title?: string
+  text: string
+  copy?: boolean
+  /** Minutes after the run was recorded; omitted means it never expires */
+  expiresInMinutes?: number
+}
+
+/** Sends a notification; title, body and modal text are rendered from templates */
+export interface NotifyAction {
+  type: 'notify'
+  title: string
+  body?: string
+  modal?: NotifyModal
+}
+
+/** Actions every domain understands; the runner handles them itself */
+export type GenericAction = ExtractAction | NotifyAction
+
+export type AutomationAction = MailAction | DocumentsAction | GenericAction
 
 // --- Workflow graph -------------------------------------------------------
 
@@ -89,10 +128,26 @@ export interface ConditionNodeData {
   conditions: AutomationConditions
 }
 
+/** Who answers when the node's engine is unsure; tried in order */
+export type DecisionFallback
+  = | { type: 'ai', /** `serviceId:modelId`; empty = default model */ model?: string }
+    | { type: 'human' }
+
+/** Who gave the answer a decision output came from */
+export type DecisionSource = 'engine' | 'ai' | 'human'
+
+/** One earlier, unsure answer the node moved past on its way to the output */
+export interface DecisionAttempt {
+  source: DecisionSource
+  output: string
+  answer?: DecisionAnswer
+  error?: string
+}
+
 /** A decision asks one question; its outputs branch on the answer and a threshold */
 export type DecisionNodeData
-  = | { question: 'choice', instructions: string, options: Record<string, string>, thresholds: Record<string, number> }
-    | { question: 'yesno', instructions: string, thresholds: { yes: number, no: number } }
+  = | { question: 'choice', instructions: string, options: Record<string, string>, thresholds: Record<string, number>, fallbacks?: DecisionFallback[] }
+    | { question: 'yesno', instructions: string, thresholds: { yes: number, no: number }, fallbacks?: DecisionFallback[] }
 
 export interface ActionNodeData {
   action: AutomationAction
@@ -128,11 +183,26 @@ export interface WorkflowGraph {
   edges: WorkflowEdge[]
 }
 
+/** What a paused decision asks the user */
+export interface DecisionReview {
+  instructions: string
+  /** The outputs the user may pick; the resume takes the chosen edge */
+  outputs: string[]
+  /** A choice's option descriptions, so the UI can label the outputs */
+  options?: Record<string, string>
+}
+
 /** One step the executor walked: the node, the output it left, and its answer when it asked one */
 export interface WorkflowPathStep {
   nodeId: string
   output: string
   answer?: DecisionAnswer
+  /** Who gave the answer the output came from */
+  source?: DecisionSource
+  /** Earlier unsure answers, in the order they were tried */
+  attempts?: DecisionAttempt[]
+  /** Set on a paused step (output `review`): what the human is asked */
+  review?: DecisionReview
 }
 
 /** One action the workflow planned, with the node that produced it */
@@ -201,6 +271,8 @@ export interface AutomationItem {
 /** One action as it was actually applied, carrying what a reversal needs */
 export type AppliedAction
   = | { type: 'move-to', folder: string, from: string, uid?: number }
+    | { type: 'extract', variable: string, value: string }
+    | { type: 'notify', nodeId: string, title: string, body?: string, modal?: { title?: string, text: string, copy: boolean, expiresAt?: string } }
     | { type: 'label', label: string, labelMailbox: string, uid?: number }
     | { type: 'mark-read', mailbox: string, uid: number, wasUnread: boolean }
     | { type: 'star', mailbox: string, uid: number, wasFlagged: boolean }
@@ -218,10 +290,10 @@ export type UndoOperation
     | { op: 'set-correspondent', document: number, correspondent: number | null }
     | { op: 'set-document-type', document: number, documentType: number | null }
 
-export type AutomationOutcome = 'suggested' | 'applied' | 'failed' | 'undone' | 'skipped'
+export type AutomationOutcome = 'suggested' | 'applied' | 'failed' | 'undone' | 'skipped' | 'review'
 
 /** A user's reaction to a suggestion; kept as a labelled example for fine-tuning */
-export type AutomationFeedback = 'accepted' | 'rejected'
+export type AutomationFeedback = 'accepted' | 'rejected' | 'answered'
 
 /** One stored run, as the activity list shows it */
 export interface AutomationRun {
@@ -257,6 +329,8 @@ export interface WorkflowPreviewItem {
   /** Answers per decision node id */
   answers: Record<string, DecisionAnswer>
   actions: PlannedAction[]
+  /** Set when the walk stopped at a human fallback; the node id that awaits an answer */
+  review?: string
   /** Set when the decision engine failed for this item; the other items still preview */
   error?: string
 }
@@ -280,6 +354,32 @@ export interface WorkflowPreviewResult {
   aiUnavailable: boolean
 }
 
+/** One line of the streamed preview; `/api/automation/preview` answers with NDJSON */
+export type WorkflowPreviewEvent
+  = | { type: 'loading' }
+    | { type: 'started', items: Array<{ ref: string, title: string }> }
+    | { type: 'deciding', nodeId: string, items: number }
+    | { type: 'item', index: number, item: WorkflowPreviewItem }
+    | { type: 'done', aiUnavailable: boolean }
+    /** `busy` when another preview of the same user still holds the lock */
+    | { type: 'error', message: string, busy?: boolean }
+
+// --- Manual runs ----------------------------------------------------------
+
+/** One item of a manual run; `failed` covers a missing item and an engine failure */
+export interface WorkflowRunItemResult {
+  /** The entity key the item was picked by */
+  ref: string
+  outcome: AutomationOutcome | 'failed'
+  runId?: string
+  error?: string
+}
+
+/** The response of `POST /api/automation/workflows/[id]/run` */
+export interface WorkflowRunResult {
+  results: WorkflowRunItemResult[]
+}
+
 /** One labelled example for a future Laya fine-tune */
 export interface CorrectionExample {
   state: string
@@ -289,6 +389,8 @@ export interface CorrectionExample {
   workflowName: string
   answers: Record<string, DecisionAnswer>
   actions: PlannedAction[]
-  /** accepted = the suggestion was right, rejected = it was not */
+  /** The outputs a human picked, per decision node */
+  labels: Record<string, string>
+  /** accepted = the suggestion was right, rejected = it was not, answered = a human decided */
   feedback: AutomationFeedback
 }
