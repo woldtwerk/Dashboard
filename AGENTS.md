@@ -9,6 +9,38 @@ Always run these command in the container via ddev:
 
 e.g. `ddev exec pnpm run lint` or `ddev drush cr`.
 
+## Claude Code: delegate coding to opencode
+
+This section is for Claude Code only. opencode reads this file too: if you are
+opencode, ignore this section — you are the one who writes the code.
+
+Claude does not write code in this repo itself. Claude plans and reviews;
+opencode writes the code. Every coding task goes to opencode as a plan of
+concrete todos — files, functions, behaviour, tests to add — with the research
+and design decisions already made:
+
+```
+opencode run --auto --session ses_<task> --title "<task>" "<plan>" </dev/null
+```
+
+- Name the session (`--session` creates it), so the user can watch the run
+  live with `opencode -s ses_<task>`.
+- Put the rules from this file that apply to the task into the prompt — ddev,
+  pnpm scripts, UI/logic split with vitest, URL state, never touch `.data/`,
+  `touch nuxt/nuxt.config.ts` after layer edits.
+- Run several opencode agents in parallel when tasks are independent, each in
+  its own git worktree under `.worktrees/<task>` (inside the repo, so ddev
+  sees it) and its own session. Tasks that touch `pnpm-workspace.yaml`, the
+  lockfile or `.ddev/` don't run alongside others. Review and merge the
+  results one at a time.
+- Review the diff (correctness, security, this file's rules) and run
+  `ddev exec pnpm run lint`, `ddev exec pnpm run typecheck` and the tests.
+- Send findings back as concrete todos with
+  `opencode run --auto --session ses_<task> "<findings>"` until the review
+  passes.
+- `--auto` approves every permission opencode asks for, so commits, deploys,
+  migrations and deletions still need the user's go-ahead first.
+
 ## pnpm scripts, not binaries
 
 Never run the underlying tools directly (`pnpm exec eslint`, `pnpm exec nuxt
@@ -17,6 +49,10 @@ effect through the npm scripts: the `lint` and `typecheck` scripts preload
 `nuxt/scripts/use-ts6.cjs`, which resolves `typescript` to the TS 6 alias —
 the environment otherwise has TS 7, which vue-tsc and typescript-eslint reject.
 Always run `ddev exec pnpm run lint` and `ddev exec pnpm run typecheck`.
+
+## 3rd party packages
+
+When using 3rd party packages prefer oficial nuxt packages, vueuse, unjs ecosystem and then others.
 
 ## UI Templates
 
