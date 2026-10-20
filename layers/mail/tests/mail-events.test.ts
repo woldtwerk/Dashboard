@@ -22,6 +22,18 @@ describe('mailRefreshFor', () => {
     expect(mailRefreshFor(event(), current).list).toBe(true)
   })
 
+  it('refreshes the list for another mailbox in the all-folders scope', () => {
+    expect(mailRefreshFor(event({ resource: 'Sent' }), { ...current, allFolders: true }).list).toBe(true)
+  })
+
+  it('keeps another account out of the all-folders list', () => {
+    expect(mailRefreshFor(event({ service: 'other', resource: 'Sent' }), { ...current, allFolders: true }).list).toBe(false)
+  })
+
+  it('ignores another mailbox in a single folder', () => {
+    expect(mailRefreshFor(event({ resource: 'Sent' }), { ...current, allFolders: false }).list).toBe(false)
+  })
+
   it('ignores another account for the list but still refreshes folders', () => {
     const plan = mailRefreshFor(event({ service: 'other', resource: 'INBOX' }), current)
 

@@ -556,7 +556,11 @@ const refreshIndexFromEvents = useDebounceFn(() => refreshIndexStatus(), 300)
 const reloadConversationsFromEvents = useDebounceFn(() => reloadConversations(), 300)
 
 useDomainEvents({ domains: ['mail'] }, (event) => {
-  const plan = mailRefreshFor(event, { service: service.value, mailbox: mailbox.value })
+  const plan = mailRefreshFor(event, {
+    service: service.value,
+    mailbox: mailbox.value,
+    allFolders: allFolders.value
+  })
   if (plan.list) {
     // Refresh only the list on screen; the other view fetches fresh when opened
     if (showThreads.value) {
