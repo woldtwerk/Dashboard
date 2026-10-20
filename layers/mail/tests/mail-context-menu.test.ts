@@ -8,6 +8,8 @@ function handlers(): MailContextMenuHandlers {
     open: vi.fn(),
     compose: vi.fn(),
     toggleUnread: vi.fn(),
+    toggleDone: vi.fn(),
+    setLabel: vi.fn(),
     delete: vi.fn()
   }
 }
@@ -16,6 +18,8 @@ function batchHandlers(): MailBatchContextMenuHandlers {
   return {
     markRead: vi.fn(),
     markUnread: vi.fn(),
+    toggleDone: vi.fn(),
+    setLabel: vi.fn(),
     delete: vi.fn()
   }
 }
@@ -29,9 +33,29 @@ describe('mailContextMenuItems', () => {
     expect(labels(groups)).toEqual([
       ['Open'],
       ['Reply', 'Reply all', 'Forward'],
-      ['Mark as unread'],
+      ['Mark as unread', 'Mark as done'],
       ['Delete']
     ])
+  })
+
+  it('labels the done entry by the target state and offers the account labels', () => {
+    const groups = mailContextMenuItems(
+      { unread: false },
+      {
+        permanent: false,
+        done: true,
+        doneLabel: 'Done',
+        labels: [{ label: 'Done', active: true }, { label: 'Invoices', active: false }]
+      },
+      handlers()
+    )
+
+    expect(labels(groups)[2]).toEqual(['Mark as unread', 'Mark as not done', 'Label'])
+    expect(groups[2]![1]!.kbds).toEqual([...MAIL_SHORTCUT_KEYS.done])
+    // The done label has its own entry, so the submenu holds the remaining labels
+    const children = groups[2]![2]!.children as ContextMenuItem[]
+    expect(children.map(item => item.label)).toEqual(['Invoices'])
+    expect(children[0]?.checked).toBe(false)
   })
 
   it('offers "Mark as read" for an unread mail', () => {
@@ -61,11 +85,11 @@ describe('mailContextMenuItems', () => {
     expect(labels(groups)).toEqual([
       ['Open'],
       ['Reply', 'Reply all', 'Forward'],
-      ['Mark as unread']
+      ['Mark as unread', 'Mark as done']
     ])
   })
 
-  it('shows the shortcuts the page binds on the answer and delete entries', () => {
+  it('shows the shortcuts the page binds on the answer, done and delete entries', () => {
     const groups = mailContextMenuItems({ unread: false }, { permanent: false }, handlers())
 
     expect(groups[1]!.map(item => item.kbds)).toEqual([
@@ -73,6 +97,7 @@ describe('mailContextMenuItems', () => {
       [...MAIL_SHORTCUT_KEYS.replyAll],
       [...MAIL_SHORTCUT_KEYS.forward]
     ])
+    expect(groups[2]![1]!.kbds).toEqual([...MAIL_SHORTCUT_KEYS.done])
     expect(groups[3]![0]!.kbds).toEqual([...MAIL_SHORTCUT_KEYS.delete])
   })
 
@@ -91,7 +116,22 @@ describe('mailContextMenuItems', () => {
     expect(on.compose).toHaveBeenCalledWith('replyAll')
     expect(on.compose).toHaveBeenCalledWith('forward')
     expect(on.toggleUnread).toHaveBeenCalledOnce()
+    expect(on.toggleDone).toHaveBeenCalledOnce()
     expect(on.delete).toHaveBeenCalledOnce()
+  })
+
+  it('toggles a label from the submenu', () => {
+    const on = handlers()
+    const groups = mailContextMenuItems(
+      { unread: false },
+      { permanent: false, labels: [{ label: 'Invoices', active: true }] },
+      on
+    )
+
+    const children = groups[2]![2]!.children as ContextMenuItem[]
+    children[0]?.onSelect?.(new Event('select'))
+
+    expect(on.setLabel).toHaveBeenCalledWith('Invoices', false)
   })
 })
 
@@ -101,7 +141,7 @@ describe('mailBatchContextMenuItems', () => {
 
     expect(labels(groups)).toEqual([
       ['3 mails'],
-      ['Mark as read', 'Mark as unread'],
+      ['Mark as read', 'Mark as unread', 'Mark as done'],
       ['Delete']
     ])
     expect(groups[0]![0]!.type).toBe('label')
@@ -119,7 +159,7 @@ describe('mailBatchContextMenuItems', () => {
 
     expect(labels(groups)).toEqual([
       ['2 conversations'],
-      ['Mark as read', 'Mark as unread']
+      ['Mark as read', 'Mark as unread', 'Mark as done']
     ])
   })
 
@@ -135,7 +175,15 @@ describe('mailBatchContextMenuItems', () => {
 
     expect(on.markRead).toHaveBeenCalledOnce()
     expect(on.markUnread).toHaveBeenCalledOnce()
+    expect(on.toggleDone).toHaveBeenCalledOnce()
     expect(on.delete).toHaveBeenCalledOnce()
+  })
+
+  it('marks several targets as not done when they all carry the label', () => {
+    const groups = mailBatchContextMenuItems('2 mails', { permanent: false, done: true }, batchHandlers())
+
+    expect(groups[1]![2]!.label).toBe('Mark as not done')
+    expect(groups[1]![2]!.kbds).toEqual([...MAIL_SHORTCUT_KEYS.done])
   })
 })
 

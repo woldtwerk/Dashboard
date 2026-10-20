@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { MailSettings } from '../../shared/types/settings'
+import { isValidLabelName, LABEL_NAME_MAX } from '../../shared/mail-labels'
 import { normalizeTrustedImageSender } from '../../shared/mail-images'
 import { normalizeSenderAddress, SENDER_ADDRESSES_MAX } from '../../shared/mail-sender-addresses'
 
@@ -33,11 +34,13 @@ const senderAddress = z.string().transform((value, context) => {
 export const mailSettingsSchema = z.object({
   trustedImageSenders: z.array(trustedImageSender).max(TRUSTED_IMAGE_SENDERS_MAX),
   listView: z.enum(['mails', 'conversations']),
-  senderAddresses: z.record(z.string().min(1), z.array(senderAddress).max(SENDER_ADDRESSES_MAX)).default({})
+  senderAddresses: z.record(z.string().min(1), z.array(senderAddress).max(SENDER_ADDRESSES_MAX)).default({}),
+  doneLabel: z.string().trim().max(LABEL_NAME_MAX).refine(isValidLabelName, 'Invalid label name').default('Done')
 })
 
 export const mailSettingsDefaults: MailSettings = {
   trustedImageSenders: [],
   listView: 'mails',
-  senderAddresses: {}
+  senderAddresses: {},
+  doneLabel: 'Done'
 }

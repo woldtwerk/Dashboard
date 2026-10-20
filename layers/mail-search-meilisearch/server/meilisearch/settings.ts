@@ -53,7 +53,7 @@ export function buildTypoTolerance(options: MailIndexSettingsOptions): TypoToler
 export function buildIndexSettings(options: MailIndexSettingsOptions): Settings {
   return {
     searchableAttributes: ['subject', 'fromText', 'toText', 'text'],
-    filterableAttributes: ['service', 'mailbox', 'unread', 'flagged', 'hasAttachment', 'date', 'fromTerms', 'participantTerms', 'conversationKeys', 'listId'],
+    filterableAttributes: ['service', 'mailbox', 'unread', 'flagged', 'hasAttachment', 'date', 'fromTerms', 'participantTerms', 'conversationKeys', 'listId', 'labels', 'messageId'],
     sortableAttributes: ['date'],
     // The same mail in several folders/labels is shown once
     distinctAttribute: 'messageId',

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createDocumentsApplier, createMailApplier, labelMailbox, toMailActionProvider } from '../server/utils/appliers'
+import { createDocumentsApplier, createMailApplier, toMailActionProvider } from '../server/utils/appliers'
 import type { DocumentsActionProvider, MailActionProvider } from '../server/utils/appliers'
 import type { MailProvider } from '../../mail/server/utils/mail-provider'
+import { labelMailbox } from '../../mail/shared/mail-labels'
 import type { AutomationItem } from '../shared/types/automation'
 
 function mailItem(overrides: Partial<AutomationItem> = {}): AutomationItem {

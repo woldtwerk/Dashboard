@@ -3,13 +3,54 @@ import type { MailSummary } from '#layers/mail/shared/types/mail'
 import type { ItemActionContext } from '#layers/core/app/utils/item-actions'
 import { entityKey } from '#layers/core/shared/entities'
 import { MAIL_SHORTCUT_KEYS, type MailShortcutAction } from './mail-shortcuts'
+import type { MailLabelChoice } from './mail-labels'
 
 /** What the rows of a list do when their context menu is used */
 export interface MailContextMenuHandlers {
   open: () => void
   compose: (mode: 'reply' | 'replyAll' | 'forward') => void
   toggleUnread: () => void
+  toggleDone: () => void
+  setLabel: (label: string, on: boolean) => void
   delete: () => void
+}
+
+/** The label and done state the two menus render */
+export interface MailContextMenuOptions {
+  permanent: boolean
+  deletable?: boolean
+  /** Whether every target already carries the done label */
+  done?: boolean
+  /** The done label, left out of the label submenu because it has its own entry */
+  doneLabel?: string
+  /** The account's labels, with their state for the targets */
+  labels?: MailLabelChoice[]
+}
+
+/** The done and label entries both menus share */
+function labelMenuItems(options: MailContextMenuOptions, handlers: Pick<MailContextMenuHandlers, 'toggleDone' | 'setLabel'>): ContextMenuItem[] {
+  const items: ContextMenuItem[] = [{
+    label: options.done ? 'Mark as not done' : 'Mark as done',
+    icon: 'i-lucide-check',
+    kbds: [...MAIL_SHORTCUT_KEYS.done],
+    onSelect: () => handlers.toggleDone()
+  }]
+
+  const choices = (options.labels ?? []).filter(choice => choice.label !== options.doneLabel)
+  if (choices.length) {
+    items.push({
+      label: 'Label',
+      icon: 'i-lucide-tags',
+      children: choices.map(choice => ({
+        label: choice.label,
+        type: 'checkbox' as const,
+        checked: choice.active,
+        onSelect: () => handlers.setLabel(choice.label, !choice.active)
+      }))
+    })
+  }
+
+  return items
 }
 
 /**
@@ -19,7 +60,7 @@ export interface MailContextMenuHandlers {
  */
 export function mailContextMenuItems(
   mail: Pick<MailSummary, 'unread'>,
-  options: { permanent: boolean, deletable?: boolean },
+  options: MailContextMenuOptions,
   handlers: MailContextMenuHandlers
 ): ContextMenuItem[][] {
   // Every entry that names a key gets it from the one place the page binds them,
@@ -58,7 +99,8 @@ export function mailContextMenuItems(
           label: 'Mark as unread',
           icon: 'i-lucide-mail',
           onSelect: () => handlers.toggleUnread()
-        }]
+        },
+    ...labelMenuItems(options, handlers)]
   ]
 
   // A whole conversation has no single mail to delete
@@ -79,6 +121,8 @@ export function mailContextMenuItems(
 export interface MailBatchContextMenuHandlers {
   markRead: () => void
   markUnread: () => void
+  toggleDone: () => void
+  setLabel: (label: string, on: boolean) => void
   delete: () => void
 }
 
@@ -88,7 +132,7 @@ export interface MailBatchContextMenuHandlers {
  */
 export function mailBatchContextMenuItems(
   label: string,
-  options: { permanent: boolean, deletable?: boolean },
+  options: MailContextMenuOptions,
   handlers: MailBatchContextMenuHandlers
 ): ContextMenuItem[][] {
   const groups: ContextMenuItem[][] = [
@@ -101,7 +145,8 @@ export function mailBatchContextMenuItems(
       label: 'Mark as unread',
       icon: 'i-lucide-mail',
       onSelect: () => handlers.markUnread()
-    }]
+    },
+    ...labelMenuItems(options, handlers)]
   ]
 
   if (options.deletable !== false) {

@@ -5,8 +5,22 @@ import { SENDER_ADDRESSES_MAX } from '../shared/mail-sender-addresses'
 const parse = (value: unknown) => mailSettingsSchema.safeParse(value)
 
 describe('mail settings schema', () => {
-  it('has no trusted senders or manual addresses and the mails view by default', () => {
-    expect(mailSettingsDefaults).toEqual({ trustedImageSenders: [], listView: 'mails', senderAddresses: {} })
+  it('has no trusted senders or manual addresses, the mails view and the Done label by default', () => {
+    expect(mailSettingsDefaults).toEqual({ trustedImageSenders: [], listView: 'mails', senderAddresses: {}, doneLabel: 'Done' })
+  })
+
+  it('defaults the done label when the stored section predates it', () => {
+    const result = parse({ trustedImageSenders: [], listView: 'mails' })
+
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.doneLabel).toBe('Done')
+    }
+  })
+
+  it('rejects a done label that is not a label name', () => {
+    expect(parse({ trustedImageSenders: [], listView: 'mails', doneLabel: 'Work/Invoices' }).success).toBe(false)
+    expect(parse({ trustedImageSenders: [], listView: 'mails', doneLabel: '  ' }).success).toBe(false)
   })
 
   it('accepts addresses and domain entries', () => {

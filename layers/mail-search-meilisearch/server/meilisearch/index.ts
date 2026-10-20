@@ -2,8 +2,8 @@ import { Meilisearch } from 'meilisearch'
 import type { EnqueuedTaskPromise } from 'meilisearch'
 import type { MailDocument, MailFacetQuery, MailIndexQuery, MailSearchIndex } from '../../../mail/server/utils/mail-search-index'
 import type { MailFacets, MailSummary } from '../../../mail/shared/types/mail'
-import { buildMailFilter, dayCountQueries } from './query'
-import { buildIndexSettings, EMBEDDER, HIGHLIGHT_POST_TAG, HIGHLIGHT_PRE_TAG, rankingScoreThresholdFor } from './settings'
+import { buildMailFilter, dayCountQueries, filterValue } from './query'
+import { buildIndexSettings, EMBEDDER, HIGHLIGHT_POST_TAG, HIGHLIGHT_PRE_TAG, MAIL_INDEX_MAX_TOTAL_HITS, rankingScoreThresholdFor } from './settings'
 
 export interface MeilisearchMailIndexOptions {
   host: string
@@ -80,6 +80,32 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
       await settle(index.updateDocuments(updates))
     },
 
+    async getDocuments(ids) {
+      if (!ids.length) return []
+      await ensureSettings()
+      const result = await index.getDocuments({ ids, limit: ids.length })
+      return result.results
+    },
+
+    async documentsByMessageIds(service, messageIds) {
+      if (!messageIds.length) return []
+      await ensureSettings()
+      const result = await index.getDocuments({
+        filter: `service = ${filterValue(service)} AND messageId IN [${messageIds.map(filterValue).join(', ')}]`,
+        limit: MAIL_INDEX_MAX_TOTAL_HITS
+      })
+      return result.results
+    },
+
+    async documentsByLabel(service, label) {
+      await ensureSettings()
+      const result = await index.getDocuments({
+        filter: `service = ${filterValue(service)} AND labels = ${filterValue(label)}`,
+        limit: MAIL_INDEX_MAX_TOTAL_HITS
+      })
+      return result.results
+    },
+
     async remove(ids) {
       if (!ids.length) return
       await ensureSettings()
@@ -104,7 +130,7 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
         rankingScoreThreshold: text ? rankingScoreThresholdFor(semantic, options.semanticRatio, options.rankingScoreThreshold) : undefined,
         // The palette decides keyword vs semantic from the markers and needs the score
         showRankingScore: globalSearch ? true : undefined,
-        attributesToRetrieve: ['service', 'mailbox', 'uid', 'subject', 'fromList', 'toList', 'ccList', 'date', 'unread', 'flagged', 'hasAttachment', 'conversationKeys', 'listId', 'listName'],
+        attributesToRetrieve: ['service', 'mailbox', 'uid', 'subject', 'fromList', 'toList', 'ccList', 'date', 'unread', 'flagged', 'hasAttachment', 'labels', 'conversationKeys', 'listId', 'listName'],
         attributesToCrop: text ? ['text'] : undefined,
         cropLength: globalSearch ? 20 : 24,
         // Highlighted matches come back as marker-tagged strings the client escapes before rendering
@@ -127,6 +153,7 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
         unread: hit.unread,
         flagged: hit.flagged,
         hasAttachment: hit.hasAttachment,
+        labels: hit.labels ?? [],
         conversationKeys: hit.conversationKeys,
         listId: hit.listId,
         listName: hit.listName,

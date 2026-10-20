@@ -1,6 +1,7 @@
 import { createError, getRouterParam } from 'nuxt/server'
 import type { RequestEvent } from 'nuxt/server'
 import { z } from 'zod'
+import { isValidLabelName } from '../../shared/mail-labels'
 
 export const serviceQuerySchema = z.object({
   service: z.string().min(1)
@@ -20,6 +21,8 @@ export const messagesQuerySchema = mailboxQuerySchema.extend({
   unread: z.stringbool().optional(),
   flagged: z.stringbool().optional(),
   hasAttachment: z.stringbool().optional(),
+  label: z.string().trim().min(1).max(200).refine(isValidLabelName, 'Invalid label name').optional(),
+  notLabel: z.string().trim().min(1).max(200).refine(isValidLabelName, 'Invalid label name').optional(),
   since: z.iso.date().optional(),
   before: z.iso.date().optional(),
   from: z.string().trim().max(200).optional()

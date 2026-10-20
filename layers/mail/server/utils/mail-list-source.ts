@@ -1,5 +1,19 @@
+import type { MailSearch } from '../../shared/types/mail'
+
 /** Where the mail list of one request is served from */
 export type MailListSource = 'index' | 'provider'
+
+/** The 409 text when a criterion needs the index and the folder is not indexed yet */
+export const INDEX_ONLY_PROVIDER_ERROR = 'The search index is still being built'
+
+/**
+ * Whether the provider fallback cannot answer the search. `notLabel` needs every
+ * mail's label list, which only the index holds; the provider would silently
+ * return the labelled mails too.
+ */
+export function providerCannotAnswer(search: Pick<MailSearch, 'notLabel'>): boolean {
+  return !!search.notLabel
+}
 
 export interface MailListSourceQuery {
   /** The service has a search index at all */

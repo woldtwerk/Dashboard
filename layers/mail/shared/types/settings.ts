@@ -11,4 +11,6 @@ export interface MailSettings {
    * Proton account's aliases, so an alias that was never sent from is added here.
    */
   senderAddresses: Record<string, string[]>
+  /** The label that marks a mail as done; `e` adds it and marks the mail read */
+  doneLabel: string
 }

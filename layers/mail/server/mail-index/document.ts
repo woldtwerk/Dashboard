@@ -34,6 +34,8 @@ export interface MailDocument {
   flagged: boolean
   /** Only from indexed bodies; listing an envelope does not reveal attachments */
   hasAttachment: boolean
+  /** Label names the mail is filed under, from its `Labels/<name>` folders */
+  labels: string[]
   text: string
 }
 
@@ -87,7 +89,7 @@ export function participantTerms(addresses: MailAddress[]): string[] {
   return [...terms]
 }
 
-export function toMailDocument(service: string, mailbox: string, message: MailMessage): MailDocument {
+export function toMailDocument(service: string, mailbox: string, message: MailMessage, labels: string[] = []): MailDocument {
   const id = mailDocumentId(service, mailbox, message.uid)
 
   return {
@@ -111,6 +113,7 @@ export function toMailDocument(service: string, mailbox: string, message: MailMe
     unread: message.unread,
     flagged: message.flagged,
     hasAttachment: message.hasAttachment ?? false,
+    labels,
     text: (message.text ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_TEXT_LENGTH)
   }
 }

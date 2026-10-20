@@ -7,6 +7,7 @@ import { highlightToHtml } from '#layers/mail/shared/mail-highlight'
 import { itemActionMenuItems } from '#layers/core/app/utils/item-actions'
 import { adjacentListKey } from '#layers/mail/app/utils/mail-list-navigation'
 import { mailBatchContextMenuItems, mailContextMenuItems, mailItemContext } from '#layers/mail/app/utils/mail-context-menu'
+import { labelToggleState, mailLabelChoices } from '#layers/mail/app/utils/mail-labels'
 import type { MailBatchAction } from '#layers/mail/app/utils/mail-batch'
 import { contextTargets, rangeSelection, toggleSelection } from '#layers/mail/app/utils/mail-selection'
 import { formatMailListDate } from '#layers/mail/app/utils/mail-date'
@@ -20,6 +21,10 @@ const props = defineProps<{
   service: string
   /** The account's own address, shown as "me" */
   ownAddress?: string
+  /** The account's label names, for the context menu's label submenu */
+  labels?: string[]
+  /** The label that marks a mail as done */
+  doneLabel?: string
   /** A further page is on its way */
   loadingMore?: boolean
   /** The last page was short; there is nothing more to load */
@@ -34,9 +39,13 @@ const emits = defineEmits<{
   loadMore: []
   compose: [mode: 'reply' | 'replyAll' | 'forward', mail: MailSummary]
   toggleUnread: [mail: MailSummary]
+  /** Done acts on every mail of the conversation, so the page gets its key */
+  toggleDone: [key: string]
+  label: [key: string, label: string, on: boolean]
   delete: [mail: MailSummary]
   /** One of the bulk actions for the whole selection */
   batch: [action: MailBatchAction]
+  batchLabel: [label: string, on: boolean]
   /** The page writes the new selection to the URL */
   updateSelection: [keys: string[]]
 }>()
@@ -146,17 +155,25 @@ function contextItems(conversation: MailConversation): ContextMenuItem[][] {
     .map(key => props.conversations.find(item => item.key === key))
     .filter((item): item is MailConversation => !!item)
 
+  const doneLabel = props.doneLabel ?? 'Done'
+  const latest = targetConversations.map(item => item.latest)
+
   if (targetConversations.length > 1) {
     const groups = mailBatchContextMenuItems(
       `${targetConversations.length} conversations`,
       {
         // Delete is permanent when every deletable conversation sits in the trash
         permanent: targetConversations.every(item => props.isPermanent?.(item.latest) ?? false),
-        deletable: targetConversations.some(item => item.count === 1)
+        deletable: targetConversations.some(item => item.count === 1),
+        done: labelToggleState(latest, doneLabel),
+        doneLabel,
+        labels: mailLabelChoices(props.labels ?? [], latest)
       },
       {
         markRead: () => emits('batch', 'read'),
         markUnread: () => emits('batch', 'unread'),
+        toggleDone: () => emits('batch', 'done'),
+        setLabel: (label, on) => emits('batchLabel', label, on),
         delete: () => emits('batch', 'delete')
       }
     )
@@ -173,12 +190,17 @@ function contextItems(conversation: MailConversation): ContextMenuItem[][] {
     {
       permanent: props.isPermanent?.(mail) ?? false,
       // A conversation with several mails has no single mail to delete
-      deletable: conversation.count === 1
+      deletable: conversation.count === 1,
+      done: labelToggleState([mail], doneLabel),
+      doneLabel,
+      labels: mailLabelChoices(props.labels ?? [], [mail])
     },
     {
       open: () => emits('select', conversation.key),
       compose: mode => emits('compose', mode, mail),
       toggleUnread: () => emits('toggleUnread', mail),
+      toggleDone: () => emits('toggleDone', conversation.key),
+      setLabel: (label, on) => emits('label', conversation.key, label, on),
       delete: () => emits('delete', mail)
     }
   )
@@ -210,6 +232,14 @@ function contextItems(conversation: MailConversation): ContextMenuItem[][] {
         variant="ghost"
         size="xs"
         @click="emits('batch', 'unread')"
+      />
+      <UButton
+        label="Done"
+        icon="i-lucide-check"
+        color="neutral"
+        variant="ghost"
+        size="xs"
+        @click="emits('batch', 'done')"
       />
       <UButton
         label="Delete"
@@ -267,6 +297,7 @@ function contextItems(conversation: MailConversation): ContextMenuItem[][] {
                   color="neutral"
                   size="sm"
                 />
+                <MailLabelBadges :labels="conversation.latest.labels" :done-label="doneLabel" />
               </div>
 
               <span class="shrink-0">

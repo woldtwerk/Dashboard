@@ -56,6 +56,8 @@ export function buildMailFilter({ services, mailbox, mailboxes, participant, con
   if (search.unread) filter.push('unread = true')
   if (search.flagged) filter.push('flagged = true')
   if (search.hasAttachment) filter.push('hasAttachment = true')
+  if (search.label) filter.push(`labels = ${filterValue(search.label)}`)
+  if (search.notLabel) filter.push(`NOT labels = ${filterValue(search.notLabel)}`)
   if (search.since) filter.push(`date >= ${unixSeconds(search.since)}`)
   if (search.before) filter.push(`date < ${unixSeconds(search.before)}`)
   if (search.from) filter.push(`fromTerms = ${filterValue(normalizeSenderTerm(search.from))}`)

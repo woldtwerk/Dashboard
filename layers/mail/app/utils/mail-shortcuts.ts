@@ -9,7 +9,8 @@ export const MAIL_SHORTCUT_KEYS = {
   delete: ['#', 'delete', 'backspace'],
   reply: ['r'],
   replyAll: ['a'],
-  forward: ['f']
+  forward: ['f'],
+  done: ['e']
 } as const
 
 /** One of the actions MAIL_SHORTCUT_KEYS names */
@@ -66,6 +67,44 @@ export function mailShortcutTarget(state: MailShortcutState): MailShortcutTarget
   }
 
   return { kind: 'conversation', key: conversation.key, mail: conversation.latest }
+}
+
+/** What e toggles done on; a conversation keeps every mail, unlike delete */
+export type MailDoneTarget = { kind: 'batch' } | { kind: 'mails', mails: MailSummary[] } | null
+
+/**
+ * What e toggles done on: the list's selection, the open mail, or every mail of
+ * the open conversation — a thread has no single mail to leave out, unlike
+ * delete.
+ */
+export function mailDoneTarget(state: MailShortcutState): MailDoneTarget {
+  if (state.composerOpen) {
+    return null
+  }
+
+  if (state.selectionCount > 0) {
+    return { kind: 'batch' }
+  }
+
+  if (state.view === 'mails') {
+    return state.selectedMail ? { kind: 'mails', mails: [state.selectedMail] } : null
+  }
+
+  const conversation = state.openConversation
+  if (!conversation) {
+    return null
+  }
+
+  // A thread is only done as a whole; while its mails are still loading, acting
+  // on the newest alone would leave the rest behind
+  if (conversation.count > 1 && !state.conversationMails?.length) {
+    return null
+  }
+
+  return {
+    kind: 'mails',
+    mails: state.conversationMails?.length ? state.conversationMails : [conversation.latest]
+  }
 }
 
 /**

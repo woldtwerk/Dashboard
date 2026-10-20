@@ -8,6 +8,8 @@ describe('toMailSearch', () => {
       unread: true,
       flagged: false,
       hasAttachment: true,
+      label: 'Invoices',
+      notLabel: 'Done',
       since: '2026-10-01',
       before: '2026-10-16',
       from: 'stripe'
@@ -16,6 +18,8 @@ describe('toMailSearch', () => {
       unread: true,
       flagged: false,
       hasAttachment: true,
+      label: 'Invoices',
+      notLabel: 'Done',
       since: '2026-10-01',
       before: '2026-10-16',
       from: 'stripe'
@@ -28,6 +32,8 @@ describe('toMailSearch', () => {
       unread: undefined,
       flagged: undefined,
       hasAttachment: undefined,
+      label: undefined,
+      notLabel: undefined,
       since: undefined,
       before: undefined,
       from: undefined

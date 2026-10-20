@@ -4,17 +4,21 @@ import type { EntityRef } from '#layers/core/shared/types/entities'
 import { normalizeEmail, entityKey } from '#layers/core/shared/entities'
 import { isTrustedImageSender } from '#layers/mail/shared/mail-images'
 import { formatMailFullDate } from '#layers/mail/app/utils/mail-date'
+import { MAIL_SHORTCUT_KEYS } from '#layers/mail/app/utils/mail-shortcuts'
 
 const props = defineProps<{
   mail: MailSummary
   service: string
   /** The mail already sits in the trash, so deleting removes it for good */
   permanent?: boolean
+  /** The label that marks a mail as done */
+  doneLabel?: string
 }>()
 
 const emits = defineEmits<{
   close: []
   markUnread: []
+  toggleDone: []
   delete: []
   compose: [mode: 'reply' | 'replyAll' | 'forward']
   /** Warm the message the composer will need */
@@ -30,11 +34,19 @@ const zone = useTimeZone()
 // The reader, the composer and the list's hover prefetch share one request per mail
 const { data: message, status, error } = useMailMessage(() => props.mail, () => props.service)
 
-const dropdownItems = [[{
+const doneLabel = computed(() => props.doneLabel ?? 'Done')
+const isDone = computed(() => (props.mail.labels ?? []).includes(doneLabel.value))
+
+const dropdownItems = computed(() => [[{
+  label: isDone.value ? 'Mark as not done' : 'Mark as done',
+  icon: 'i-lucide-check',
+  kbds: [...MAIL_SHORTCUT_KEYS.done],
+  onSelect: () => emits('toggleDone')
+}, {
   label: 'Mark as unread',
   icon: 'i-lucide-mail',
   onSelect: () => emits('markUnread')
-}]]
+}]])
 
 // Remote images (incl. tracking pixels) stay blocked until loaded explicitly for this
 // message, or automatically for a sender the user trusts in the mail settings
@@ -135,6 +147,15 @@ function openPerson(address?: string) {
             @click="emits('compose', 'forward')"
           />
         </UTooltip>
+        <UTooltip :text="isDone ? 'Mark as not done' : 'Mark as done'" :kbds="[...MAIL_SHORTCUT_KEYS.done]">
+          <UButton
+            icon="i-lucide-check"
+            :color="isDone ? 'success' : 'neutral'"
+            :variant="isDone ? 'soft' : 'ghost'"
+            :aria-label="isDone ? 'Mark as not done' : 'Mark as done'"
+            @click="emits('toggleDone')"
+          />
+        </UTooltip>
         <UTooltip :text="permanent ? 'Delete forever' : 'Delete'" :kbds="['#']">
           <UButton
             icon="i-lucide-trash-2"
@@ -196,6 +217,9 @@ function openPerson(address?: string) {
               >
                 {{ formatMailAddress(address) }}
               </button>
+            </div>
+            <div v-if="mail.labels?.length" class="flex flex-wrap items-center gap-1">
+              <MailLabelBadges :labels="mail.labels" :done-label="doneLabel" />
             </div>
           </div>
         </div>

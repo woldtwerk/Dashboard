@@ -16,16 +16,26 @@ describe('buildMailFilter', () => {
     expect(buildMailFilter({
       services: ['a'],
       mailbox: 'INBOX',
-      search: { unread: true, flagged: true, hasAttachment: true, since: '2026-10-01', before: '2026-10-16', from: ' @Stripe.com ', text: 'ignored here' }
+      search: { unread: true, flagged: true, hasAttachment: true, label: 'Invoices', notLabel: 'Done', since: '2026-10-01', before: '2026-10-16', from: ' @Stripe.com ', text: 'ignored here' }
     })).toEqual([
       'service IN ["a"]',
       'mailbox = "INBOX"',
       'unread = true',
       'flagged = true',
       'hasAttachment = true',
+      'labels = "Invoices"',
+      'NOT labels = "Done"',
       'date >= 1790812800',
       'date < 1792108800',
       'fromTerms = "stripe.com"'
+    ])
+  })
+
+  it('escapes a label in both directions', () => {
+    expect(buildMailFilter({ services: ['a'], search: { label: 'Rechnungen/"2026"', notLabel: 'Work\\Done' } })).toEqual([
+      'service IN ["a"]',
+      'labels = "Rechnungen/\\"2026\\""',
+      'NOT labels = "Work\\\\Done"'
     ])
   })
 

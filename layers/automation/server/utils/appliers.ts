@@ -6,6 +6,7 @@ import type {
 } from '../../shared/types/automation'
 import type { Mailbox } from '../../../mail/shared/types/mail'
 import { trashTarget } from '../../../mail/shared/mail-delete'
+import { labelMailbox } from '../../../mail/shared/mail-labels'
 import type { MailProvider } from '../../../mail/server/utils/mail-provider'
 import type { AutomationApplier, AutomationLogger } from './engine'
 
@@ -51,9 +52,6 @@ export interface MailApplierContext {
   publish: (mailbox: string) => Promise<void>
   logger?: AutomationLogger
 }
-
-/** The Proton folder a label is filed under */
-export const labelMailbox = (label: string) => `Labels/${label}`
 
 /**
  * The trash folder a `trash` action moves a mail to. Throws when the account has

@@ -6,6 +6,7 @@ import { highlightToHtml } from '#layers/mail/shared/mail-highlight'
 import { itemActionMenuItems } from '#layers/core/app/utils/item-actions'
 import { adjacentListKey, neighbourListKeys } from '#layers/mail/app/utils/mail-list-navigation'
 import { mailBatchContextMenuItems, mailContextMenuItems, mailItemContext } from '#layers/mail/app/utils/mail-context-menu'
+import { labelToggleState, mailLabelChoices } from '#layers/mail/app/utils/mail-labels'
 import type { MailBatchAction } from '#layers/mail/app/utils/mail-batch'
 import { contextTargets, isMailSelected, mailSelectionKey, rangeSelection, toggleSelection } from '#layers/mail/app/utils/mail-selection'
 import { formatMailListDate } from '#layers/mail/app/utils/mail-date'
@@ -20,6 +21,10 @@ const props = defineProps<{
   showMailbox?: boolean
   /** Display names by `service/mailbox`, resolved by the page */
   mailboxNames?: Record<string, string>
+  /** The account's label names, for the context menu's label submenu */
+  labels?: string[]
+  /** The label that marks a mail as done */
+  doneLabel?: string
   /** A further page is on its way */
   loadingMore?: boolean
   /** The last page was short; there is nothing more to load */
@@ -32,9 +37,12 @@ const emits = defineEmits<{
   loadMore: []
   compose: [mode: 'reply' | 'replyAll' | 'forward', mail: MailSummary]
   toggleUnread: [mail: MailSummary]
+  toggleDone: [mail: MailSummary]
+  label: [mail: MailSummary, label: string, on: boolean]
   delete: [mail: MailSummary]
   /** One of the bulk actions for the whole selection */
   batch: [action: MailBatchAction]
+  batchLabel: [label: string, on: boolean]
   /** Warm the mail's body before the reader opens it */
   prefetch: [mail: MailSummary]
   /** The page writes the new selection to the URL */
@@ -159,13 +167,22 @@ function contextItems(mail: MailSummary): ContextMenuItem[][] {
     .map(key => props.mails.find(item => mailSelectionKey(item) === key))
     .filter((item): item is MailSummary => !!item)
 
+  const doneLabel = props.doneLabel ?? 'Done'
+
   if (targetMails.length > 1) {
     const groups = mailBatchContextMenuItems(
       `${targetMails.length} mails`,
-      { permanent: targetMails.every(mail => props.isPermanent?.(mail) ?? false) },
+      {
+        permanent: targetMails.every(mail => props.isPermanent?.(mail) ?? false),
+        done: labelToggleState(targetMails, doneLabel),
+        doneLabel,
+        labels: mailLabelChoices(props.labels ?? [], targetMails)
+      },
       {
         markRead: () => emits('batch', 'read'),
         markUnread: () => emits('batch', 'unread'),
+        toggleDone: () => emits('batch', 'done'),
+        setLabel: (label, on) => emits('batchLabel', label, on),
         delete: () => emits('batch', 'delete')
       }
     )
@@ -179,11 +196,18 @@ function contextItems(mail: MailSummary): ContextMenuItem[][] {
 
   const groups = mailContextMenuItems(
     mail,
-    { permanent: props.isPermanent?.(mail) ?? false },
+    {
+      permanent: props.isPermanent?.(mail) ?? false,
+      done: labelToggleState([mail], doneLabel),
+      doneLabel,
+      labels: mailLabelChoices(props.labels ?? [], [mail])
+    },
     {
       open: () => { selectedMail.value = mail },
       compose: mode => emits('compose', mode, mail),
       toggleUnread: () => emits('toggleUnread', mail),
+      toggleDone: () => emits('toggleDone', mail),
+      setLabel: (label, on) => emits('label', mail, label, on),
       delete: () => emits('delete', mail)
     }
   )
@@ -215,6 +239,14 @@ function contextItems(mail: MailSummary): ContextMenuItem[][] {
         variant="ghost"
         size="xs"
         @click="emits('batch', 'unread')"
+      />
+      <UButton
+        label="Done"
+        icon="i-lucide-check"
+        color="neutral"
+        variant="ghost"
+        size="xs"
+        @click="emits('batch', 'done')"
       />
       <UButton
         label="Delete"
@@ -262,6 +294,7 @@ function contextItems(mail: MailSummary): ContextMenuItem[][] {
 
                 <UChip v-if="mail.unread" />
                 <UIcon v-if="mail.flagged" name="i-lucide-star" class="size-3.5 shrink-0 text-warning" />
+                <MailLabelBadges :labels="mail.labels" :done-label="doneLabel" />
               </div>
 
               <div class="flex shrink-0 items-center gap-2">

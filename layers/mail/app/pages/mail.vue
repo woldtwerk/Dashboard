@@ -5,10 +5,12 @@ import type { DropdownMenuItem } from '@nuxt/ui'
 import type { MailConversation, MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
 import { buildReply, emptyOutgoingMail, type OutgoingMail } from '#layers/mail/shared/mail-compose'
 import { trashTarget } from '#layers/mail/shared/mail-delete'
+import { labelFromMailbox } from '#layers/mail/shared/mail-labels'
 import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
 import type { RetainedConversations, RetainedMail, RetainedMails } from '#layers/mail/app/utils/mail-retention'
 import type { MailBatchAction, MailDeleteBatchResult, MailDeleteUndo, MailMoveBatchResult } from '#layers/mail/app/utils/mail-batch'
-import type { MailShortcutState } from '#layers/mail/app/utils/mail-shortcuts'
+import { mailDoneTarget, type MailShortcutState } from '#layers/mail/app/utils/mail-shortcuts'
+import { applyLabel, applyLabelToConversations, doneToggleState, restoreLabels } from '#layers/mail/app/utils/mail-labels'
 import type { SetupState } from '#layers/core/shared/types/setup'
 import type { MailListView, MailSettings } from '#layers/mail/shared/types/settings'
 
@@ -25,6 +27,7 @@ const requestFetch = useRequestFetch()
 // the saved view; ?view= still wins for a shared link.
 const { data: mailSettings, save: saveMailSettings } = useSettings<MailSettings>('mail')
 const savedListView = computed<MailListView>(() => mailSettings.value.listView === 'conversations' ? 'conversations' : 'mails')
+const doneLabel = computed(() => mailSettings.value.doneLabel || 'Done')
 
 const { data: allServices } = await useServices()
 const services = computed(() => allServices.value.filter(item => item.domain === 'mail'))
@@ -92,6 +95,15 @@ const mailboxNames = computed(() => {
   return names
 })
 
+// The account's labels, from its `Labels/` folders; used by the filter and the
+// context menu's label submenu
+const accountLabels = computed(() => {
+  const entry = folders.value.find(item => item.service.id === service.value)
+  return (entry?.mailboxes ?? [])
+    .filter(item => item.label)
+    .map(item => labelFromMailbox(item.path) ?? item.name)
+})
+
 const tabItems = [{
   label: 'All',
   value: 'all'
@@ -150,6 +162,15 @@ const hasAttachment = computed({
   get: () => !!criteria.value.hasAttachment,
   set: (value: boolean) => updateFilters({ attachment: value ? 'true' : null })
 })
+const labelFilter = computed({
+  get: () => queryString('label') ?? '',
+  set: (value: string) => updateFilters({ label: value?.trim() || null })
+})
+// The done label's own switch, so "unpaid invoices" is two clicks: label + not done
+const notDone = computed({
+  get: () => criteria.value.notLabel === doneLabel.value,
+  set: (value: boolean) => updateFilters({ notLabel: value ? doneLabel.value : null })
+})
 
 // Set criteria, shown as removable chips
 const criteriaChips = computed(() => [
@@ -157,6 +178,11 @@ const criteriaChips = computed(() => [
   queryString('since') && { key: 'since', label: `Since ${queryString('since')}` },
   queryString('before') && { key: 'before', label: `Before ${queryString('before')}` },
   queryString('attachment') === 'true' && { key: 'attachment', label: 'Has attachment' },
+  queryString('label') && { key: 'label', label: `Label: ${queryString('label')}` },
+  queryString('notLabel') && {
+    key: 'notLabel',
+    label: queryString('notLabel') === doneLabel.value ? 'Not done' : `Without label: ${queryString('notLabel')}`
+  },
   queryString('scope') === 'all' && { key: 'scope', label: 'All folders' }
 ].filter(chip => !!chip))
 
@@ -354,7 +380,8 @@ const conversationsView = computed({
     void saveMailSettings({
       trustedImageSenders: mailSettings.value.trustedImageSenders ?? [],
       listView: value ? 'conversations' : 'mails',
-      senderAddresses: mailSettings.value.senderAddresses ?? {}
+      senderAddresses: mailSettings.value.senderAddresses ?? {},
+      doneLabel: doneLabel.value
     })
   }
 })
@@ -776,6 +803,108 @@ async function setSeenMany(targets: MailSummary[], seen: boolean): Promise<boole
 // Optimistic: update the list first, roll back if the server rejects it
 async function setSeen(mail: MailSummary, seen: boolean) {
   await setSeenMany([mail], seen)
+}
+
+/**
+ * Applies a label to several mails optimistically, with the same per-mailbox
+ * rollback as the seen flag: the lists change first, then one request per
+ * mailbox, and only the group that rejected is put back. Returns false when
+ * anything failed.
+ */
+async function setLabelMany(targets: MailSummary[], label: string, on: boolean): Promise<boolean> {
+  if (!targets.length) {
+    return true
+  }
+
+  const unique = [...new Map(targets.map(mail => [mailKey(mail), mail])).values()]
+  const affected = new Set(unique.map(mailKey))
+  const previous = new Map(unique.map(mail => [mailKey(mail), mail.labels]))
+
+  mails.value = applyLabel(mails.value, affected, label, on)
+  conversations.value = applyLabelToConversations(conversations.value, affected, label, on)
+  openConversationMails.value = applyLabel(openConversationMails.value, affected, label, on)
+  retained.value = new Map([...retained.value].map(([key, entry]) => [
+    key,
+    affected.has(key) ? { ...entry, mail: applyLabel([entry.mail], [key], label, on)[0] ?? entry.mail } : entry
+  ]))
+
+  const groups = mailBatchGroups(unique)
+  const results = await Promise.allSettled(groups.map(group => $fetch<{ unresolved?: number[] }>('/api/mail/messages/labels', {
+    method: 'POST',
+    query: { service: service.value, mailbox: group.mailbox },
+    body: { uids: group.uids, label, on }
+  })))
+
+  const failedKeys = new Set<string>()
+  groups.forEach((group, index) => {
+    const result = results[index]
+    if (!result) {
+      return
+    }
+
+    if (result.status === 'rejected') {
+      for (const mail of unique) {
+        if (mail.mailbox === group.mailbox && group.uids.includes(mail.uid)) {
+          failedKeys.add(mailKey(mail))
+        }
+      }
+      return
+    }
+
+    // The server could not find a copy to remove for these, so put their label back
+    for (const uid of result.value.unresolved ?? []) {
+      const mail = unique.find(item => item.mailbox === group.mailbox && item.uid === uid)
+      if (mail) {
+        failedKeys.add(mailKey(mail))
+      }
+    }
+  })
+
+  if (failedKeys.size) {
+    const rollback = new Map([...previous].filter(([key]) => failedKeys.has(key)))
+    mails.value = restoreLabels(mails.value, rollback)
+    openConversationMails.value = restoreLabels(openConversationMails.value, rollback)
+    conversations.value = conversations.value.map((conversation) => {
+      const key = mailKey(conversation.latest)
+      return rollback.has(key)
+        ? { ...conversation, latest: restoreLabels([conversation.latest], rollback)[0] ?? conversation.latest }
+        : conversation
+    })
+    retained.value = new Map([...retained.value].map(([key, entry]) => [
+      key,
+      rollback.has(key) ? { ...entry, mail: restoreLabels([entry.mail], rollback)[0] ?? entry.mail } : entry
+    ]))
+    toast.add({ title: 'Could not update some messages', color: 'error', icon: 'i-lucide-circle-alert' })
+  }
+
+  // Label folders repeat the mail, so their counts change with the copies
+  refreshNuxtData('mail-folders')
+  return failedKeys.size === 0
+}
+
+/**
+ * The e action: done is the done label plus read. Undone only takes the label
+ * off; the mail stays in its folder and keeps its read state.
+ */
+async function setDone(targets: MailSummary[], on: boolean): Promise<boolean> {
+  if (!targets.length) {
+    return true
+  }
+  if (!on) {
+    return setLabelMany(targets, doneLabel.value, false)
+  }
+
+  const [labelled, read] = await Promise.all([
+    setLabelMany(targets, doneLabel.value, true),
+    setSeenMany(targets, true)
+  ])
+  return labelled && read
+}
+
+/** Toggles done from the state of every target: remove only when they all have it */
+async function toggleDone(targets: MailSummary[]): Promise<void> {
+  const { on } = doneToggleState(targets, doneLabel.value)
+  await setDone(targets, on)
 }
 
 watch(() => selectedMail.value && mailKey(selectedMail.value), (key) => {
@@ -1329,7 +1458,60 @@ async function batchSelectedMails(action: MailBatchAction): Promise<void> {
     return
   }
 
+  if (action === 'done') {
+    await toggleDone(selectedMails.value)
+    return
+  }
+
   await setSeenMany(selectedMails.value, action === 'read')
+}
+
+/** All mails of the selected conversations, deduplicated; null when they cannot be loaded */
+async function selectedConversationMails(): Promise<MailSummary[] | null> {
+  const keys = selectedConversations.value.map(conversation => conversation.key)
+  if (!keys.length) {
+    return []
+  }
+
+  try {
+    const lists = await Promise.all(keys.map(key => loadMailConversation(nuxtApp, requestFetch, service.value, key)))
+    return [...new Map(lists.flat().map(mail => [mailKey(mail), mail])).values()]
+  } catch (error) {
+    toast.add({ title: 'Could not load the selected conversations', description: mailErrorMessage(error), color: 'error', icon: 'i-lucide-circle-alert' })
+    return null
+  }
+}
+
+/** Applies a label to every mail of the selected conversations */
+async function batchSelectedLabel(label: string, on: boolean): Promise<void> {
+  const mails = showThreads.value ? await selectedConversationMails() : selectedMails.value
+  if (mails?.length) {
+    await setLabelMany(mails, label, on)
+  }
+}
+
+/** The mails of one conversation, for a menu entry that acts on the whole thread */
+async function conversationMails(key: string): Promise<MailSummary[] | null> {
+  try {
+    return await loadMailConversation(nuxtApp, requestFetch, service.value, key)
+  } catch (error) {
+    toast.add({ title: 'Could not load the conversation', description: mailErrorMessage(error), color: 'error', icon: 'i-lucide-circle-alert' })
+    return null
+  }
+}
+
+async function toggleConversationDone(key: string): Promise<void> {
+  const mails = await conversationMails(key)
+  if (mails) {
+    await toggleDone(mails)
+  }
+}
+
+async function setConversationLabel(key: string, label: string, on: boolean): Promise<void> {
+  const mails = await conversationMails(key)
+  if (mails) {
+    await setLabelMany(mails, label, on)
+  }
 }
 
 /**
@@ -1357,14 +1539,16 @@ async function batchSelectedConversations(action: MailBatchAction): Promise<void
     return
   }
 
-  let mails: MailSummary[]
-  try {
-    const lists = await Promise.all(selectedConversationKeys.value.map(key =>
-      loadMailConversation(nuxtApp, requestFetch, service.value, key)
-    ))
-    mails = [...new Map(lists.flat().map(mail => [mailKey(mail), mail])).values()]
-  } catch (error) {
-    toast.add({ title: 'Could not load the selected conversations', description: mailErrorMessage(error), color: 'error', icon: 'i-lucide-circle-alert' })
+  if (action === 'done') {
+    const mails = await selectedConversationMails()
+    if (mails) {
+      await toggleDone(mails)
+    }
+    return
+  }
+
+  const mails = await selectedConversationMails()
+  if (!mails) {
     return
   }
 
@@ -1431,11 +1615,34 @@ function composeShortcut(mode: MailComposeMode) {
   openCompose(mode, mail)
 }
 
+/**
+ * e toggles done on what the shortcuts point at: the selection, the open mail,
+ * or every mail of the open conversation.
+ */
+function doneShortcut() {
+  const target = mailDoneTarget(shortcutState.value)
+  if (!target) {
+    return
+  }
+
+  if (target.kind === 'batch') {
+    if (showThreads.value) {
+      void batchSelectedConversations('done')
+    } else {
+      void batchSelectedMails('done')
+    }
+    return
+  }
+
+  void toggleDone(target.mails)
+}
+
 defineShortcuts({
   ...Object.fromEntries(MAIL_SHORTCUT_KEYS.delete.map(key => [key, deleteShortcut])),
   ...Object.fromEntries(MAIL_SHORTCUT_KEYS.reply.map(key => [key, () => composeShortcut('reply')])),
   ...Object.fromEntries(MAIL_SHORTCUT_KEYS.replyAll.map(key => [key, () => composeShortcut('replyAll')])),
-  ...Object.fromEntries(MAIL_SHORTCUT_KEYS.forward.map(key => [key, () => composeShortcut('forward')]))
+  ...Object.fromEntries(MAIL_SHORTCUT_KEYS.forward.map(key => [key, () => composeShortcut('forward')])),
+  ...Object.fromEntries(MAIL_SHORTCUT_KEYS.done.map(key => [key, doneShortcut]))
 })
 
 const breakpoints = useBreakpoints(breakpointsTailwind)
@@ -1545,6 +1752,16 @@ const isMobile = breakpoints.smaller('lg')
               />
             </UFormField>
 
+            <UFormField label="Label">
+              <USelect
+                v-model="labelFilter"
+                :items="accountLabels"
+                placeholder="Any label"
+                size="sm"
+                class="w-full"
+              />
+            </UFormField>
+
             <UFormField label="Received">
               <div class="flex items-center gap-2">
                 <UInput
@@ -1579,6 +1796,14 @@ const isMobile = breakpoints.smaller('lg')
 
             <div class="space-y-2">
               <UCheckbox v-model="starred" label="Starred" />
+              <UTooltip
+                v-if="indexAvailable"
+                :text="indexing ? 'The search index is still being built' : 'Only mails without the done label'"
+              >
+                <span class="inline-flex">
+                  <UCheckbox v-model="notDone" label="Not done" :disabled="indexing" />
+                </span>
+              </UTooltip>
               <UCheckbox v-if="indexAvailable" v-model="hasAttachment" label="Has attachment" />
               <UCheckbox v-if="indexAvailable" v-model="allFolders" label="Search all folders" />
             </div>
@@ -1670,6 +1895,8 @@ const isMobile = breakpoints.smaller('lg')
         :selection="selectedConversationKeys"
         :service="service"
         :own-address="ownAddress"
+        :labels="accountLabels"
+        :done-label="doneLabel"
         :loading-more="conversationsLoading"
         :done="conversationState.done"
         :is-permanent="isPermanentDelete"
@@ -1678,8 +1905,11 @@ const isMobile = breakpoints.smaller('lg')
         @load-more="loadConversations(false)"
         @compose="(mode, mail) => openCompose(mode, mail)"
         @toggle-unread="toggleUnread"
+        @toggle-done="toggleConversationDone"
+        @label="setConversationLabel"
         @delete="deleteMail($event)"
         @batch="batchSelectedConversations"
+        @batch-label="batchSelectedLabel"
         @update-selection="setSelectedKeys"
       />
     </template>
@@ -1711,6 +1941,8 @@ const isMobile = breakpoints.smaller('lg')
         :selection="selectedMailKeys"
         :show-mailbox="allFolders"
         :mailbox-names="mailboxNames"
+        :labels="accountLabels"
+        :done-label="doneLabel"
         :loading-more="loadingMore"
         :done="pageState.done"
         :is-permanent="isPermanentDelete"
@@ -1719,8 +1951,11 @@ const isMobile = breakpoints.smaller('lg')
         @prefetch="prefetchMessage"
         @compose="(mode, mail) => openCompose(mode, mail)"
         @toggle-unread="toggleUnread"
+        @toggle-done="toggleDone([$event])"
+        @label="(mail, label, on) => setLabelMany([mail], label, on)"
         @delete="deleteMail($event)"
         @batch="batchSelectedMails"
+        @batch-label="batchSelectedLabel"
       />
     </template>
   </UDashboardPanel>
@@ -1744,8 +1979,10 @@ const isMobile = breakpoints.smaller('lg')
     :mail="selectedMail"
     :service="service"
     :permanent="isPermanentDelete(selectedMail)"
+    :done-label="doneLabel"
     @close="selectedMail = null"
     @mark-unread="markUnread"
+    @toggle-done="selectedMail && toggleDone([selectedMail])"
     @delete="selectedMail && deleteMail(selectedMail)"
     @compose="openCompose($event, selectedMail ?? undefined)"
     @prefetch="prefetchCompose"
@@ -1776,8 +2013,10 @@ const isMobile = breakpoints.smaller('lg')
           :mail="selectedMail"
           :service="service"
           :permanent="isPermanentDelete(selectedMail)"
+          :done-label="doneLabel"
           @close="selectedMail = null"
           @mark-unread="markUnread"
+          @toggle-done="selectedMail && toggleDone([selectedMail])"
           @delete="selectedMail && deleteMail(selectedMail)"
           @compose="openCompose($event, selectedMail ?? undefined)"
           @prefetch="prefetchCompose"

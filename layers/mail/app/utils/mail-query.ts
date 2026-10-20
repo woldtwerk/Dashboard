@@ -35,6 +35,8 @@ export function mailSearchFromQuery(query: MailQuery, today = new Date()): MailS
     flagged: stringParam(query, 'flagged') === 'true' || undefined,
     from: stringParam(query, 'from'),
     hasAttachment: stringParam(query, 'attachment') === 'true' || undefined,
+    label: stringParam(query, 'label'),
+    notLabel: stringParam(query, 'notLabel'),
     since: date('since') ?? (days ? format(subDays(today, days), 'yyyy-MM-dd') : undefined),
     before: date('before')
   }
@@ -48,6 +50,8 @@ export function mailSearchToQuery(search: MailSearch): Record<string, string | n
     flagged: search.flagged ? 'true' : null,
     from: search.from?.trim() || null,
     attachment: search.hasAttachment ? 'true' : null,
+    label: search.label?.trim() || null,
+    notLabel: search.notLabel?.trim() || null,
     since: search.since || null,
     before: search.before || null,
     days: null
@@ -62,6 +66,8 @@ export function mailSearchToApiQuery(search: MailSearch): Record<string, string 
     flagged: search.flagged ? 'true' : undefined,
     from: search.from,
     hasAttachment: search.hasAttachment ? 'true' : undefined,
+    label: search.label,
+    notLabel: search.notLabel,
     since: search.since,
     before: search.before
   }

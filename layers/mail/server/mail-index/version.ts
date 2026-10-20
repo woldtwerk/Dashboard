@@ -1,5 +1,5 @@
 /** Bump when the indexed document shape changes, so existing indexes are rebuilt once */
-export const MAIL_INDEX_SCHEMA_VERSION = 4
+export const MAIL_INDEX_SCHEMA_VERSION = 5
 
 export interface StoredMailboxIndexState {
   uidValidity: string

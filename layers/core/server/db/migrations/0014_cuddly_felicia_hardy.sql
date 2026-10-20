@@ -1,0 +1,1 @@
+ALTER TABLE `mail_index_messages` ADD `message_id` text;

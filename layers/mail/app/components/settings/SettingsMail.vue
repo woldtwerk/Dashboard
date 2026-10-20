@@ -1,9 +1,38 @@
 <script setup lang="ts">
 import { normalizeTrustedImageSender } from '#layers/mail/shared/mail-images'
+import { isValidLabelName } from '#layers/mail/shared/mail-labels'
+import type { MailSettings } from '#layers/mail/shared/types/settings'
 
 const { trustedImageSenders, trust, untrust } = useTrustedImageSenders()
 const { senderAddresses, add: addSender, remove: removeSender } = useMailSenderAddresses()
 const { data: services } = useServices()
+const { data: mailSettings, save: saveMailSettings } = useSettings<MailSettings>('mail')
+
+// The done label is edited in place; a blank or invalid name is refused and the
+// saved one shown again
+const doneLabel = ref(mailSettings.value.doneLabel ?? 'Done')
+const doneLabelError = ref('')
+
+watch(mailSettings, (settings) => {
+  doneLabel.value = settings.doneLabel ?? 'Done'
+})
+
+async function saveDoneLabel() {
+  const label = doneLabel.value.trim()
+  if (!isValidLabelName(label)) {
+    doneLabelError.value = 'Enter a label name without "/" or "..".'
+    return
+  }
+
+  doneLabelError.value = ''
+  doneLabel.value = label
+  await saveMailSettings({
+    trustedImageSenders: mailSettings.value.trustedImageSenders ?? [],
+    listView: mailSettings.value.listView ?? 'mails',
+    senderAddresses: mailSettings.value.senderAddresses ?? {},
+    doneLabel: label
+  })
+}
 
 const mailServices = computed(() => services.value.filter(service => service.domain === 'mail'))
 
@@ -48,6 +77,38 @@ async function addSenderAddress(serviceId: string) {
 
 <template>
   <div class="max-w-xl space-y-6">
+    <UCard>
+      <template #header>
+        <div>
+          <h2 class="font-semibold text-highlighted">
+            Done label
+          </h2>
+          <p class="text-sm text-muted">
+            The label that marks a mail as done. Pressing <UKbd>e</UKbd> adds it and marks the mail
+            read; pressing it again removes the label and leaves the mail where it is.
+          </p>
+        </div>
+      </template>
+
+      <UFormField label="Label name" :error="doneLabelError || undefined">
+        <div class="flex items-start gap-2">
+          <UInput
+            v-model="doneLabel"
+            icon="i-lucide-tag"
+            placeholder="Done"
+            class="min-w-0 flex-1"
+            @keyup.enter="saveDoneLabel"
+          />
+          <UButton
+            label="Save"
+            icon="i-lucide-check"
+            :disabled="!doneLabel.trim() || doneLabel === mailSettings.doneLabel"
+            @click="saveDoneLabel"
+          />
+        </div>
+      </UFormField>
+    </UCard>
+
     <UCard>
       <template #header>
         <div>

@@ -40,6 +40,12 @@ export interface MailSearchIndex {
   /** Merges partial documents: the fields they carry replace the stored ones */
   updateDocuments(updates: MailDocumentUpdate[]): Promise<void>
   updateFlags(updates: MailFlagUpdate[]): Promise<void>
+  /** The stored documents for these ids; missing ids are left out */
+  getDocuments(ids: string[]): Promise<MailDocument[]>
+  /** Every document of these messages, across folders and labels (same `messageId`) */
+  documentsByMessageIds(service: string, messageIds: string[]): Promise<MailDocument[]>
+  /** Every indexed document filed under one label */
+  documentsByLabel(service: string, label: string): Promise<MailDocument[]>
   remove(ids: string[]): Promise<void>
   /** All documents of a service, or of one of its mailboxes */
   removeMailbox(service: string, mailbox?: string): Promise<void>

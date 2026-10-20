@@ -16,8 +16,8 @@ const mail = (uid: number, mailbox: string): MailSummary => ({
 
 describe('mailSearchFromQuery', () => {
   it('reads all criteria', () => {
-    expect(mailSearchFromQuery({ q: 'invoice', unread: 'true', flagged: 'true', from: 'stripe', attachment: 'true', since: '2026-10-01', before: '2026-10-10' }, today)).toEqual({
-      text: 'invoice', unread: true, flagged: true, from: 'stripe', hasAttachment: true, since: '2026-10-01', before: '2026-10-10'
+    expect(mailSearchFromQuery({ q: 'invoice', unread: 'true', flagged: 'true', from: 'stripe', attachment: 'true', label: 'Invoices', notLabel: 'Done', since: '2026-10-01', before: '2026-10-10' }, today)).toEqual({
+      text: 'invoice', unread: true, flagged: true, from: 'stripe', hasAttachment: true, label: 'Invoices', notLabel: 'Done', since: '2026-10-01', before: '2026-10-10'
     })
   })
 
@@ -28,20 +28,20 @@ describe('mailSearchFromQuery', () => {
 
   it('ignores empty and invalid values', () => {
     expect(mailSearchFromQuery({ q: '', unread: 'yes', since: 'last week', from: ['a', 'b'] }, today)).toEqual({
-      text: undefined, unread: undefined, flagged: undefined, from: undefined, hasAttachment: undefined, since: undefined, before: undefined
+      text: undefined, unread: undefined, flagged: undefined, from: undefined, hasAttachment: undefined, label: undefined, notLabel: undefined, since: undefined, before: undefined
     })
   })
 })
 
 describe('mailSearchToQuery', () => {
   it('replaces every criterion and drops the relative period', () => {
-    expect(mailSearchToQuery({ text: ' tickets ', from: 'bahn', hasAttachment: true, since: '2026-09-01' })).toEqual({
-      q: 'tickets', unread: null, flagged: null, from: 'bahn', attachment: 'true', since: '2026-09-01', before: null, days: null
+    expect(mailSearchToQuery({ text: ' tickets ', from: 'bahn', hasAttachment: true, label: 'Invoices', notLabel: 'Done', since: '2026-09-01' })).toEqual({
+      q: 'tickets', unread: null, flagged: null, from: 'bahn', attachment: 'true', label: 'Invoices', notLabel: 'Done', since: '2026-09-01', before: null, days: null
     })
   })
 
   it('round-trips through the URL', () => {
-    const search = { text: 'agenda', unread: true, flagged: undefined, from: 'bob', hasAttachment: true, since: '2026-10-01', before: undefined }
+    const search = { text: 'agenda', unread: true, flagged: undefined, from: 'bob', hasAttachment: true, label: 'Invoices', notLabel: 'Done', since: '2026-10-01', before: undefined }
     const query = Object.fromEntries(Object.entries(mailSearchToQuery(search)).filter(([, value]) => value))
 
     expect(mailSearchFromQuery(query, today)).toEqual(search)
@@ -50,8 +50,8 @@ describe('mailSearchToQuery', () => {
 
 describe('mailSearchToApiQuery', () => {
   it('only sends set criteria', () => {
-    expect(mailSearchToApiQuery({ unread: true, flagged: false, hasAttachment: true })).toEqual({
-      q: undefined, unread: 'true', flagged: undefined, from: undefined, hasAttachment: 'true', since: undefined, before: undefined
+    expect(mailSearchToApiQuery({ unread: true, flagged: false, hasAttachment: true, label: 'Invoices', notLabel: 'Done' })).toEqual({
+      q: undefined, unread: 'true', flagged: undefined, from: undefined, hasAttachment: 'true', label: 'Invoices', notLabel: 'Done', since: undefined, before: undefined
     })
   })
 })

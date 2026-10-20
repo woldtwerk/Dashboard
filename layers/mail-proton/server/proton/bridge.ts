@@ -149,6 +149,22 @@ export function toMailAddresses(addresses?: MessageAddressObject[] | AddressObje
 }
 
 /**
+ * Whether opening a mailbox failed only because it does not exist. A server
+ * answers the RFC 5530 `[NONEXISTENT]` code, or only says so in its text.
+ */
+export function isMailboxNotFoundError(error: unknown): boolean {
+  const value = error as { serverResponseCode?: string, response?: unknown, message?: string } | undefined
+  if (!value) {
+    return false
+  }
+  if (value.serverResponseCode === 'NONEXISTENT') {
+    return true
+  }
+  const text = typeof value.response === 'string' ? value.response : value.message ?? ''
+  return /mailbox (does not exist|not found)|no such mailbox|nonexistent/i.test(text)
+}
+
+/**
  * Whether a `CREATE` failed only because the folder already exists. ImapFlow
  * itself answers an RFC 5530 `[ALREADYEXISTS]` with `{ created: false }`; a
  * server that only says "Mailbox already exists" reaches us as an error.

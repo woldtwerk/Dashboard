@@ -23,7 +23,9 @@ export const mailIndexMessages = sqliteTable('mail_index_messages', {
   mailbox: text('mailbox').notNull(),
   uid: integer('uid').notNull(),
   unread: integer('unread', { mode: 'boolean' }).notNull(),
-  flagged: integer('flagged', { mode: 'boolean' }).notNull()
+  flagged: integer('flagged', { mode: 'boolean' }).notNull(),
+  /** RFC Message-ID, so a removed label copy can be traced after its document is gone */
+  messageId: text('message_id')
 }, table => [
   primaryKey({ columns: [table.service, table.mailbox, table.uid] })
 ])

@@ -6,6 +6,8 @@ export interface MailSearchQuery {
   unread?: boolean
   flagged?: boolean
   hasAttachment?: boolean
+  label?: string
+  notLabel?: string
   since?: string
   before?: string
   from?: string
@@ -18,6 +20,8 @@ export function toMailSearch(query: MailSearchQuery): MailSearch {
     unread: query.unread,
     flagged: query.flagged,
     hasAttachment: query.hasAttachment,
+    label: query.label || undefined,
+    notLabel: query.notLabel || undefined,
     since: query.since,
     before: query.before,
     from: query.from || undefined

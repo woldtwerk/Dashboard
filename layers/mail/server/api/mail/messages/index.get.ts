@@ -1,5 +1,7 @@
-import { defineEventHandler, getValidatedQuery } from 'nuxt/server'
+import { createError, defineEventHandler, getValidatedQuery } from 'nuxt/server'
 import { hasSearchCriteria } from '../../../mail-index/document'
+import { labelMailbox } from '../../../../shared/mail-labels'
+import { INDEX_ONLY_PROVIDER_ERROR, mailListSource, providerCannotAnswer } from '../../../utils/mail-list-source'
 import { toMailSearch } from '../../../utils/mail-search-query'
 
 export default defineEventHandler(async (event) => {
@@ -20,6 +22,10 @@ export default defineEventHandler(async (event) => {
   const indexed = index ? await isMailboxIndexed(service, allFolders ? mailboxes : mailbox) : false
   const source = mailListSource({ indexAvailable: !!index, indexed, allFolders, hasCriteria: hasSearchCriteria(criteria) })
 
+  if (source === 'provider' && providerCannotAnswer(criteria)) {
+    throw createError({ status: 409, statusText: INDEX_ONLY_PROVIDER_ERROR })
+  }
+
   if (source === 'index' && index) {
     return index.search({
       services: [service],
@@ -32,6 +38,8 @@ export default defineEventHandler(async (event) => {
   }
 
   // Until the folder is indexed, the provider pages by offset; it serves one
-  // provider-sized page per request, since the mail server caps a fetch.
-  return (await useMailProvider(service)).listMessages(mailbox, { limit: Math.min(limit, MAIL_PROVIDER_MAX_LIMIT), offset, search: criteria })
+  // provider-sized page per request, since the mail server caps a fetch. A label
+  // filter browses the label folder itself, which repeats the labelled mail.
+  const providerMailbox = criteria.label ? labelMailbox(criteria.label) : mailbox
+  return (await useMailProvider(service)).listMessages(providerMailbox, { limit: Math.min(limit, MAIL_PROVIDER_MAX_LIMIT), offset, search: criteria })
 })

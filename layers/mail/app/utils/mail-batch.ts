@@ -3,7 +3,7 @@ import type { RetainedMail, RetainedMails } from './mail-retention'
 import { mailKey } from './mail'
 
 /** The bulk actions the list and the context menu offer for several mails */
-export type MailBatchAction = 'read' | 'unread' | 'delete'
+export type MailBatchAction = 'read' | 'unread' | 'delete' | 'done'
 
 /** One batch request handles at most this many uids of one mailbox */
 export const MAIL_BATCH_MAX = 200

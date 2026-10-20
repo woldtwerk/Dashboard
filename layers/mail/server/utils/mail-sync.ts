@@ -4,8 +4,10 @@ import { MAIL_SYNC_STALE_MS } from '../../shared/sync-schedule'
 import type { Mailbox, MailIndexStatus, MailMessage } from '../../shared/types/mail'
 import { mailIndexMailboxes, mailIndexMessages } from '../db/schema'
 import { diffMailboxState } from '../mail-index/diff'
-import { mailDocumentId, toMailDocument } from '../mail-index/document'
+import { mailDocumentId, toMailDocument, type MailDocument } from '../mail-index/document'
+import { labelsByMessageId } from '../mail-index/labels'
 import { mailIndexStateIsCurrent, MAIL_INDEX_SCHEMA_VERSION } from '../mail-index/version'
+import { labelFromMailbox } from '../../shared/mail-labels'
 import { newMailNotification } from './mail-notifications'
 import { backfillMailboxStreamKeys } from './mail-stream-backfill'
 import type { MailProvider } from './mail-provider'
@@ -145,8 +147,11 @@ export async function syncMailService(service: string): Promise<boolean> {
         // virtual (Bridge's "All Mail"/"Starred"): drop their indexed rows
         const known = await db.select({ mailbox: mailIndexMailboxes.mailbox }).from(mailIndexMailboxes).where(eq(mailIndexMailboxes.service, service))
         for (const mailbox of forgottenMailboxes(known.map(row => row.mailbox), mailboxes)) {
+          // A label folder that disappeared takes its label off the messages it repeated
+          const messageIds = labelFromMailbox(mailbox) ? await mailboxMessageIds(service, mailbox, index) : []
           await index.removeMailbox(service, mailbox)
           changed += await forgetMailbox(service, mailbox)
+          changed += await refreshMessageLabels(service, messageIds, index)
           await publishDomainEvent({ domain: 'mail', service, type: 'changed', resource: mailbox })
         }
 
@@ -209,6 +214,93 @@ async function notifyNewMail(service: string, messages: MailMessage[]): Promise<
   }
 }
 
+/** Everything that can still name the messages a removed label mailbox held */
+export interface RemovedLabelSources {
+  /** SQL rows of the removed uids, with a Message-ID once one was stored */
+  stored: { uid: number, messageId?: string | null }[]
+  /** The index documents of those uids, when another worker did not remove them yet */
+  documents: Pick<MailDocument, 'uid' | 'messageId'>[]
+  /** Every document still carrying the label; the last resort when both above lost the message */
+  documentsByLabel: () => Promise<Pick<MailDocument, 'messageId'>[]>
+}
+
+/**
+ * The messages that lost the label copies of one label mailbox. Their stored
+ * Message-ID survives the document; when an older row or a concurrent update
+ * left none, the index is asked for every document still carrying the label, so
+ * the real-folder copies can be repaired as well.
+ */
+export async function removedLabelMessageIds({ stored, documents, documentsByLabel }: RemovedLabelSources): Promise<string[]> {
+  const messageIds = new Set<string>()
+  for (const row of stored) {
+    if (row.messageId) {
+      messageIds.add(row.messageId)
+    }
+  }
+  for (const document of documents) {
+    messageIds.add(document.messageId)
+  }
+
+  // A row without a Message-ID whose document is gone has no other trace
+  const knownUids = new Set(documents.map(document => document.uid))
+  const missing = stored.some(row => !row.messageId && !knownUids.has(row.uid))
+  if (stored.length && (!messageIds.size || missing)) {
+    for (const document of await documentsByLabel()) {
+      messageIds.add(document.messageId)
+    }
+  }
+
+  return [...messageIds]
+}
+
+/** The `messageId`s of the messages indexed in one mailbox */
+async function mailboxMessageIds(service: string, mailbox: string, index: MailSearchIndex): Promise<string[]> {
+  const db = await useDb()
+  const rows = await db.select({ uid: mailIndexMessages.uid, messageId: mailIndexMessages.messageId }).from(mailIndexMessages)
+    .where(and(eq(mailIndexMessages.service, service), eq(mailIndexMessages.mailbox, mailbox)))
+
+  const documents = rows.length
+    ? await index.getDocuments(rows.map(row => mailDocumentId(service, mailbox, row.uid)))
+    : []
+  const messageIds = new Set(documents.map(document => document.messageId))
+  for (const row of rows) {
+    if (row.messageId) {
+      messageIds.add(row.messageId)
+    }
+  }
+
+  // A label mailbox forgotten after another worker already dropped its documents
+  const label = labelFromMailbox(mailbox)
+  if (!messageIds.size && label) {
+    for (const document of await index.documentsByLabel(service, label)) {
+      messageIds.add(document.messageId)
+    }
+  }
+
+  return [...messageIds]
+}
+
+/**
+ * Rewrites the `labels` of every indexed copy of the given messages from the
+ * `Labels/` folders they still sit in. Called after a label copy appears or
+ * disappears, so the mail's real-folder document follows its label immediately.
+ */
+async function refreshMessageLabels(service: string, messageIds: string[], index: MailSearchIndex): Promise<number> {
+  const ids = [...new Set(messageIds)].filter(Boolean)
+  if (!ids.length) {
+    return 0
+  }
+
+  const documents = await index.documentsByMessageIds(service, ids)
+  const labels = labelsByMessageId(documents)
+  await index.updateDocuments(documents.map(document => ({
+    id: document.id,
+    labels: labels.get(document.messageId) ?? []
+  })))
+
+  return documents.length
+}
+
 /** Drops every indexed message of a mailbox; returns how many rows were removed. */
 async function forgetMailbox(service: string, mailbox: string): Promise<number> {
   const db = await useDb()
@@ -220,6 +312,30 @@ async function forgetMailbox(service: string, mailbox: string): Promise<number> 
   await db.delete(mailIndexMailboxes).where(and(eq(mailIndexMailboxes.service, service), eq(mailIndexMailboxes.mailbox, mailbox)))
 
   return row?.count ?? 0
+}
+
+/**
+ * The labels of the messages about to be indexed: the labels of their existing
+ * copies, plus the folder's own label when a label mailbox is being indexed.
+ */
+async function labelsForMessages(
+  service: string,
+  mailbox: string,
+  messages: MailMessage[],
+  index: MailSearchIndex
+): Promise<Map<number, string[]>> {
+  const messageIds = messages.map(message => message.messageId).filter((id): id is string => !!id)
+  const documents = messageIds.length ? await index.documentsByMessageIds(service, messageIds) : []
+  const byMessage = labelsByMessageId(documents)
+  const ownLabel = labelFromMailbox(mailbox)
+
+  return new Map(messages.map((message) => {
+    const labels = new Set(message.messageId ? byMessage.get(message.messageId) ?? [] : [])
+    if (ownLabel) {
+      labels.add(ownLabel)
+    }
+    return [message.uid, [...labels]]
+  }))
 }
 
 async function syncMailbox({ service, mailbox, provider, index, renew, logger, onNewInbox }: {
@@ -258,9 +374,33 @@ async function syncMailbox({ service, mailbox, provider, index, renew, logger, o
     .map(({ uid, unread, flagged }) => [uid, { unread, flagged }]))
   const diff = diffMailboxState(indexed, state.messages)
 
+  // The message ids are read before the documents go, so a label that lost its
+  // copy can be taken off the copy that stays in the real folder. The SQL row
+  // keeps the Message-ID even after another worker already removed the document.
+  const label = labelFromMailbox(path)
+  const removedIds = diff.removed.map(uid => mailDocumentId(service, path, uid))
+  let removedStored: { uid: number, messageId: string | null }[] = []
+  if (label && diff.removed.length) {
+    removedStored = await db.select({ uid: mailIndexMessages.uid, messageId: mailIndexMessages.messageId })
+      .from(mailIndexMessages)
+      .where(and(messagesWhere, inArray(mailIndexMessages.uid, diff.removed)))
+  }
+  const removedDocuments = label && removedIds.length ? await index.getDocuments(removedIds) : []
+  const removedMessageIds = label && diff.removed.length
+    ? await removedLabelMessageIds({
+        stored: removedStored,
+        documents: removedDocuments,
+        documentsByLabel: () => index.documentsByLabel(service, label)
+      })
+    : []
+
   for (const uids of chunk(diff.removed, SQL_CHUNK)) {
     await index.remove(uids.map(uid => mailDocumentId(service, path, uid)))
     await db.delete(mailIndexMessages).where(and(messagesWhere, inArray(mailIndexMessages.uid, uids)))
+  }
+
+  if (removedMessageIds.length) {
+    await refreshMessageLabels(service, removedMessageIds, index)
   }
 
   if (diff.changed.length) {
@@ -276,11 +416,17 @@ async function syncMailbox({ service, mailbox, provider, index, renew, logger, o
       throw new Error(`Lost sync lock for service ${service}`)
     }
     const messages = await provider.getMessages(path, uids)
-    await index.upsert(messages.map(message => toMailDocument(service, path, message)))
+    const labels = await labelsForMessages(service, path, messages, index)
+    await index.upsert(messages.map(message => toMailDocument(service, path, message, labels.get(message.uid))))
     // Progress is kept per batch, so an interrupted sync continues where it stopped
     await db.insert(mailIndexMessages)
-      .values(messages.map(({ uid, unread, flagged }) => ({ service, mailbox: path, uid, unread, flagged })))
+      .values(messages.map(({ uid, unread, flagged, messageId }) => ({ service, mailbox: path, uid, unread, flagged, messageId })))
       .onConflictDoNothing()
+
+    // A new label copy puts its label on every other copy of the same message
+    if (labelFromMailbox(path)) {
+      await refreshMessageLabels(service, messages.map(message => message.messageId).filter((id): id is string => !!id), index)
+    }
 
     if (wasComplete && path === 'INBOX') {
       onNewInbox(messages)

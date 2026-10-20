@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { MailMessage } from '../shared/types/mail'
 import { diffMailboxState } from '../server/mail-index/diff'
 import { hasSearchCriteria, mailDocumentId, MAX_TEXT_LENGTH, normalizeSenderTerm, senderTerms, toMailDocument } from '../server/mail-index/document'
+import { labelsByMessageId, labelsOfDocuments } from '../server/mail-index/labels'
 import { mailIndexStateIsCurrent, MAIL_INDEX_SCHEMA_VERSION } from '../server/mail-index/version'
 
 const message: MailMessage = {
@@ -88,6 +89,39 @@ describe('toMailDocument', () => {
 
     expect(document.messageId).toBe(document.id)
     expect(document.text).toHaveLength(MAX_TEXT_LENGTH)
+  })
+
+  it('files the given labels and defaults to none', () => {
+    expect(toMailDocument('svc', 'INBOX', message, ['Done', 'Invoices']).labels).toEqual(['Done', 'Invoices'])
+    expect(toMailDocument('svc', 'INBOX', message).labels).toEqual([])
+  })
+})
+
+describe('labelsOfDocuments', () => {
+  it('derives the labels from the label folders the copies sit in', () => {
+    expect(labelsOfDocuments([
+      { mailbox: 'INBOX' },
+      { mailbox: 'Labels/Done' },
+      { mailbox: 'Labels/Invoices' },
+      { mailbox: 'Labels/Done' }
+    ])).toEqual(['Done', 'Invoices'])
+  })
+
+  it('has no labels for documents in real folders only', () => {
+    expect(labelsOfDocuments([{ mailbox: 'INBOX' }, { mailbox: 'Folders/Work' }])).toEqual([])
+  })
+})
+
+describe('labelsByMessageId', () => {
+  it('collects the labels of every copy of a message', () => {
+    const labels = labelsByMessageId([
+      { messageId: '<a@example.com>', mailbox: 'INBOX' },
+      { messageId: '<a@example.com>', mailbox: 'Labels/Done' },
+      { messageId: '<b@example.com>', mailbox: 'Labels/Invoices' }
+    ])
+
+    expect(labels.get('<a@example.com>')).toEqual(['Done'])
+    expect(labels.get('<b@example.com>')).toEqual(['Invoices'])
   })
 })
 

@@ -3,8 +3,10 @@ import type { ContextMenuItem } from '@nuxt/ui'
 import type { MailConversation, MailSummary } from '../shared/types/mail'
 import {
   MAIL_SHORTCUT_KEYS,
+  mailDoneTarget,
   mailReplyTarget,
   mailShortcutTarget,
+  type MailDoneTarget,
   type MailShortcutAction,
   type MailShortcutState,
   type MailShortcutTarget
@@ -91,6 +93,44 @@ describe('mailShortcutTarget', () => {
   })
 })
 
+describe('mailDoneTarget', () => {
+  const cases: [name: string, input: MailShortcutState, expected: MailDoneTarget][] = [
+    ['takes the list selection when there is one', state({ view: 'mails', selectionCount: 2, selectedMail: onlyMail }), { kind: 'batch' }],
+    [
+      'takes the conversation selection when there is one',
+      state({ view: 'conversations', selectionCount: 1, openConversation: threadConversation }),
+      { kind: 'batch' }
+    ],
+    ['takes the open mail in the mails list', state({ view: 'mails', selectedMail: onlyMail }), { kind: 'mails', mails: [onlyMail] }],
+    ['has nothing to do in the mails list', state({ view: 'mails' }), null],
+    [
+      'takes every mail of a multi-mail conversation',
+      state({ view: 'conversations', openConversation: threadConversation, conversationMails: [mail(1), mail(2), mail(3)] }),
+      { kind: 'mails', mails: [mail(1), mail(2), mail(3)] }
+    ],
+    [
+      'waits for the mails of a multi-mail conversation',
+      state({ view: 'conversations', openConversation: threadConversation }),
+      null
+    ],
+    [
+      'takes the only mail of a single-mail conversation before it is loaded',
+      state({ view: 'conversations', openConversation: singleConversation }),
+      { kind: 'mails', mails: [onlyMail] }
+    ],
+    ['has nothing to do without an open conversation', state({ view: 'conversations' }), null],
+    [
+      'leaves the composer alone',
+      state({ view: 'conversations', selectionCount: 1, openConversation: singleConversation, composerOpen: true }),
+      null
+    ]
+  ]
+
+  it.each(cases)('%s', (_name, input, expected) => {
+    expect(mailDoneTarget(input)).toEqual(expected)
+  })
+})
+
 describe('mailReplyTarget', () => {
   const own = { ownAddress: 'me@example.com' }
   const incoming = mail(1, { from: [{ address: 'alice@example.com' }], date: '2026-10-20T09:00:00Z' })
@@ -144,7 +184,9 @@ describe('context menu badges', () => {
     'Reply all': 'replyAll',
     'Forward': 'forward',
     'Delete': 'delete',
-    'Delete forever': 'delete'
+    'Delete forever': 'delete',
+    'Mark as done': 'done',
+    'Mark as not done': 'done'
   }
 
   // The options the two lists really pass: a mail's menu and a conversation's
@@ -158,11 +200,11 @@ describe('context menu badges', () => {
   ]
 
   function handlers(): MailContextMenuHandlers {
-    return { open: vi.fn(), compose: vi.fn(), toggleUnread: vi.fn(), delete: vi.fn() }
+    return { open: vi.fn(), compose: vi.fn(), toggleUnread: vi.fn(), toggleDone: vi.fn(), setLabel: vi.fn(), delete: vi.fn() }
   }
 
   function batchHandlers(): MailBatchContextMenuHandlers {
-    return { markRead: vi.fn(), markUnread: vi.fn(), delete: vi.fn() }
+    return { markRead: vi.fn(), markUnread: vi.fn(), toggleDone: vi.fn(), setLabel: vi.fn(), delete: vi.fn() }
   }
 
   function badged(groups: ContextMenuItem[][]) {

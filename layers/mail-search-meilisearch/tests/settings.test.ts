@@ -31,6 +31,8 @@ describe('buildIndexSettings', () => {
     expect(settings.filterableAttributes).toContain('participantTerms')
     expect(settings.filterableAttributes).toContain('conversationKeys')
     expect(settings.filterableAttributes).toContain('listId')
+    expect(settings.filterableAttributes).toContain('labels')
+    expect(settings.filterableAttributes).toContain('messageId')
     expect(settings.typoTolerance).toEqual(buildTypoTolerance(options))
   })
 

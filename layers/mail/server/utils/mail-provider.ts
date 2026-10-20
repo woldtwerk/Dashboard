@@ -3,6 +3,14 @@ import type { SetupValues } from '../../../core/shared/types/setup'
 import type { OutgoingMail } from '../../shared/mail-compose'
 import type { MailAddress, MailAttachment, Mailbox, MailMessage, MailMessageState, MailSearch, MailStreamHeader, MailSummary } from '../../shared/types/mail'
 
+/** What removing label copies from one mailbox did */
+export interface MailLabelRemoval {
+  /** UIDs of the copies deleted in the label folder */
+  removed: number[]
+  /** Source UIDs without a Message-ID or without a copy under the label */
+  unresolved: number[]
+}
+
 /** Port every mail provider adapter implements. */
 export interface MailProvider {
   listMailboxes(): Promise<Mailbox[]>
@@ -33,9 +41,24 @@ export interface MailProvider {
    * Files a copy of one message under one label. Proton keeps labels as IMAP
    * folders under `Labels/`, which repeat mail stored in a real folder, so this is
    * a copy (the original stays) rather than a move. The result carries the copy's
-   * UID where the server reports one; the label folder must already exist.
+   * UID where the server reports one. The batch form with a single uid, so both
+   * paths cannot drift apart.
    */
   addLabel(mailbox: string, uid: number, label: string): Promise<{ uid?: number }>
+  /**
+   * Files copies of several messages under one label with one command, creating
+   * the label folder first. The map is old uid → uid of the copy in the label
+   * folder, holding only the uids the server reported (IMAP UIDPLUS).
+   */
+  addLabels(mailbox: string, uids: number[], label: string): Promise<Map<number, number>>
+  /**
+   * Removes the label copies of several messages. When `mailbox` already is the
+   * label folder the copies are deleted there; from a real folder they are found
+   * by Message-ID in `Labels/<label>`. `removed` holds the deleted uids in the
+   * label folder; `unresolved` holds the source uids that had no Message-ID or
+   * no copy under the label, so the caller can put their label back.
+   */
+  removeLabels(mailbox: string, uids: number[], label: string): Promise<MailLabelRemoval>
   /**
    * Creates an IMAP folder (e.g. the `Labels/<label>` a label is filed under).
    * Optional: a provider that creates the folder itself omits it. An existing

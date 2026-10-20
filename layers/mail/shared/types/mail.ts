@@ -45,6 +45,8 @@ export interface MailSummary {
   listId?: string
   /** Human readable List-Id description, e.g. "Drupal Security News" */
   listName?: string
+  /** Label names the mail is filed under, from the search index */
+  labels?: string[]
   /**
    * Meilisearch's `_rankingScore` (0..1) when the query asked for it; a hybrid
    * search reports the blended keyword/semantic score.
@@ -133,6 +135,10 @@ export interface MailSearch {
   from?: string
   /** Only messages carrying an attachment; index-only, the provider cannot answer it */
   hasAttachment?: boolean
+  /** Messages filed under this label */
+  label?: string
+  /** Messages not filed under this label; index-only, like `hasAttachment` */
+  notLabel?: string
 }
 
 /** A facet value with how many matching messages carry it */

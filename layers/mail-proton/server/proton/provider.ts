@@ -4,9 +4,10 @@ import type { SetupValues } from '../../../core/shared/types/setup'
 import type { MailProvider } from '../../../mail/server/utils/mail-provider'
 import type { Mailbox, MailMessage, MailMessageState, MailSearch, MailStreamHeader, MailSummary } from '../../../mail/shared/types/mail'
 import { mailStreamFlags, parseRawStreamHeaders } from '../../../mail/shared/mail-thread'
+import { labelMailbox } from '../../../mail/shared/mail-labels'
 import { sequenceRange, uidPage } from './sequence'
 import { isProtonLabel, protonSpecialUse } from './special-use'
-import { toMailAddresses, toMailSummary, toProtonSettings, isMailboxExistsError, withProtonBridge, withProtonMailbox } from './bridge'
+import { toMailAddresses, toMailSummary, toProtonSettings, isMailboxExistsError, isMailboxNotFoundError, withProtonBridge, withProtonMailbox } from './bridge'
 import { sendProtonMail } from './mailer'
 
 const MESSAGE_QUERY = { uid: true, flags: true, envelope: true, internalDate: true } as const
@@ -136,6 +137,117 @@ export function createProtonMailProvider(values: SetupValues): MailProvider {
     }
     return withProtonMailbox(settings, mailbox, async (client) => {
       await client.messageDelete(uids.join(','), { uid: true })
+    })
+  }
+
+  const createMailbox: NonNullable<MailProvider['createMailbox']> = path => withProtonBridge(settings, async (client) => {
+    try {
+      await client.mailboxCreate(path)
+    } catch (error) {
+      // An existing folder is the common case and not an error
+      if (!isMailboxExistsError(error)) {
+        throw error
+      }
+    }
+  })
+
+  const addLabels: MailProvider['addLabels'] = async (mailbox, uids, label) => {
+    if (!uids.length) {
+      return new Map<number, number>()
+    }
+
+    const target = labelMailbox(label)
+    // Already looking at the label folder: the mail is filed under it already
+    if (mailbox === target) {
+      return new Map<number, number>()
+    }
+
+    // Proton copies into an existing folder only; a first use creates it
+    await createMailbox(target)
+
+    return withProtonMailbox(settings, mailbox, async (client) => {
+      const result = await client.messageCopy(uids.join(','), target, { uid: true })
+      return new Map(result ? result.uidMap : undefined)
+    })
+  }
+
+  const removeLabels: MailProvider['removeLabels'] = async (mailbox, uids, label) => {
+    if (!uids.length) {
+      return { removed: [], unresolved: [] }
+    }
+
+    const target = labelMailbox(label)
+    // Already looking at the label folder: the copies are the uids themselves
+    if (mailbox === target) {
+      await deleteMessages(mailbox, uids)
+      return { removed: uids, unresolved: [] }
+    }
+
+    return withProtonBridge(settings, async (client) => {
+      const resolved: { uid: number, messageId: string }[] = []
+      const unresolved: number[] = []
+      const seen = new Set<number>()
+      const source = await client.getMailboxLock(mailbox)
+      try {
+        for await (const message of client.fetch(uids.join(','), { uid: true, envelope: true }, { uid: true })) {
+          seen.add(message.uid)
+          const messageId = message.envelope?.messageId
+          if (messageId) {
+            resolved.push({ uid: message.uid, messageId })
+          } else {
+            unresolved.push(message.uid)
+          }
+        }
+      } finally {
+        source.release()
+      }
+
+      // A uid the fetch did not return was expunged or moved meanwhile
+      for (const uid of uids) {
+        if (!seen.has(uid)) {
+          unresolved.push(uid)
+        }
+      }
+
+      if (!resolved.length) {
+        return { removed: [], unresolved }
+      }
+
+      let labelLock
+      try {
+        labelLock = await client.getMailboxLock(target)
+      } catch (error) {
+        // The label folder was never created or already emptied: nothing was removed
+        if (isMailboxNotFoundError(error)) {
+          return { removed: [], unresolved: [...unresolved, ...resolved.map(item => item.uid)] }
+        }
+        throw error
+      }
+
+      try {
+        const found = new Set<number>()
+        // Proton keeps one copy per message and label. Searching by Message-ID
+        // also deletes the copy of a duplicate (a mail sent to oneself) in this
+        // folder, which is the same message and therefore the intended one.
+        for (const { uid, messageId } of resolved) {
+          const matches = (await client.search({ header: { 'message-id': messageId } }, { uid: true })) || []
+          if (!matches.length) {
+            unresolved.push(uid)
+            continue
+          }
+          for (const match of matches) {
+            found.add(match)
+          }
+        }
+
+        const removed = [...found]
+        if (removed.length) {
+          await client.messageDelete(removed.join(','), { uid: true })
+        }
+        return { removed, unresolved }
+      } finally {
+        labelLock.release()
+      }
     })
   }
 
@@ -303,26 +415,14 @@ export function createProtonMailProvider(values: SetupValues): MailProvider {
     deleteMessages,
 
     addLabel(mailbox, uid, label) {
-      return withProtonMailbox(settings, mailbox, async (client) => {
-        // Proton labels are IMAP folders under `Labels/`; copying keeps the mail in
-        // its real folder, so the label only adds a second place it is filed under.
-        const result = await client.messageCopy(String(uid), `Labels/${label}`, { uid: true })
-        return { uid: result ? result.uidMap?.get(uid) : undefined }
-      })
+      return addLabels(mailbox, [uid], label).then(mapping => ({ uid: mapping.get(uid) }))
     },
 
-    createMailbox(path) {
-      return withProtonBridge(settings, async (client) => {
-        try {
-          await client.mailboxCreate(path)
-        } catch (error) {
-          // An existing folder is the common case and not an error
-          if (!isMailboxExistsError(error)) {
-            throw error
-          }
-        }
-      })
-    },
+    addLabels,
+
+    removeLabels,
+
+    createMailbox,
 
     send(mail, from) {
       return sendProtonMail(settings, mail, from)
