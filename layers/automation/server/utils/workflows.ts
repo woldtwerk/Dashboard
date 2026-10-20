@@ -5,6 +5,7 @@ import { z } from 'zod'
 import type { AutomationWorkflow, AutomationWorkflowInput, WorkflowGraph } from '../../shared/types/automation'
 import { createDefaultGraph, validateWorkflow } from '../../shared/workflow'
 import { MAX_EXTRACT_PATTERN_LENGTH, VARIABLE_NAME_RE } from '../../shared/extractors'
+import { isMimeGlob } from '../../shared/mime'
 import { automationWorkflows } from '../db/schema'
 import type { AutomationWorkflowRow } from '../db/schema'
 import { forgetWorkflowRuns } from './runs'
@@ -53,6 +54,15 @@ export const automationActionSchema = z.discriminatedUnion('type', [
       copy: z.boolean().optional(),
       expiresInMinutes: z.number().int().positive().max(1440).optional()
     }).optional()
+  }),
+  z.object({
+    type: z.literal('save-to-drive'),
+    service: z.string().trim().min(1).max(80),
+    folder: z.string().trim().min(1).max(1000).refine(folder => folder.startsWith('/'), 'The folder must be an absolute path'),
+    accept: z.array(z.string().trim().max(100).refine(isMimeGlob, 'Expected a media type like video/* or application/pdf'))
+      .max(50)
+      .optional(),
+    conflict: z.enum(['rename', 'skip']).optional()
   })
 ])
 

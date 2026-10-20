@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { actionIcon, actionSummary, availableVariables, decisionChainLabel, decisionSourceLabel, nodeSubtitle, nodeTitle, outputLabel } from '../app/utils/workflow-view'
+import { actionIcon, actionSummary, attachmentLabel, availableVariables, decisionChainLabel, decisionSourceLabel, nodeSubtitle, nodeTitle, outputLabel } from '../app/utils/workflow-view'
 import type { AutomationAction, WorkflowGraph, WorkflowNode, WorkflowPathStep } from '../shared/types/automation'
 
 function decisionNode(): WorkflowNode {
@@ -91,6 +91,28 @@ describe('generic action labels', () => {
     expect(actionIcon(node.data.action)).toBe('i-lucide-bell')
     expect(nodeTitle(node)).toBe('Send notification')
     expect(nodeSubtitle(node)).toBe('Login code from {{from}}')
+  })
+
+  it('summarises a save-to-drive node by its file types and folder', () => {
+    const node = actionNode({ type: 'save-to-drive', service: 'drive-1', folder: '/my-files/Public/salsa', accept: ['video/*'] })
+    expect(actionSummary(node.data.action)).toBe('Save videos to /my-files/Public/salsa')
+    expect(actionIcon(node.data.action)).toBe('i-lucide-hard-drive-upload')
+    expect(nodeTitle(node)).toBe('Save videos to /my-files/Public/salsa')
+    expect(nodeSubtitle(node)).toBe('videos → /my-files/Public/salsa')
+  })
+
+  it('reads a save-to-drive without a folder or file filter', () => {
+    const node = actionNode({ type: 'save-to-drive', service: 'drive-1', folder: '' })
+    expect(actionSummary(node.data.action)).toBe('Save attachments to the drive')
+    expect(nodeSubtitle(node)).toBe('Choose a drive folder')
+  })
+
+  it('names a mixed or custom file filter as files', () => {
+    expect(attachmentLabel(['video/*', 'image/*'])).toBe('files')
+    expect(attachmentLabel(['text/csv'])).toBe('files')
+    expect(attachmentLabel(['application/pdf'])).toBe('PDFs')
+    expect(attachmentLabel(['image/*'])).toBe('images')
+    expect(attachmentLabel()).toBe('attachments')
   })
 })
 

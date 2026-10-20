@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import type { MailFolders } from '#layers/mail/shared/types/mail'
 import type { DocumentsCorrespondent, DocumentsDocumentType, DocumentsTag } from '#layers/documents/shared/types/documents'
-import type { DecisionFallback, ExtractAction, NotifyAction, NotifyModal, WorkflowEdge, WorkflowNode } from '../../../shared/types/automation'
+import type { DecisionFallback, ExtractAction, NotifyAction, NotifyModal, SaveToDriveAction, WorkflowEdge, WorkflowNode } from '../../../shared/types/automation'
 import type { WorkflowValidationError } from '../../../shared/workflow'
 import type { DecisionFallbackType } from '../../utils/decision-fallbacks'
+import type { MimePresetValue } from '../../utils/drive-save'
+import DriveFolderPicker from '#layers/drive/app/components/drive/DriveFolderPicker.vue'
+import { parseMimeGlobs } from '../../../shared/mime'
+import { acceptForPreset, formatAccept, MIME_PRESETS, mimePresetFor } from '../../utils/drive-save'
 import {
   addFallback,
   decisionFallbackTypes,
@@ -203,7 +207,8 @@ const DOCUMENT_ACTION_TYPES = [
 ]
 const GENERIC_ACTION_TYPES = [
   { label: 'Extract value', value: 'extract', icon: 'i-lucide-scan-text' },
-  { label: 'Send notification', value: 'notify', icon: 'i-lucide-bell' }
+  { label: 'Send notification', value: 'notify', icon: 'i-lucide-bell' },
+  { label: 'Save attachments to drive', value: 'save-to-drive', icon: 'i-lucide-hard-drive-upload' }
 ]
 
 const actionTypes = computed(() => props.domain === 'mail'
@@ -234,6 +239,14 @@ function setActionType(type: string) {
     node.data.action = { type: 'extract', variable: 'value', extractor: 'login-code' }
   } else if (type === 'notify') {
     node.data.action = { type: 'notify', title: '{{title}}' }
+  } else if (type === 'save-to-drive') {
+    node.data.action = {
+      type: 'save-to-drive',
+      service: driveServices.value[0]?.id ?? '',
+      folder: '',
+      accept: [],
+      conflict: 'rename'
+    }
   } else if (type === 'add-tag') {
     node.data.action = { type: 'add-tag', tag: tags.value[0]?.id ?? 0 }
   } else if (type === 'set-correspondent') {
@@ -306,6 +319,51 @@ const folderItems = computed(() => folders.value.map(folder => ({ label: folder,
 const tagItems = computed(() => tags.value.map(tag => ({ label: tag.name, value: tag.id })))
 const correspondentItems = computed(() => correspondents.value.map(entry => ({ label: entry.name, value: entry.id })))
 const documentTypeItems = computed(() => documentTypes.value.map(type => ({ label: type.name, value: type.id })))
+
+// --- Save to drive ---
+
+const driveServices = computed(() => services.value.filter(service => service.domain === 'drive'))
+const driveServiceItems = computed(() => driveServices.value.map(service => ({ label: service.name, value: service.id })))
+const driveFolderPickerOpen = ref(false)
+const MIME_PRESET_ITEMS = [
+  ...MIME_PRESETS.map(preset => ({ label: preset.label, value: preset.value })),
+  { label: 'Custom', value: 'custom' }
+]
+const CONFLICT_ITEMS = [
+  { label: 'Rename (name (1).ext)', value: 'rename' },
+  { label: 'Skip', value: 'skip' }
+]
+
+/** A typed patch of the save-to-drive action the inspector is editing */
+function setDriveField(patch: Partial<SaveToDriveAction>) {
+  const current = action.value
+  if (current?.type !== 'save-to-drive') {
+    return
+  }
+  Object.assign(current, patch)
+  commit()
+}
+
+function setDriveAcceptPreset(value: string) {
+  const current = action.value
+  if (current?.type !== 'save-to-drive') {
+    return
+  }
+  setDriveField({ accept: acceptForPreset(value as MimePresetValue, current.accept ?? []) })
+}
+
+function setDriveAcceptText(value: string) {
+  if (!value.trim()) {
+    setDriveField({ accept: [] })
+    return
+  }
+
+  // A half-typed value must not turn into "save every attachment"
+  const accept = parseMimeGlobs(value)
+  if (accept.length) {
+    setDriveField({ accept })
+  }
+}
 
 // --- Fallbacks (when the engine is unsure) ---
 
@@ -746,6 +804,83 @@ function updateFallbackEntry(index: number, entry: DecisionFallback) {
             <p class="text-xs text-muted">
               The title and body leave this machine through a desktop push, so keep secrets out of them. The pop-up text stays on the server and is fetched when it opens.
             </p>
+          </template>
+
+          <template v-if="action.type === 'save-to-drive'">
+            <UFormField label="Drive service" description="The configured drive the files are saved into.">
+              <USelect
+                v-if="driveServices.length"
+                :model-value="action.service"
+                :items="driveServiceItems"
+                class="w-full"
+                @update:model-value="value => setDriveField({ service: value as string })"
+              />
+              <UInput
+                v-else
+                :model-value="action.service"
+                placeholder="No drive service is set up"
+                class="w-full"
+                disabled
+              />
+            </UFormField>
+
+            <UFormField label="Folder" description="Missing folders are created. A same-name file of another size is renamed or skipped.">
+              <div class="flex gap-2">
+                <UInput
+                  :model-value="action.folder"
+                  placeholder="/my-files/…"
+                  class="min-w-0 flex-1 font-mono"
+                  readonly
+                />
+                <UButton
+                  label="Choose"
+                  icon="i-lucide-folder-open"
+                  color="neutral"
+                  variant="soft"
+                  :disabled="!action.service"
+                  @click="driveFolderPickerOpen = true"
+                />
+              </div>
+            </UFormField>
+
+            <UFormField label="File types">
+              <USelect
+                :model-value="mimePresetFor(action.accept)"
+                :items="MIME_PRESET_ITEMS"
+                class="w-full"
+                @update:model-value="value => setDriveAcceptPreset(value as string)"
+              />
+            </UFormField>
+
+            <UFormField label="Media types" description="Comma separated, e.g. video/*, application/pdf. Empty saves every attachment.">
+              <UInput
+                :model-value="formatAccept(action.accept)"
+                placeholder="video/*, application/pdf"
+                class="w-full font-mono"
+                @change="event => setDriveAcceptText((event.target as HTMLInputElement).value)"
+              />
+            </UFormField>
+
+            <UFormField label="Same name, other size">
+              <USelect
+                :model-value="action.conflict ?? 'rename'"
+                :items="CONFLICT_ITEMS"
+                class="w-full"
+                @update:model-value="value => setDriveField({ conflict: value as 'rename' | 'skip' })"
+              />
+            </UFormField>
+
+            <p class="text-xs text-muted">
+              A file with the same name and size is always skipped, so a rerun saves nothing twice.
+            </p>
+
+            <DriveFolderPicker
+              v-model:open="driveFolderPickerOpen"
+              :service="action.service"
+              title="Save attachments here"
+              confirm-label="Save here"
+              @select="path => setDriveField({ folder: path })"
+            />
           </template>
 
           <div v-if="action.type === 'extract' || action.type === 'notify'" class="space-y-1">

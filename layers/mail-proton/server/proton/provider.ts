@@ -14,6 +14,44 @@ const INDEX_SOURCE_BYTES = 256 * 1024
 /** The only headers the stream backfill needs; the body is never fetched */
 const STREAM_HEADERS = ['list-id', 'list-unsubscribe', 'precedence', 'auto-submitted']
 
+/** File extensions for the media types a mail usually carries */
+const MIME_EXTENSIONS: Record<string, string> = {
+  'application/json': 'json',
+  'application/msword': 'doc',
+  'application/octet-stream': 'bin',
+  'application/pdf': 'pdf',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/zip': 'zip',
+  'image/gif': 'gif',
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/svg+xml': 'svg',
+  'image/webp': 'webp',
+  'text/calendar': 'ics',
+  'text/csv': 'csv',
+  'text/html': 'html',
+  'text/plain': 'txt',
+  'video/mp4': 'mp4'
+}
+
+/** The media type without its parameters, lower-cased */
+function baseContentType(contentType: string | undefined): string {
+  return (contentType ?? 'application/octet-stream').split(';')[0]!.trim().toLocaleLowerCase()
+}
+
+/** A part without a filename gets `attachment-<n>.<ext>`, derived from its media type */
+export function attachmentFileName(filename: string | undefined, contentType: string | undefined, index: number): string {
+  const name = filename?.trim()
+  if (name) {
+    return name
+  }
+  const type = baseContentType(contentType)
+  const subtype = type.split('/')[1]?.replace(/[^a-z0-9]+/g, '') || 'bin'
+  const extension = MIME_EXTENSIONS[type] ?? subtype
+  return `attachment-${index + 1}.${extension}`
+}
+
 async function toMailMessage(mailbox: string, message: FetchMessageObject): Promise<MailMessage> {
   const parsed = await simpleParser(message.source!)
   const summary = toMailSummary(mailbox, message)
@@ -163,6 +201,25 @@ export function createProtonMailProvider(values: SetupValues): MailProvider {
         const message = await client.fetchOne(String(uid), { ...MESSAGE_QUERY, source: true }, { uid: true })
 
         return message && message.source ? toMailMessage(mailbox, message) : null
+      })
+    },
+
+    getAttachments(mailbox, uid) {
+      return withProtonMailbox(settings, mailbox, async (client) => {
+        // Attachments live in the source, so this fetches the whole message; the
+        // list and index paths above cap the source, this one must not.
+        const message = await client.fetchOne(String(uid), { ...MESSAGE_QUERY, source: true }, { uid: true })
+        if (!message || !message.source) {
+          return []
+        }
+
+        const parsed = await simpleParser(message.source)
+        return parsed.attachments.map((attachment, index) => ({
+          filename: attachmentFileName(attachment.filename, attachment.contentType, index),
+          contentType: baseContentType(attachment.contentType),
+          size: attachment.size ?? attachment.content.length,
+          content: new Uint8Array(attachment.content)
+        }))
       })
     },
 

@@ -12,6 +12,7 @@ import type {
   WorkflowRunResult
 } from '../../shared/types/automation'
 import { FallbackUnavailableError, runDecisionNodesBatch, runWorkflowBatch, validateWorkflow } from '../../shared/workflow'
+import { undoBatches } from '../../shared/automation'
 import { modalRef } from '../../shared/extractors'
 import type { WorkflowBatchResult, WorkflowDecide, WorkflowDecideBatch, WorkflowFallbackDecideBatch } from '../../shared/workflow'
 import { parseEntityKey } from '../../../core/shared/entities'
@@ -27,6 +28,13 @@ import { fallbackEngine, hasDecisionEngine, useDecisionEngine } from './decision
 import { itemRef, loadDocumentsSince, loadItemByRef, loadItems, loadMailSince, loadRecentItems } from './automation-items'
 import { getWorkflow, listWorkflows } from './workflows'
 import { dueItems, getRun, markEvaluated, readSweepCursor, recordAttempt, recordRun, updateRun, writeSweepCursor } from './runs'
+import { forgetDriveFiles, hasDriveFile, recordDriveFile } from './drive-files'
+import type { ActionRunContext, DriveFileHistory, DriveSavePort } from './action-runner'
+import type { MailAttachment } from '../../../mail/shared/types/mail'
+import { joinPath } from '../../../drive/shared/drive-path'
+import { folderSteps } from '../../../drive/shared/drive-upload'
+import { affectedPaths, invalidateDriveListings } from '../../../drive/server/utils/drive-cache'
+import { publishDriveChange, publishDriveChanges, publishDriveTrashChange } from '../../../drive/server/utils/drive-events'
 
 const LOCK_TTL_MS = 5 * 60_000
 // A preview with AI fallbacks asks a language model once per unsure item, so a
@@ -100,6 +108,101 @@ async function applierFor(domain: AutomationDomain, service: string): Promise<Au
     publish: () => publishDomainEvent({ domain: 'documents', service, type: 'changed' }),
     logger
   })
+}
+
+/** The item's attachments; only mail has them, every other domain has none yet */
+async function itemFiles(item: AutomationItem): Promise<Array<MailAttachment & { content: Uint8Array }>> {
+  if (item.domain !== 'mail' || !item.mailbox || item.uid === undefined) {
+    return []
+  }
+
+  const provider = await useMailProvider(item.service)
+  return provider.getAttachments ? await provider.getAttachments(item.mailbox, item.uid) : []
+}
+
+/**
+ * The drive sink a save-to-drive action writes through. Every write drops the
+ * cached listing it changed and announces the change, exactly like the drive
+ * API does. `keepAlive` renews the service lease around a long upload; a lost
+ * lease stops the run, and the idempotent skip keeps a takeover harmless.
+ */
+function driveSavePort(keepAlive?: () => Promise<boolean>): DriveSavePort {
+  const renew = async () => {
+    if (keepAlive && !(await keepAlive())) {
+      throw new Error('The automation lock was lost while saving to the drive')
+    }
+  }
+
+  return {
+    async ensureFolder(service, path) {
+      const provider = await useDriveProvider(service)
+
+      for (const step of folderSteps(path)) {
+        const entries = await provider.list(step.parent)
+        if (entries.some(entry => entry.type === 'folder' && entry.name === step.name)) {
+          continue
+        }
+
+        await provider.createFolder(step.parent, step.name)
+        await invalidateDriveListings(service, affectedPaths('folder', { path: step.parent }))
+        await publishDriveChange(service, step.parent)
+      }
+    },
+
+    async list(service, path) {
+      const provider = await useDriveProvider(service)
+      return (await provider.list(path)).map(entry => ({ name: entry.name, type: entry.type, size: entry.size }))
+    },
+
+    async upload(service, folder, file) {
+      const provider = await useDriveProvider(service)
+      const path = joinPath(folder, file.name)
+
+      await renew()
+      const form = new FormData()
+      const content = new Uint8Array(file.content)
+      form.append('file', new Blob([content], { type: file.contentType }), file.name)
+      const body = new Response(form)
+      await provider.upload(path, {
+        stream: body.body,
+        contentType: body.headers.get('content-type') ?? file.contentType
+      })
+      await renew()
+
+      await invalidateDriveListings(service, affectedPaths('upload', { path: folder }))
+      await publishDriveChange(service, folder)
+    }
+  }
+}
+
+/** The ports generic actions need, built for one run */
+function actionContextFor(keepAlive?: () => Promise<boolean>): ActionRunContext {
+  return {
+    itemFiles,
+    drive: driveSavePort(keepAlive),
+    driveHistory: driveFileHistory()
+  }
+}
+
+/**
+ * The content records of saved files. A row that loses the insert race means a
+ * second worker uploaded the same bytes in parallel; the extra upload stays and
+ * is logged, because both were already past the check when they started.
+ */
+function driveFileHistory(): DriveFileHistory {
+  return {
+    has: (service, folder, sha256) => hasDriveFile(service, folder, sha256),
+    async record(file) {
+      const recorded = await recordDriveFile(file)
+      if (!recorded) {
+        automationLogger(file.service).warn?.('Another worker saved the same file; the duplicate upload is kept', {
+          path: file.path,
+          sha256: file.sha256
+        })
+      }
+      return recorded
+    }
+  }
 }
 
 /** One suggestion becomes one in-app notification, deduplicated by run */
@@ -182,7 +285,7 @@ async function announceWorkflowNotifications(run: AutomationRun): Promise<void> 
 }
 
 /** The dependencies the runner uses in the running server */
-function automationDeps(service: string): AutomationDeps {
+function automationDeps(service: string, keepAlive?: () => Promise<boolean>): AutomationDeps {
   return {
     store: { due: dueItems, markEvaluated, recordAttempt, record: recordRun, update: updateRun, get: getRun },
     decide: workflowDecide(),
@@ -190,6 +293,7 @@ function automationDeps(service: string): AutomationDeps {
     fallbackDecideBatch: workflowFallbackDecideBatch(),
     loadItems: (domain, id, limit) => loadItems(domain, id, limit),
     applierFor,
+    actionContext: () => actionContextFor(keepAlive),
     notify: notifySuggestion,
     notifyFailed,
     announceNotifications: announceWorkflowNotifications,
@@ -208,8 +312,8 @@ export async function runAutomation(domain: AutomationDomain, service: string): 
     return []
   }
 
-  const result = await withLock(`automation:${domain}:${service}`, LOCK_TTL_MS, () =>
-    runService(domain, service, workflows, automationDeps(service)))
+  const result = await withLock(`automation:${domain}:${service}`, LOCK_TTL_MS, handle =>
+    runService(domain, service, workflows, automationDeps(service, handle.renew)))
 
   return result ?? []
 }
@@ -389,10 +493,40 @@ export async function applySuggestion(id: string): Promise<AutomationRun> {
   }
 
   const applier = await applierFor(run.domain, run.service)
-  const { applied } = await applyRunActions(run, applier)
+  const { applied } = await applyRunActions(run, applier, actionContextFor())
   const updated = await updateRun(id, { outcome: 'applied', applied, error: null, feedback: 'accepted' })
   await announceRunNotifications(updated, { announceNotifications: announceWorkflowNotifications, logger: automationLogger(updated.service) })
   return updated
+}
+
+/** Moves saved files to the drive's trash, dropping the listings they left */
+async function trashDrivePaths(service: string, paths: string[]): Promise<void> {
+  if (!paths.length) {
+    return
+  }
+
+  const provider = await useDriveProvider(service)
+  await provider.trash(paths)
+  await forgetDriveFiles(service, paths)
+
+  await invalidateDriveListings(service, affectedPaths('trash', { paths }))
+  await publishDriveChanges(service, paths)
+  await publishDriveTrashChange(service)
+}
+
+/**
+ * Runs the reversal in plan order. A drive-trash step belongs to the runner, not
+ * to the domain applier, so the domain operations around it are handed over in
+ * order rather than all at once.
+ */
+async function undoAppliedActions(run: AutomationRun, applier: AutomationApplier): Promise<void> {
+  for (const batch of undoBatches(undoPlan(run))) {
+    if (batch.kind === 'drive') {
+      await trashDrivePaths(batch.service, batch.paths)
+      continue
+    }
+    await applier.undo(batch.operations)
+  }
 }
 
 /** Reverses an applied run from the actions it recorded */
@@ -403,7 +537,7 @@ export async function undoAutomationRun(id: string): Promise<AutomationRun> {
   }
 
   const applier = await applierFor(run.domain, run.service)
-  await applier.undo(undoPlan(run))
+  await undoAppliedActions(run, applier)
   return await updateRun(id, { outcome: 'undone', feedback: 'rejected' })
 }
 
@@ -441,6 +575,7 @@ export async function answerAutomationReview(id: string, output: string): Promis
       decideBatch: workflowDecideBatch(),
       fallbackDecideBatch: workflowFallbackDecideBatch(),
       applierFor,
+      actionContext: () => actionContextFor(),
       notify: notifySuggestion,
       announceNotifications: announceWorkflowNotifications,
       onReviewChange: publishReviewEvent,

@@ -16,6 +16,7 @@ import type {
 import { CHOICE_OTHER } from './types/automation'
 import { isGenericAction, matchesConditions } from './automation'
 import { BUILTIN_VARIABLES, extractActionError, templateVariables } from './extractors'
+import { isMimeGlob } from './mime'
 
 /** A decision engine caller; the automation layer injects Laya through this */
 export type WorkflowDecide = (state: string, questions: Record<string, DecisionQuestion>) => Promise<Record<string, DecisionAnswer>>
@@ -267,6 +268,22 @@ export function validateWorkflow(graph: WorkflowGraph, domain?: AutomationDomain
         for (const variable of templateVariables(text)) {
           if (!(BUILTIN_VARIABLES as readonly string[]).includes(variable) && !extracted.has(variable)) {
             errors.push({ nodeId: node.id, message: `{{${variable}}} is never extracted` })
+          }
+        }
+      }
+      if (action.type === 'save-to-drive') {
+        if (!action.service.trim()) {
+          errors.push({ nodeId: node.id, message: 'The save-to-drive action needs a drive service' })
+        }
+        const folder = action.folder.trim()
+        if (!folder) {
+          errors.push({ nodeId: node.id, message: 'The save-to-drive action needs a folder' })
+        } else if (!folder.startsWith('/')) {
+          errors.push({ nodeId: node.id, message: 'The save-to-drive folder must be an absolute path' })
+        }
+        for (const glob of action.accept ?? []) {
+          if (!isMimeGlob(glob)) {
+            errors.push({ nodeId: node.id, message: `"${glob}" is not a media type like video/* or application/pdf` })
           }
         }
       }

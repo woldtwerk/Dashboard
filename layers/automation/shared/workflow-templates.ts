@@ -29,6 +29,12 @@ export interface WorkflowTemplate {
   graph: WorkflowGraph
   /** Actions whose provider id is only known once the target archive is known */
   bindings: WorkflowTemplateBinding[]
+  /**
+   * The graph is deliberately incomplete until the user picks a required value
+   * (a drive service and folder, say): it is stored disabled and stays invalid,
+   * so it cannot be enabled by accident.
+   */
+  requiresSetup?: boolean
 }
 
 /** The names an archive knows, used to resolve a template's bindings */
@@ -341,8 +347,33 @@ const loginCodes: WorkflowTemplate = {
   bindings: []
 }
 
-// --- Document templates ---------------------------------------------------
+const attachmentsToDrive: WorkflowTemplate = {
+  id: 'mail-attachments-to-drive',
+  name: 'Move attachments to drive',
+  description: 'Saves every attachment of a mail to a folder in your drive and moves the mail to the trash once the upload succeeded. Pick the drive service and folder on the save action; until you do, the workflow stays invalid and cannot be enabled.',
+  domain: 'mail',
+  icon: 'i-lucide-hard-drive-upload',
+  graph: graph([
+    triggerNode('INBOX', 0, 0),
+    actionNode('save-attachments', {
+      type: 'save-to-drive',
+      service: '',
+      folder: '',
+      accept: [],
+      conflict: 'rename'
+    }, 0, 140),
+    actionNode('trash', { type: 'trash' }, 0, 280),
+    endNode(320, 280)
+  ], [
+    edge('trigger', 'next', 'save-attachments'),
+    edge('save-attachments', 'next', 'trash'),
+    edge('trash', 'next', 'end')
+  ]),
+  bindings: [],
+  requiresSetup: true
+}
 
+// --- Document templates ---------------------------------------------------
 const classifyInvoices: WorkflowTemplate = {
   id: 'documents-classify',
   name: 'Classify invoices',
@@ -430,6 +461,7 @@ export const workflowTemplates: WorkflowTemplate[] = [
   shipping,
   calendarInvitations,
   loginCodes,
+  attachmentsToDrive,
   classifyInvoices,
   taxRelevant
 ]

@@ -1,7 +1,7 @@
 import { createError } from 'nuxt/server'
 import type { SetupValues } from '../../../core/shared/types/setup'
 import type { OutgoingMail } from '../../shared/mail-compose'
-import type { MailAddress, Mailbox, MailMessage, MailMessageState, MailSearch, MailStreamHeader, MailSummary } from '../../shared/types/mail'
+import type { MailAddress, MailAttachment, Mailbox, MailMessage, MailMessageState, MailSearch, MailStreamHeader, MailSummary } from '../../shared/types/mail'
 
 /** Port every mail provider adapter implements. */
 export interface MailProvider {
@@ -42,6 +42,11 @@ export interface MailProvider {
    * folder is not an error.
    */
   createMailbox?(path: string): Promise<void>
+  /**
+   * The attachments of one message with their bytes. Optional: a provider that
+   * cannot serve them omits it, and an action that needs them fails the run.
+   */
+  getAttachments?(mailbox: string, uid: number): Promise<Array<MailAttachment & { content: Uint8Array }>>
 
   // --- Sending ---
   /**

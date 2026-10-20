@@ -14,7 +14,8 @@ function fakeClient() {
     messageFlagsAdd: vi.fn(async () => {}),
     messageFlagsRemove: vi.fn(async () => {}),
     messageMove: vi.fn(async () => ({ uidMap: new Map<number, number>() })),
-    messageDelete: vi.fn(async () => {})
+    messageDelete: vi.fn(async () => {}),
+    fetchOne: vi.fn(async (): Promise<{ uid: number, source: Buffer } | null> => null)
   }
 }
 
@@ -102,6 +103,54 @@ describe('batch mail commands', () => {
     expect(state.client.connect).toHaveBeenCalledOnce()
     expect(state.client.messageDelete).toHaveBeenCalledOnce()
     expect(state.client.messageDelete).toHaveBeenCalledWith('4,7', { uid: true })
+  })
+})
+
+describe('getAttachments', () => {
+  const source = [
+    'From: Alice <alice@example.com>',
+    'To: Bob <bob@example.com>',
+    'Subject: Two files',
+    'MIME-Version: 1.0',
+    'Content-Type: multipart/mixed; boundary="BB"',
+    '',
+    '--BB',
+    'Content-Type: text/plain; charset=utf-8',
+    '',
+    'Hello',
+    '--BB',
+    'Content-Type: application/pdf',
+    'Content-Disposition: attachment; filename="report.pdf"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    'SGVsbG8=',
+    '--BB',
+    'Content-Type: image/png',
+    'Content-Disposition: attachment',
+    'Content-Transfer-Encoding: base64',
+    '',
+    'aGVsbG8=',
+    '--BB--',
+    ''
+  ].join('\r\n')
+
+  it('returns the bytes, type and size of every attachment', async () => {
+    state.client.fetchOne.mockResolvedValueOnce({ uid: 7, source: Buffer.from(source) })
+
+    const attachments = await createProtonMailProvider(values()).getAttachments!('INBOX', 7)
+
+    expect(attachments.map(({ filename, contentType, size }) => ({ filename, contentType, size }))).toEqual([
+      { filename: 'report.pdf', contentType: 'application/pdf', size: 5 },
+      { filename: 'attachment-2.png', contentType: 'image/png', size: 5 }
+    ])
+    expect(Buffer.from(attachments[0]!.content).toString()).toBe('Hello')
+    expect(state.client.fetchOne).toHaveBeenCalledWith('7', expect.objectContaining({ source: true }), { uid: true })
+  })
+
+  it('returns nothing for a message that is gone', async () => {
+    state.client.fetchOne.mockResolvedValueOnce(null)
+
+    await expect(createProtonMailProvider(values()).getAttachments!('INBOX', 7)).resolves.toEqual([])
   })
 })
 

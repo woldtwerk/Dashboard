@@ -16,6 +16,7 @@ import { nextAttempt, planUndo, selectActions } from '../../shared/automation'
 import { nodeOutputs, runWorkflowBatch } from '../../shared/workflow'
 import type { PresetDecision, WorkflowDecide, WorkflowDecideBatch, WorkflowFallbackDecideBatch } from '../../shared/workflow'
 import { runActions } from './action-runner'
+import type { ActionRunContext } from './action-runner'
 import { itemRef } from './automation-items'
 import { MANUAL_RUN_LOST_LOCK } from './manual-run'
 import type { SeenState } from './runs'
@@ -95,6 +96,11 @@ export interface AutomationDeps {
   loadItems: (domain: AutomationDomain, service: string, limit: number) => Promise<AutomationItem[]>
   /** The applier of one service; the runtime builds it from the domain provider */
   applierFor: (domain: AutomationDomain, service: string) => AutomationApplier | Promise<AutomationApplier>
+  /**
+   * The extra ports a generic action needs (the item's files, the drive sink);
+   * absent in tests that only exercise domain actions.
+   */
+  actionContext?: (domain: AutomationDomain, service: string) => ActionRunContext | Promise<ActionRunContext>
   /** Announces a suggestion; a failure never fails the run */
   notify?: (run: AutomationRun) => Promise<void>
   /**
@@ -465,6 +471,16 @@ async function recordGiveUp(
   return runs
 }
 
+/** The action context one (domain, service) needs, plus the run-specific values */
+async function actionContextFor(
+  deps: Pick<AutomationDeps, 'actionContext'>,
+  domain: AutomationDomain,
+  service: string,
+  extra: Pick<ActionRunContext, 'workflow' | 'now'>
+): Promise<ActionRunContext> {
+  return { ...(await deps.actionContext?.(domain, service)), ...extra }
+}
+
 async function recordWorkflow(
   domain: AutomationDomain,
   service: string,
@@ -542,7 +558,7 @@ async function recordWorkflow(
   const applier = await deps.applierFor(domain, service)
 
   try {
-    const { applied } = await runActions(actions, item, applier, { workflow: workflow.name, now: deps.now })
+    const { applied } = await runActions(actions, item, applier, await actionContextFor(deps, domain, service, { workflow: workflow.name, now: deps.now }))
     const run = await deps.store.record({
       workflow: workflow.id,
       workflowName: workflow.name,
@@ -585,6 +601,7 @@ export interface AutomationReviewDeps {
   decideBatch?: WorkflowDecideBatch
   fallbackDecideBatch?: WorkflowFallbackDecideBatch
   applierFor: AutomationDeps['applierFor']
+  actionContext?: AutomationDeps['actionContext']
   notify?: AutomationDeps['notify']
   announceNotifications?: AutomationDeps['announceNotifications']
   onReviewChange?: AutomationDeps['onReviewChange']
@@ -696,7 +713,7 @@ export async function answerReview(runId: string, output: string, deps: Automati
   const applier = await deps.applierFor(run.domain, run.service)
 
   try {
-    const { applied } = await runActions(result.actions, run.item, applier, { workflow: workflow.name, now: deps.now })
+    const { applied } = await runActions(result.actions, run.item, applier, await actionContextFor(deps, run.domain, run.service, { workflow: workflow.name, now: deps.now }))
     const updated = await deps.store.update(runId, {
       outcome: 'applied',
       path: result.path,
@@ -724,8 +741,8 @@ export async function answerReview(runId: string, output: string, deps: Automati
 }
 
 /** Applies the actions of a suggestion and returns what a reversal needs */
-export async function applyRunActions(run: AutomationRun, applier: AutomationApplier, now?: () => Date) {
-  return await runActions(run.actions, run.item, applier, { workflow: run.workflowName, now })
+export async function applyRunActions(run: AutomationRun, applier: AutomationApplier, context: ActionRunContext = {}) {
+  return await runActions(run.actions, run.item, applier, { ...context, workflow: run.workflowName })
 }
 
 /**

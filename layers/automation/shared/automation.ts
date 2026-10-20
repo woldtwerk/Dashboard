@@ -17,7 +17,7 @@ import type {
 // --- Actions --------------------------------------------------------------
 
 /** The action types the runner handles itself rather than a domain applier */
-export const GENERIC_ACTION_TYPES = ['extract', 'notify'] as const
+export const GENERIC_ACTION_TYPES = ['extract', 'notify', 'save-to-drive'] as const
 
 /**
  * Every action type, as a runtime list the schemas and tests can walk.
@@ -34,7 +34,8 @@ export const ACTION_TYPES = {
   'set-correspondent': true,
   'set-type': true,
   'extract': true,
-  'notify': true
+  'notify': true,
+  'save-to-drive': true
 } as const satisfies Record<AutomationAction['type'], true>
 
 /** Whether an action is handled by the runner itself rather than a domain applier */
@@ -93,9 +94,10 @@ export function matchesConditions(item: AutomationItem, conditions: AutomationCo
 /**
  * Picks the actions of the triggered workflows in order: workflows run by position
  * and the first to offer an action type owns it, so a later workflow cannot move
- * the same mail a second time. Generic actions (`extract`, `notify`) are not
- * exclusive: a workflow may send several notifications and another may extract its
- * own variables, so they are always kept. Returns the chosen actions with their
+ * the same mail a second time. Generic actions (`extract`, `notify`,
+ * `save-to-drive`) are not exclusive: a workflow may send several notifications,
+ * save its attachments to its own folder, and another may extract its own
+ * variables, so they are always kept. Returns the chosen actions with their
  * workflow.
  */
 export function selectActions(
@@ -181,10 +183,47 @@ export function planUndo(applied: AppliedAction[]): UndoOperation[] {
       case 'notify':
         // Reading a value and announcing it changed nothing to reverse
         break
+      case 'save-to-drive':
+        // Only the files that were actually uploaded are reversed; a rerun that
+        // found them already there records none
+        if (action.paths.length) {
+          operations.push({ op: 'drive-trash', service: action.service, paths: action.paths })
+        }
+        break
     }
   }
 
   return operations
+}
+
+/** One step of a reversal: a batch for the domain applier, or the runner's own drive trash */
+export type UndoBatch
+  = | { kind: 'domain', operations: UndoOperation[] }
+    | { kind: 'drive', service: string, paths: string[] }
+
+/**
+ * Groups a plan into the work its owner performs, in order: consecutive domain
+ * operations stay one applier call, and a drive-trash runs where it stands. The
+ * domain appliers do not know drive steps, so the runtime splits them out.
+ */
+export function undoBatches(operations: UndoOperation[]): UndoBatch[] {
+  const batches: UndoBatch[] = []
+
+  for (const operation of operations) {
+    if (operation.op === 'drive-trash') {
+      batches.push({ kind: 'drive', service: operation.service, paths: operation.paths })
+      continue
+    }
+
+    const last = batches.at(-1)
+    if (last?.kind === 'domain') {
+      last.operations.push(operation)
+    } else {
+      batches.push({ kind: 'domain', operations: [operation] })
+    }
+  }
+
+  return batches
 }
 
 // --- Corrections ----------------------------------------------------------

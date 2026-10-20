@@ -22,6 +22,13 @@ const MINIMAL_ACTIONS: Record<AutomationAction['type'], AutomationAction> = {
     title: 'Login code from {{from}}',
     body: '{{subject}}',
     modal: { title: 'Login code', text: '{{code}}', copy: true, expiresInMinutes: 15 }
+  },
+  'save-to-drive': {
+    type: 'save-to-drive',
+    service: 'drive-1',
+    folder: '/my-files/Attachments',
+    accept: ['video/*'],
+    conflict: 'rename'
   }
 }
 
@@ -93,6 +100,25 @@ describe('automationActionSchema', () => {
     expect(notify({ modal: { text: 'x', expiresInMinutes: 1440 } })).toBe(true)
     expect(notify({ modal: { text: 'x' } })).toBe(true)
   })
+
+  it('bounds the save-to-drive folder, service and media types', () => {
+    const save = (patch: Record<string, unknown>) => automationActionSchema.safeParse({
+      type: 'save-to-drive',
+      service: 'drive-1',
+      folder: '/my-files/Attachments',
+      ...patch
+    }).success
+
+    expect(save({})).toBe(true)
+    expect(save({ folder: '/my-files/Public/salsa', accept: ['video/*', 'application/pdf'], conflict: 'skip' })).toBe(true)
+    expect(save({ service: '' })).toBe(false)
+    expect(save({ folder: 'my-files/Attachments' })).toBe(false)
+    expect(save({ folder: '' })).toBe(false)
+    expect(save({ accept: ['video'] })).toBe(false)
+    expect(save({ accept: ['VIDEO/*'] })).toBe(true)
+    expect(save({ accept: ['video/mp4', 'image/*'] })).toBe(true)
+    expect(save({ conflict: 'overwrite' })).toBe(false)
+  })
 })
 
 describe('workflowGraphSchema', () => {
@@ -123,6 +149,11 @@ describe('workflow templates parse at the API boundary', () => {
   it.each(workflowTemplates.map(template => [template.id, template] as const))(
     'parses %s with workflowGraphSchema and workflowPreviewSchema',
     (_id, template) => {
+      if (template.requiresSetup) {
+        // Deliberately incomplete until the user picks its required values
+        expect(workflowGraphSchema.safeParse(template.graph).success).toBe(false)
+        return
+      }
       expect(workflowGraphSchema.safeParse(template.graph).success).toBe(true)
       expect(workflowPreviewSchema.safeParse({
         graph: template.graph,

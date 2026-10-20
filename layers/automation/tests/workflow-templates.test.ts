@@ -36,6 +36,11 @@ describe('workflowTemplates', () => {
 
   it('is a valid graph for its domain', () => {
     for (const entry of workflowTemplates) {
+      if (entry.requiresSetup) {
+        // Deliberately incomplete: it waits for the user to pick its required values
+        expect(validateWorkflow(entry.graph, entry.domain), entry.id).not.toEqual([])
+        continue
+      }
       expect(validateWorkflow(entry.graph, entry.domain), entry.id).toEqual([])
     }
   })
@@ -148,5 +153,28 @@ describe('login code template', () => {
 
     expect(entry.description).toContain('automatic mode')
     expect(entry.icon).toBe('i-lucide-key-round')
+  })
+})
+
+describe('attachments to drive template', () => {
+  it('saves the attachments and trashes the mail, and waits for a drive service and folder', () => {
+    const entry = template('mail-attachments-to-drive')
+
+    expect(entry.domain).toBe('mail')
+    expect(entry.requiresSetup).toBe(true)
+    expect(entry.icon).toBe('i-lucide-hard-drive-upload')
+
+    const actions = entry.graph.nodes
+      .filter(node => node.type === 'action')
+      .map(node => node.data.action)
+    expect(actions.map(action => action.type)).toEqual(['save-to-drive', 'trash'])
+    expect(actions[0]).toMatchObject({ type: 'save-to-drive', service: '', folder: '' })
+
+    // A missing drive service and folder are what the user has to complete
+    const errors = validateWorkflow(entry.graph, 'mail')
+    expect(errors.map(error => error.message)).toEqual([
+      'The save-to-drive action needs a drive service',
+      'The save-to-drive action needs a folder'
+    ])
   })
 })

@@ -110,8 +110,29 @@ export interface NotifyAction {
   modal?: NotifyModal
 }
 
+/** What happens when the target folder already holds a file of the same name */
+export type DriveConflict = 'rename' | 'skip'
+
+/**
+ * Saves the item's attachments to a folder in a drive. `accept` narrows the
+ * files by media type (`video/*`, `application/pdf`); empty means everything.
+ * The runner handles it itself, because it needs the item's files and the drive
+ * rather than the item's domain applier.
+ */
+export interface SaveToDriveAction {
+  type: 'save-to-drive'
+  /** The drive service to save into */
+  service: string
+  /** Absolute folder path, e.g. `/my-files/Public/salsa`; missing folders are created */
+  folder: string
+  /** Media type globs; empty or missing accepts every file */
+  accept?: string[]
+  /** Defaults to `rename`: `name (1).ext`, `name (2).ext`, … */
+  conflict?: DriveConflict
+}
+
 /** Actions every domain understands; the runner handles them itself */
-export type GenericAction = ExtractAction | NotifyAction
+export type GenericAction = ExtractAction | NotifyAction | SaveToDriveAction
 
 export type AutomationAction = MailAction | DocumentsAction | GenericAction
 
@@ -279,6 +300,7 @@ export type AppliedAction
     | { type: 'add-tag', document: number, tag: number, previousTags: number[] }
     | { type: 'set-correspondent', document: number, correspondent: number, previous: number | null }
     | { type: 'set-type', document: number, documentType: number, previous: number | null }
+    | { type: 'save-to-drive', service: string, paths: string[] }
 
 /** A single reversal step; planned from the applied actions */
 export type UndoOperation
@@ -289,6 +311,7 @@ export type UndoOperation
     | { op: 'set-tags', document: number, tags: number[] }
     | { op: 'set-correspondent', document: number, correspondent: number | null }
     | { op: 'set-document-type', document: number, documentType: number | null }
+    | { op: 'drive-trash', service: string, paths: string[] }
 
 export type AutomationOutcome = 'suggested' | 'applied' | 'failed' | 'undone' | 'skipped' | 'review'
 

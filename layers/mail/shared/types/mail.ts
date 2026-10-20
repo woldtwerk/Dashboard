@@ -52,6 +52,13 @@ export interface MailSummary {
   rankingScore?: number
 }
 
+/** One attachment of a mail, without its bytes */
+export interface MailAttachment {
+  filename: string
+  contentType: string
+  size: number
+}
+
 export interface MailMessage extends MailSummary {
   /** RFC 5322 Message-ID; identifies the same mail in several folders/labels */
   messageId?: string

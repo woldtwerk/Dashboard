@@ -10,9 +10,10 @@ import {
   planUndo,
   runConfidence,
   selectActions,
-  toCorrectionExample
+  toCorrectionExample,
+  undoBatches
 } from '../shared/automation'
-import type { AppliedAction, AutomationItem, PlannedAction } from '../shared/types/automation'
+import type { AppliedAction, AutomationItem, PlannedAction, UndoOperation } from '../shared/types/automation'
 
 function mailItem(fields: Record<string, string> = {}): AutomationItem {
   return {
@@ -145,6 +146,41 @@ describe('planUndo', () => {
       { type: 'extract', variable: 'code', value: '482913' },
       { type: 'notify', nodeId: 'notify', title: 'Login code', modal: { text: '482913', copy: true } }
     ])).toEqual([])
+  })
+
+  it('trashes the files a save-to-drive uploaded', () => {
+    expect(planUndo([
+      { type: 'save-to-drive', service: 'drive-1', paths: ['/my-files/Public/a.pdf', '/my-files/Public/b.pdf'] }
+    ])).toEqual([
+      { op: 'drive-trash', service: 'drive-1', paths: ['/my-files/Public/a.pdf', '/my-files/Public/b.pdf'] }
+    ])
+  })
+
+  it('plans nothing for a save-to-drive that skipped every file', () => {
+    expect(planUndo([{ type: 'save-to-drive', service: 'drive-1', paths: [] }])).toEqual([])
+  })
+})
+
+describe('undoBatches', () => {
+  const move: UndoOperation = { op: 'move', mailbox: 'Trash', uid: 9, target: 'INBOX' }
+  const drive: UndoOperation = { op: 'drive-trash', service: 'drive-1', paths: ['/my-files/Public/a.pdf'] }
+
+  it('keeps consecutive domain operations in one applier batch', () => {
+    expect(undoBatches([move, { op: 'set-seen', mailbox: 'Trash', uid: 9, seen: true }])).toEqual([
+      { kind: 'domain', operations: [move, { op: 'set-seen', mailbox: 'Trash', uid: 9, seen: true }] }
+    ])
+  })
+
+  it('runs a drive trash where it stands in the plan', () => {
+    expect(undoBatches([move, drive, { op: 'delete', mailbox: 'Labels/x', uid: 4 }])).toEqual([
+      { kind: 'domain', operations: [move] },
+      { kind: 'drive', service: 'drive-1', paths: ['/my-files/Public/a.pdf'] },
+      { kind: 'domain', operations: [{ op: 'delete', mailbox: 'Labels/x', uid: 4 }] }
+    ])
+  })
+
+  it('has nothing to do without operations', () => {
+    expect(undoBatches([])).toEqual([])
   })
 })
 

@@ -75,6 +75,8 @@ export function actionSummary(action: AutomationAction): string {
       return `Extract {{${action.variable}}}`
     case 'notify':
       return 'Send notification'
+    case 'save-to-drive':
+      return `Save ${attachmentLabel(action.accept)} to ${driveFolderLabel(action.folder)}`
     case 'add-tag':
       return `Add tag #${action.tag}`
     case 'set-correspondent':
@@ -82,6 +84,32 @@ export function actionSummary(action: AutomationAction): string {
     case 'set-type':
       return `Type #${action.documentType}`
   }
+}
+
+/** How a save-to-drive action's accepted files read, e.g. `videos` */
+export function attachmentLabel(accept?: readonly string[]): string {
+  const globs = [...new Set(accept ?? [])].sort()
+  if (!globs.length) {
+    return 'attachments'
+  }
+  if (globs.length === 1) {
+    switch (globs[0]) {
+      case 'video/*':
+        return 'videos'
+      case 'image/*':
+        return 'images'
+      case 'audio/*':
+        return 'audio files'
+      case 'application/pdf':
+        return 'PDFs'
+    }
+  }
+  return 'files'
+}
+
+/** The folder a save-to-drive action writes to, or a hint when none is picked yet */
+export function driveFolderLabel(folder: string): string {
+  return folder.trim() || 'the drive'
 }
 
 export function actionIcon(action: AutomationAction): string {
@@ -100,6 +128,8 @@ export function actionIcon(action: AutomationAction): string {
       return 'i-lucide-scan-text'
     case 'notify':
       return 'i-lucide-bell'
+    case 'save-to-drive':
+      return 'i-lucide-hard-drive-upload'
     case 'add-tag':
       return 'i-lucide-tag'
     case 'set-correspondent':
@@ -141,6 +171,11 @@ export function nodeSubtitle(node: WorkflowNode): string {
       }
       if (action.type === 'notify') {
         return action.title || 'Notification'
+      }
+      if (action.type === 'save-to-drive') {
+        return action.folder
+          ? `${attachmentLabel(action.accept)} → ${action.folder}`
+          : 'Choose a drive folder'
       }
       return action.type
     }

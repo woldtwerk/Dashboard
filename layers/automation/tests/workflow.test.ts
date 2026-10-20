@@ -491,6 +491,41 @@ describe('validateWorkflow', () => {
 
     expect(validateWorkflow(graph, 'mail')).toEqual([])
   })
+
+  it('accepts a complete save-to-drive in both domains', () => {
+    const graph = choiceGraph()
+    graph.nodes.find(node => node.id === 'star')!.data = {
+      action: { type: 'save-to-drive', service: 'drive-1', folder: '/my-files/Public', accept: ['video/*'], conflict: 'skip' }
+    } as never
+
+    expect(validateWorkflow(graph, 'mail')).toEqual([])
+    expect(validateWorkflow(graph, 'documents')).toEqual([])
+  })
+
+  it('rejects a save-to-drive without a service, with a relative folder and with a bad media type', () => {
+    const graph = choiceGraph()
+    graph.nodes.find(node => node.id === 'star')!.data = {
+      action: { type: 'save-to-drive', service: ' ', folder: 'my-files/Public', accept: ['video'] }
+    } as never
+
+    const errors = validateWorkflow(graph, 'mail').filter(error => error.nodeId === 'star')
+    expect(errors.map(error => error.message)).toEqual([
+      'The save-to-drive action needs a drive service',
+      'The save-to-drive folder must be an absolute path',
+      '"video" is not a media type like video/* or application/pdf'
+    ])
+  })
+
+  it('rejects a save-to-drive without a folder', () => {
+    const graph = choiceGraph()
+    graph.nodes.find(node => node.id === 'star')!.data = {
+      action: { type: 'save-to-drive', service: 'drive-1', folder: '' }
+    } as never
+
+    expect(validateWorkflow(graph, 'mail')).toEqual([
+      { nodeId: 'star', message: 'The save-to-drive action needs a folder' }
+    ])
+  })
 })
 
 describe('createDefaultGraph', () => {
