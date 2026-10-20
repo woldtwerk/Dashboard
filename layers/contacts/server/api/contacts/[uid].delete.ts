@@ -13,6 +13,9 @@ export default defineEventHandler(async (event) => {
   const existing = { uid, addressBook, url, etag, name: '' } as Contact
 
   await provider.deleteContact(existing)
+  if (url) {
+    await syncCachedCardAfterWrite(service, addressBook, url, { removed: true })
+  }
   await publishDomainEvent({ domain: 'contacts', service, type: 'changed', resource: addressBook })
 
   return { ok: true }

@@ -7,11 +7,9 @@ async function total(): Promise<number | null> {
   }
 
   const counts = await Promise.all(services.map(async (service) => {
-    const provider = await useContactsProvider(service.id)
-    const addressBooks = await provider.listAddressBooks()
-    const contacts = await Promise.all(addressBooks.map(addressBook => provider.listContacts(addressBook.url)))
+    await ensureContactsSynced(service.id)
 
-    return contacts.reduce((sum, entries) => sum + entries.length, 0)
+    return (await cachedContacts(service.id)).length
   }))
 
   return counts.reduce((sum, value) => sum + value, 0)

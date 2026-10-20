@@ -13,6 +13,9 @@ export default defineEventHandler(async (event) => {
   const existing = { uid, addressBook, url, etag, name: input.name ?? '' } as Contact
 
   await provider.updateContact(existing, input)
+  if (url) {
+    await syncCachedCardAfterWrite(service, addressBook, url)
+  }
   await publishDomainEvent({ domain: 'contacts', service, type: 'changed', resource: addressBook })
 
   return { ok: true }

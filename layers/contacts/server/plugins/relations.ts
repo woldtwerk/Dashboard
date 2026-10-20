@@ -34,11 +34,10 @@ async function listAllContacts(): Promise<ServiceContact[]> {
 
   const results = await Promise.all(services.map(async ({ id }): Promise<ServiceContact[]> => {
     try {
-      const provider = await useContactsProvider(id)
-      const addressBooks = await provider.listAddressBooks()
-      const lists = await Promise.all(addressBooks.map(addressBook => provider.listContacts(addressBook.url)))
+      await ensureContactsSynced(id)
+      const contacts = await cachedContacts(id)
 
-      return lists.flat().map(contact => ({ service: id, contact }))
+      return contacts.map(contact => ({ service: id, contact }))
     } catch (error) {
       useServiceLogger('contacts', id).warn('Could not read contacts', { error: String(error) })
       return []

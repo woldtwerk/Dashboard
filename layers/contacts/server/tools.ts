@@ -39,11 +39,10 @@ export const contactToolFields = {
 }
 
 async function serviceContacts(service: string, addressBook: string | undefined, q: string): Promise<Contact[]> {
-  const provider = await useContactsProvider(service)
-  const books = addressBook ? [addressBook] : (await provider.listAddressBooks()).map(book => book.url)
-  const lists = await Promise.all(books.map(url => provider.listContacts(url)))
+  await ensureContactsSynced(service)
+  const contacts = await cachedContacts(service, addressBook)
 
-  return lists.flat()
+  return contacts
     .filter(contact => matchContact(contact, q))
     .map(contact => ({ ...contact, service }))
 }
@@ -139,6 +138,9 @@ export const contactsTools: DomainTool[] = [
     execute: async (raw) => {
       const input = raw as ContactInput & { service: string, addressBook: string }
       const created = await (await useContactsProvider(input.service)).createContact(input.addressBook, input)
+      if (created.url) {
+        await syncCachedCardAfterWrite(input.service, input.addressBook, created.url)
+      }
       await publishDomainEvent({ domain: 'contacts', service: input.service, type: 'changed', resource: input.addressBook })
 
       return { ...created, service: input.service }
@@ -166,6 +168,9 @@ export const contactsTools: DomainTool[] = [
         etag: input.etag,
         name: input.name ?? ''
       } as Contact, input)
+      if (input.url) {
+        await syncCachedCardAfterWrite(input.service, input.addressBook, input.url)
+      }
       await publishDomainEvent({ domain: 'contacts', service: input.service, type: 'changed', resource: input.addressBook })
 
       return { ok: true, uid: input.uid }
