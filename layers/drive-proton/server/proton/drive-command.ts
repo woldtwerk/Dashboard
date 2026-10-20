@@ -149,19 +149,45 @@ function isEntry(value: unknown): value is CliEntry {
   return !!entry && (entry.type === 'folder' || entry.type === 'file')
 }
 
+/** Web editor of the media types Proton keeps as an online-only document. */
+const PROTON_EDITORS: Record<string, string> = {
+  'application/vnd.proton.doc': 'https://docs.proton.me/doc',
+  'application/vnd.proton.sheet': 'https://docs.proton.me/sheet'
+}
+
+/**
+ * Where Proton's web editor opens a document or spreadsheet. The uid is
+ * `<volumeId>~<linkId>`; anything else, and every other media type, has none.
+ */
+export function protonWebUrl(uid: string | undefined, mediaType: string | undefined): string | undefined {
+  const base = mediaType ? PROTON_EDITORS[mediaType] : undefined
+  const parts = uid?.split('~') ?? []
+  if (!base || parts.length !== 2) {
+    return undefined
+  }
+  const [volumeId, linkId] = parts
+  if (!volumeId || !linkId) {
+    return undefined
+  }
+  return `${base}?${new URLSearchParams({ mode: 'open', volumeId, linkId })}`
+}
+
 function toEntry(entry: CliEntry, parent: string): DriveEntry {
   const name = entryName(entry)
   const path = joinPath(parent, name)
+  const uid = entry.uid !== undefined ? String(entry.uid) : undefined
+  const mediaType = entry.mediaType ? String(entry.mediaType) : undefined
 
   return {
-    uid: entry.uid !== undefined ? String(entry.uid) : path,
+    uid: uid ?? path,
     name,
     type: entry.type === 'folder' ? 'folder' : 'file',
     parent,
     path,
     size: entrySize(entry),
     modified: entry.modificationTime ? String(entry.modificationTime) : undefined,
-    mediaType: entry.mediaType ? String(entry.mediaType) : undefined
+    mediaType,
+    webUrl: uid ? protonWebUrl(uid, mediaType) : undefined
   }
 }
 

@@ -150,6 +150,9 @@ const activeSection = computed({
 function open(entry: DriveEntry) {
   if (entry.type === 'folder') {
     navigate(entry.path)
+  } else if (entry.webUrl) {
+    // No content to preview: the provider's web app opens it instead
+    window.open(entry.webUrl, '_blank', 'noopener,noreferrer')
   } else {
     updateQuery({ item: entry.path })
   }
@@ -430,7 +433,9 @@ function menuItems(entry: DriveEntry): DropdownMenuItem[] {
   const items: DropdownMenuItem[] = [
     entry.type === 'folder'
       ? { label: 'Open', icon: 'i-lucide-folder-open', onSelect: () => open(entry) }
-      : { label: 'Preview', icon: 'i-lucide-eye', onSelect: () => open(entry) },
+      : entry.webUrl
+        ? { label: 'Open in new tab', icon: 'i-lucide-external-link', onSelect: () => open(entry) }
+        : { label: 'Preview', icon: 'i-lucide-eye', onSelect: () => open(entry) },
     { label: 'Download', icon: 'i-lucide-download', onSelect: () => download([entry.path]) }
   ]
 

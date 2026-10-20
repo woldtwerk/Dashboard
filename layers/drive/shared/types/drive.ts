@@ -17,6 +17,8 @@ export interface DriveEntry {
   modified?: string
   /** IANA media type, e.g. `image/png` */
   mediaType?: string
+  /** Where the provider's own web app opens the entry, e.g. an online editor; the explorer opens it in a new tab instead of previewing */
+  webUrl?: string
   /** Set while an optimistic change is not yet confirmed by the provider */
   pending?: boolean
 }

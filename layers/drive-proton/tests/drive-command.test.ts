@@ -13,7 +13,8 @@ import {
   parseInvitations,
   parseJson,
   parseShare,
-  parseUsedBytes
+  parseUsedBytes,
+  protonWebUrl
 } from '../server/proton/drive-command'
 
 describe('argv building', () => {
@@ -71,6 +72,28 @@ describe('parseJson', () => {
   })
 })
 
+describe('protonWebUrl', () => {
+  const uid = 'vol==a-~link_b-='
+
+  it.each([
+    ['a document', uid, 'application/vnd.proton.doc', 'https://docs.proton.me/doc'],
+    ['a spreadsheet', uid, 'application/vnd.proton.sheet', 'https://docs.proton.me/sheet'],
+    ['another media type', uid, 'text/plain', undefined],
+    ['a malformed uid', 'vol==a-', 'application/vnd.proton.doc', undefined]
+  ])('resolves %s', (_, value, mediaType, base) => {
+    const url = protonWebUrl(value, mediaType)
+    if (!base) {
+      expect(url).toBeUndefined()
+      return
+    }
+    const parsed = new URL(url!)
+    expect(`${parsed.origin}${parsed.pathname}`).toBe(base)
+    expect(parsed.searchParams.get('mode')).toBe('open')
+    expect(parsed.searchParams.get('volumeId')).toBe('vol==a-')
+    expect(parsed.searchParams.get('linkId')).toBe('link_b-=')
+  })
+})
+
 describe('parseEntries', () => {
   const stdout = JSON.stringify([
     { uid: 'u1', type: 'folder', name: { ok: true, value: 'Docs' }, modificationTime: '2026-10-01T10:00:00Z' },
@@ -102,6 +125,11 @@ describe('parseEntries', () => {
   it('accepts an object with an entries array', () => {
     const entries = parseEntries(JSON.stringify({ entries: [{ uid: 'u', type: 'file', name: 'x' }] }), '/my-files')
     expect(entries.map(entry => entry.name)).toEqual(['x'])
+  })
+
+  it('gives a listed document its web editor URL', () => {
+    const entries = parseEntries(JSON.stringify([{ uid: 'vol~link', type: 'file', name: 'Notes', mediaType: 'application/vnd.proton.doc' }]), '/my-files')
+    expect(entries[0]!.webUrl).toBe('https://docs.proton.me/doc?mode=open&volumeId=vol&linkId=link')
   })
 })
 
