@@ -1,6 +1,8 @@
 import type { DriveEntry } from '../../shared/types/drive'
 import { DRIVE_SHARED_ROOT, DRIVE_TRASH_ROOT, parentPath } from '../../shared/drive-path'
 import { sharedStorage } from '../../../core/server/utils/shared-storage'
+import type { DriveListingCache, StoredListing } from './drive-listing-cache'
+import { markDriveFoldersDue, recordDriveListing } from './drive-sync'
 
 /**
  * Folder listings are cached in the shared Nitro storage (Redis when mounted,
@@ -33,11 +35,7 @@ export const DRIVE_LIST_POLL_INTERVAL_MS = 250
  */
 export const DRIVE_LIST_WAIT_MAX_MS = 20_000
 
-export interface CachedListing {
-  entries: DriveEntry[]
-  /** `Date.now()` when the listing was read from the provider */
-  fetchedAt: number
-}
+export type CachedListing = StoredListing
 
 export function driveListKey(service: string, path: string): string {
   return `drive:list:${service}:${path}`
@@ -48,7 +46,7 @@ export function driveListLock(service: string, path: string): string {
   return `drive-list:${service}:${path}`
 }
 
-async function readListing(key: string): Promise<CachedListing | undefined> {
+export async function readListing(key: string): Promise<CachedListing | undefined> {
   try {
     return await sharedStorage().getItem<CachedListing>(key) ?? undefined
   } catch {
@@ -62,6 +60,22 @@ async function writeListing(key: string, listing: CachedListing): Promise<void> 
     await sharedStorage().setItem(key, listing, { ttl: DRIVE_LIST_STORE_TTL_SECONDS })
   } catch {
     // Best effort: a cache write never fails a request
+  }
+}
+
+/**
+ * Stores a listing in the shared cache and announces it when it changed.
+ * The first listing of a folder stays quiet, so opening a folder nobody opened
+ * before does not notify every browser.
+ */
+export async function storeListing(service: string, path: string, entries: DriveEntry[]): Promise<void> {
+  const key = driveListKey(service, path)
+  const previous = await readListing(key)
+
+  await writeListing(key, { entries, fetchedAt: Date.now() })
+
+  if (previous && !sameEntries(previous.entries, entries)) {
+    await publishDomainEvent({ domain: 'drive', service, type: 'changed', resource: path })
   }
 }
 
@@ -136,16 +150,17 @@ export function isDriveBusy(error: unknown): boolean {
 async function loadListing(
   service: string,
   path: string,
-  key: string,
-  previous: CachedListing | undefined,
   load: () => Promise<DriveEntry[]>
 ): Promise<DriveEntry[]> {
   const entries = await load()
-  await writeListing(key, { entries, fetchedAt: Date.now() })
+  await storeListing(service, path, entries)
 
-  // Only a listing that actually changed is worth an event, so the first load stays quiet
-  if (previous && !sameEntries(previous.entries, entries)) {
-    await publishDomainEvent({ domain: 'drive', service, type: 'changed', resource: path })
+  // Mirror the listing into the crawl database, so a folder a user opened is
+  // already cached and does not have to be listed again by the crawl
+  try {
+    await recordDriveListing(service, path, entries)
+  } catch (error) {
+    useServiceLogger('drive', service).warn(`Could not record the listing of "${path}"`, { error: String(error) })
   }
 
   return entries
@@ -155,7 +170,6 @@ async function revalidate(
   service: string,
   path: string,
   key: string,
-  previous: CachedListing,
   load: () => Promise<DriveEntry[]>
 ): Promise<void> {
   try {
@@ -165,7 +179,7 @@ async function revalidate(
       if (current && Date.now() - current.fetchedAt < DRIVE_LIST_TTL_MS) {
         return
       }
-      await loadListing(service, path, key, current ?? previous, load)
+      await loadListing(service, path, load)
     })
   } catch (error) {
     // A busy or failing refresh keeps the stale listing; only a real failure is worth a log
@@ -190,7 +204,7 @@ export async function cachedList(service: string, path: string, load: () => Prom
     if (Date.now() - cached.fetchedAt < DRIVE_LIST_TTL_MS) {
       return cached.entries
     }
-    void revalidate(service, path, key, cached, load)
+    void revalidate(service, path, key, load)
     return cached.entries
   }
 
@@ -206,7 +220,7 @@ async function loadCold(service: string, path: string, key: string, load: () => 
       const loaded = await withLock(driveListLock(service, path), DRIVE_LIST_LOCK_TTL_MS, async () => {
         // Another worker may have written it while this one waited for the lease
         const current = await readListing(key)
-        return current ? current.entries : await loadListing(service, path, key, undefined, load)
+        return current ? current.entries : await loadListing(service, path, load)
       })
 
       if (loaded) {
@@ -236,7 +250,7 @@ async function loadCold(service: string, path: string, key: string, load: () => 
 
   // Nothing appeared within the cap; load it ourselves rather than fail the click.
   try {
-    return await loadListing(service, path, key, undefined, load)
+    return await loadListing(service, path, load)
   } catch (error) {
     const fallback = isDriveBusy(error) ? await readListing(key) : undefined
     if (fallback) {
@@ -301,14 +315,33 @@ export function affectedPaths(action: DriveMutationAction, input: DriveMutationI
   return [...new Set(paths)]
 }
 
-/** Drops the cached listings of `paths`, so the next read asks the provider. */
+/**
+ * Drops the cached listings of `paths`, so the next read asks the provider, and
+ * makes the crawl revisit them first.
+ */
 export async function invalidateDriveListings(service: string, paths: string[]): Promise<void> {
+  const unique = [...new Set(paths)]
   const storage = sharedStorage()
-  await Promise.all([...new Set(paths)].map(async (path) => {
+
+  await Promise.all(unique.map(async (path) => {
     try {
       await storage.removeItem(driveListKey(service, path))
     } catch (error) {
       useServiceLogger('drive', service).warn(`Could not invalidate the cached listing of "${path}"`, { error: String(error) })
     }
   }))
+
+  try {
+    await markDriveFoldersDue(service, unique)
+  } catch (error) {
+    useServiceLogger('drive', service).warn('Could not mark the drive folders due', { error: String(error) })
+  }
+}
+
+/** The listing cache of the crawl; injected so `drive-sync` does not import this module. */
+export const driveListingCache: DriveListingCache = {
+  ttlMs: DRIVE_LIST_TTL_MS,
+  read: (service, path) => readListing(driveListKey(service, path)),
+  store: storeListing,
+  isBusy: isDriveBusy
 }

@@ -58,6 +58,7 @@ beforeEach(() => {
   busy = createBusyError
 
   vi.stubGlobal('useStorage', () => storage())
+  vi.stubGlobal('useServiceLogger', () => ({ warn: () => {}, error: () => {}, info: () => {} }))
   vi.stubGlobal('publishDomainEvent', (event: unknown) => {
     published.push(event)
     return Promise.resolve()
