@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildIndexSettings, buildTypoTolerance, EMBEDDER, HYBRID_RANKING_SCORE_FLOOR, rankingScoreThresholdFor } from '../server/meilisearch/settings'
+import { buildIndexSettings, buildTypoTolerance, EMBEDDER, HYBRID_RANKING_SCORE_FLOOR, MAIL_INDEX_MAX_TOTAL_HITS, rankingScoreThresholdFor } from '../server/meilisearch/settings'
 
 const options = {
   semantic: true,
@@ -37,6 +37,11 @@ describe('buildIndexSettings', () => {
   it('only configures the embedder for semantic search', () => {
     expect(buildIndexSettings({ ...options, semantic: false }).embedders).toEqual({})
     expect(buildIndexSettings(options).embedders).toMatchObject({ [EMBEDDER]: { source: 'huggingFace', model: 'model' } })
+  })
+
+  it('pages past the default hit limit', () => {
+    expect(buildIndexSettings(options).pagination).toEqual({ maxTotalHits: MAIL_INDEX_MAX_TOTAL_HITS })
+    expect(MAIL_INDEX_MAX_TOTAL_HITS).toBeGreaterThan(1000)
   })
 })
 

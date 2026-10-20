@@ -17,6 +17,13 @@ export const EMBEDDER = 'default'
  */
 export const HYBRID_RANKING_SCORE_FLOOR = 0.2
 
+/**
+ * How deep a single query may page into the index. Meilisearch's default of 1000
+ * hits would end the mail list and the conversation paging there, so the index
+ * is configured to cover a mailbox's whole depth instead.
+ */
+export const MAIL_INDEX_MAX_TOTAL_HITS = 100_000
+
 export interface MailIndexSettingsOptions {
   semantic: boolean
   embedderModel: string
@@ -50,6 +57,8 @@ export function buildIndexSettings(options: MailIndexSettingsOptions): Settings 
     sortableAttributes: ['date'],
     // The same mail in several folders/labels is shown once
     distinctAttribute: 'messageId',
+    // "Load more" reaches past Meilisearch's default hit limit
+    pagination: { maxTotalHits: MAIL_INDEX_MAX_TOTAL_HITS },
     typoTolerance: buildTypoTolerance(options),
     embedders: options.semantic
       ? {

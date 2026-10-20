@@ -1,10 +1,7 @@
 import { defineEventHandler, getValidatedQuery, setResponseStatus } from 'nuxt/server'
 import type { MailConversation } from '../../../shared/types/mail'
-import { groupConversations } from '../../../shared/mail-thread'
+import { loadConversationPage } from '../../utils/mail-conversations'
 import { toMailSearch } from '../../utils/mail-search-query'
-
-/** How many mails one page of conversations is grouped from; the index pages by mail */
-const CONVERSATION_SOURCE_LIMIT = 500
 
 // Mail grouped into conversations, newest conversation first, paged over the
 // grouped result. Index only: the provider cannot group across folders, so
@@ -25,19 +22,15 @@ export default defineEventHandler(async (event): Promise<MailConversation[] | { 
     return { fallback: true }
   }
 
-  const mails = await index.search({
-    services: [service],
-    mailbox,
-    search: toMailSearch(search),
-    limit: CONVERSATION_SOURCE_LIMIT
-  })
-
-  return groupConversations(mails).slice(offset, offset + limit).map(({ key, subject, participants, count, unread, latest }) => ({
-    key,
-    subject,
-    participants,
-    count,
-    unread,
-    latest
-  }))
+  return loadConversationPage(
+    (sourceOffset, size) => index.search({
+      services: [service],
+      mailbox,
+      search: toMailSearch(search),
+      limit: size,
+      offset: sourceOffset
+    }),
+    offset,
+    limit
+  )
 })

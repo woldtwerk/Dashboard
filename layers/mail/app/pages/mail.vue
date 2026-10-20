@@ -66,6 +66,20 @@ const folderName = computed(() => {
   return services.value.length > 1 && entry ? `${name} · ${entry.service.name}` : name
 })
 
+// Unread mails of what the list covers. The all-folders scope leaves out labels
+// and virtual folders, which repeat mail a real folder already counts.
+const unreadCount = computed(() => {
+  const entry = folders.value.find(item => item.service.id === service.value)
+  if (!entry) {
+    return 0
+  }
+  if (allFolders.value) {
+    return countUnread(entry.mailboxes)
+  }
+  return entry.mailboxes.find(item => item.path === mailbox.value)?.unread ?? 0
+})
+const unreadLabel = computed(() => `${unreadCount.value} unread`)
+
 // Folder display name for hits that can come from any folder (scope=all), by `service/mailbox`
 const mailboxNames = computed(() => {
   const names: Record<string, string> = {}
@@ -1372,7 +1386,9 @@ const isMobile = breakpoints.smaller('lg')
         <UDashboardSidebarCollapse />
       </template>
       <template #trailing>
-        <UBadge :label="showThreads ? conversations.length : mails.length" variant="subtle" />
+        <UTooltip v-if="unreadCount" :text="unreadLabel">
+          <UBadge :label="unreadCount" variant="subtle" :aria-label="unreadLabel" />
+        </UTooltip>
       </template>
 
       <template #right>

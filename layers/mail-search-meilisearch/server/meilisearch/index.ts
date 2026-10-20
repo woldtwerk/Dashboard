@@ -45,6 +45,8 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
   const ensureSettings = () => ready ??= (async () => {
     // Fails harmlessly when the index exists
     await client.createIndex(options.index, { primaryKey: 'id' }).waitTask().catch(() => {})
+    // `updateSettings` patches an existing index as well as a new one, so a
+    // setting added in a later version reaches the index on the next worker start
     await settle(index.updateSettings(buildIndexSettings({
       semantic,
       embedderModel: options.embedderModel,
