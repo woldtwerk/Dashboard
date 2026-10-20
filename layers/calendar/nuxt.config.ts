@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url'
+import { CALENDAR_SYNC_CRON } from './shared/sync-schedule'
 
 // Calendar domain: provider-agnostic entities, a CalDAV provider port, API and UI.
 // Connector layers (e.g. proton-dav) register a connector whose stored DAV
@@ -21,10 +22,12 @@ export default defineNuxtConfig({
     experimental: {
       tasks: true
     },
-    // Reminders depend on the minute, not on a worker's lifetime; the task takes
-    // the `calendar-reminders` lock so only one cluster worker sends them.
+    // Reminders depend on the minute. The sync runs every minute too, shorter
+    // than the stale window (see shared/sync-schedule.ts), so a service is
+    // picked up soon after it goes stale. Both tasks take their own lock, so
+    // only one cluster worker sends reminders and one syncs a calendar.
     scheduledTasks: {
-      '* * * * *': ['calendar:reminders']
+      [CALENDAR_SYNC_CRON]: ['calendar:reminders', 'calendar:sync']
     },
     // Bundle the cache migrations, so the calendar cache database can apply them
     serverAssets: [{

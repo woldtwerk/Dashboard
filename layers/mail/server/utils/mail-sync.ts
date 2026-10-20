@@ -1,5 +1,6 @@
 import { and, count, eq, inArray, max } from 'drizzle-orm'
 import { dashboardStorage } from '../../../core/server/utils/dashboard'
+import { MAIL_SYNC_STALE_MS } from '../../shared/sync-schedule'
 import type { Mailbox, MailIndexStatus, MailMessage } from '../../shared/types/mail'
 import { mailIndexMailboxes, mailIndexMessages } from '../db/schema'
 import { diffMailboxState } from '../mail-index/diff'
@@ -11,7 +12,6 @@ import type { MailProvider } from './mail-provider'
 import type { MailSearchIndex } from './mail-search-index'
 
 const LOCK_TTL_MS = 5 * 60_000
-const STALE_MS = 2 * 60_000
 const FETCH_BATCH = 25
 /** How long the status waits for a missing total before answering without one */
 const TOTAL_LOOKUP_TIMEOUT_MS = 5_000
@@ -341,21 +341,36 @@ async function backfillStreams({ service, provider, index, renew, logger }: {
   return changed
 }
 
-/** Starts a background sync when the index of the service is stale; never waits for it */
-export async function requestMailSync(service: string) {
+/** Whether the index of the service has not been synced within the stale window */
+export function isMailSyncStale(syncedAt: Date | null | undefined, now: number = Date.now()): boolean {
+  return !syncedAt || now - syncedAt.getTime() > MAIL_SYNC_STALE_MS
+}
+
+/**
+ * Syncs the index of the service when it is stale.
+ * @returns false when it was fresh or another worker is already syncing
+ */
+export async function syncMailIfStale(service: string): Promise<boolean> {
   if (!useMailSearchIndex() || await isLockHeld(lockName(service))) {
-    return
+    return false
   }
 
   const db = await useDb()
   const last = await db.select({ syncedAt: max(mailIndexMailboxes.syncedAt) }).from(mailIndexMailboxes)
     .where(eq(mailIndexMailboxes.service, service)).get()
 
-  if (!last?.syncedAt || Date.now() - last.syncedAt.getTime() > STALE_MS) {
-    syncMailService(service).catch((error) => {
-      useServiceLogger('mail', service).error('Background sync failed', { error: errorMessage(error) })
-    })
+  if (!isMailSyncStale(last?.syncedAt)) {
+    return false
   }
+
+  return syncMailService(service)
+}
+
+/** Starts a background sync when the index of the service is stale; never waits for it */
+export async function requestMailSync(service: string) {
+  syncMailIfStale(service).catch((error) => {
+    useServiceLogger('mail', service).error('Background sync failed', { error: errorMessage(error) })
+  })
 }
 
 /**

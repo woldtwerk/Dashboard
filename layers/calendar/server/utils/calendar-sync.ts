@@ -1,5 +1,6 @@
 import { and, eq, gt, inArray, isNull, like, lt, or, sql } from 'drizzle-orm'
 import type { SqliteRemoteDatabase } from 'drizzle-orm/sqlite-proxy'
+import { CALENDAR_SYNC_STALE_MS } from '../../shared/sync-schedule'
 import type { Calendar, CalendarEvent, CalendarSyncStatus } from '../../shared/types/calendar'
 import { calendarCacheSchema } from '../db/cache'
 import { calendarCollections, calendarObjects, calendarSync } from '../db/cache-schema'
@@ -10,7 +11,6 @@ import { expandEvents, objectParticipants, objectParticipantRoles } from './cale
 import type { CalendarProvider, RemoteCalendarObject } from './calendar-provider'
 
 const LOCK_TTL_MS = 5 * 60_000
-const STALE_MS = 2 * 60_000
 /** SQLite limits bound parameters per statement */
 const SQL_CHUNK = 500
 
@@ -348,21 +348,39 @@ export async function syncCalendarService(service: string): Promise<boolean> {
   }
 }
 
-/** Starts a background sync when the cache of the service is stale; never waits for it */
-export async function requestCalendarSync(service: string): Promise<void> {
+/** Whether the cache of the service has to be refetched: never synced, stored by an older cache version, or stale */
+export function isCalendarSyncStale(
+  row: { syncedAt: Date | null, version: number | null } | undefined,
+  now: number = Date.now()
+): boolean {
+  return !row?.syncedAt || row.version !== CALENDAR_CACHE_VERSION || now - row.syncedAt.getTime() > CALENDAR_SYNC_STALE_MS
+}
+
+/**
+ * Syncs the cache of the service when it is stale.
+ * @returns false when it was fresh or another worker is already syncing
+ */
+export async function syncCalendarIfStale(service: string): Promise<boolean> {
   if (await isLockHeld(lockName(service))) {
-    return
+    return false
   }
 
   const db = await cacheDb()
   const row = await db.select({ syncedAt: calendarSync.syncedAt, version: calendarSync.version }).from(calendarSync)
     .where(eq(calendarSync.service, service)).get()
 
-  if (!row?.syncedAt || row.version !== CALENDAR_CACHE_VERSION || Date.now() - row.syncedAt.getTime() > STALE_MS) {
-    syncCalendarService(service).catch((error) => {
-      useServiceLogger('calendar', service).error('Background sync failed', { error: errorMessage(error) })
-    })
+  if (!isCalendarSyncStale(row)) {
+    return false
   }
+
+  return syncCalendarService(service)
+}
+
+/** Starts a background sync when the cache of the service is stale; never waits for it */
+export async function requestCalendarSync(service: string): Promise<void> {
+  syncCalendarIfStale(service).catch((error) => {
+    useServiceLogger('calendar', service).error('Background sync failed', { error: errorMessage(error) })
+  })
 }
 
 /** First visit waits for the initial sync; later visits answer from the cache. */
