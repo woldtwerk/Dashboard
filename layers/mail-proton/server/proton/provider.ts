@@ -67,6 +67,40 @@ function toSearchObject(search?: MailSearch): SearchObject | undefined {
 export function createProtonMailProvider(values: SetupValues): MailProvider {
   const settings = toProtonSettings(values)
 
+  // One mailbox connection and one ImapFlow command for a whole batch; the
+  // single-uid methods delegate here so both paths share the same code.
+  const setSeenMany: MailProvider['setSeenMany'] = (mailbox, uids, seen) => {
+    if (!uids.length) {
+      return Promise.resolve()
+    }
+    return withProtonMailbox(settings, mailbox, async (client) => {
+      if (seen) {
+        await client.messageFlagsAdd(uids.join(','), ['\\Seen'], { uid: true })
+      } else {
+        await client.messageFlagsRemove(uids.join(','), ['\\Seen'], { uid: true })
+      }
+    })
+  }
+
+  const moveMessages: MailProvider['moveMessages'] = (mailbox, uids, target) => {
+    if (!uids.length) {
+      return Promise.resolve(new Map<number, number>())
+    }
+    return withProtonMailbox(settings, mailbox, async (client) => {
+      const result = await client.messageMove(uids.join(','), target, { uid: true })
+      return new Map(result ? result.uidMap : undefined)
+    })
+  }
+
+  const deleteMessages: MailProvider['deleteMessages'] = (mailbox, uids) => {
+    if (!uids.length) {
+      return Promise.resolve()
+    }
+    return withProtonMailbox(settings, mailbox, async (client) => {
+      await client.messageDelete(uids.join(','), { uid: true })
+    })
+  }
+
   return {
     listMailboxes() {
       return withProtonBridge(settings, async (client) => {
@@ -184,14 +218,10 @@ export function createProtonMailProvider(values: SetupValues): MailProvider {
     },
 
     setSeen(mailbox, uid, seen) {
-      return withProtonMailbox(settings, mailbox, async (client) => {
-        if (seen) {
-          await client.messageFlagsAdd(String(uid), ['\\Seen'], { uid: true })
-        } else {
-          await client.messageFlagsRemove(String(uid), ['\\Seen'], { uid: true })
-        }
-      })
+      return setSeenMany(mailbox, [uid], seen)
     },
+
+    setSeenMany,
 
     setFlagged(mailbox, uid, flagged) {
       return withProtonMailbox(settings, mailbox, async (client) => {
@@ -204,17 +234,16 @@ export function createProtonMailProvider(values: SetupValues): MailProvider {
     },
 
     moveMessage(mailbox, uid, target) {
-      return withProtonMailbox(settings, mailbox, async (client) => {
-        const result = await client.messageMove(String(uid), target, { uid: true })
-        return { uid: result ? result.uidMap?.get(uid) : undefined }
-      })
+      return moveMessages(mailbox, [uid], target).then(mapping => ({ uid: mapping.get(uid) }))
     },
 
+    moveMessages,
+
     deleteMessage(mailbox, uid) {
-      return withProtonMailbox(settings, mailbox, async (client) => {
-        await client.messageDelete(String(uid), { uid: true })
-      })
+      return deleteMessages(mailbox, [uid])
     },
+
+    deleteMessages,
 
     addLabel(mailbox, uid, label) {
       return withProtonMailbox(settings, mailbox, async (client) => {

@@ -7,6 +7,7 @@ import { buildReply, emptyOutgoingMail, type OutgoingMail } from '#layers/mail/s
 import { trashTarget } from '#layers/mail/shared/mail-delete'
 import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
 import type { RetainedConversations, RetainedMail, RetainedMails } from '#layers/mail/app/utils/mail-retention'
+import type { MailBatchAction, MailDeleteBatchResult, MailDeleteUndo, MailMoveBatchResult } from '#layers/mail/app/utils/mail-batch'
 import type { SetupState } from '#layers/core/shared/types/setup'
 import type { MailListView, MailSettings } from '#layers/mail/shared/types/settings'
 
@@ -282,11 +283,13 @@ const listRef = ref<{ scrollToTop: () => void } | null>(null)
 // it, so opening a mail or a conversation leaves the list and its scroll alone.
 const listIdentity = computed(() => listIdentityFromQuery(route.query))
 
-// Multi-select of list rows; ordered mail keys in `?sel=`, one entry is no selection
+// Multi-select of list rows; ordered keys in `?sel=`, one entry is no selection.
+// A mail is keyed by mailbox and uid, a conversation by its own key.
 const selectedMailKeys = computed(() => selectionFromQuery(route.query))
+const selectedConversationKeys = computed(() => conversationSelectionFromQuery(route.query))
 
-function setSelectedMails(keys: string[]) {
-  updateQuery({ sel: selectionToQuery(keys) })
+function setSelectedKeys(keys: string[]) {
+  updateQuery({ sel: showThreads.value ? conversationSelectionToQuery(keys) : selectionToQuery(keys) })
 }
 
 // A filter, folder, account or view change starts the visible list over
@@ -389,6 +392,12 @@ const conversationState = ref({ offset: 0, done: false })
 
 // The conversations list with the unread filter's drop-outs kept visible
 const visibleConversationList = computed(() => visibleConversations(conversations.value, retainedConversations.value, criteria.value))
+
+// The selected conversations among the ones on screen; a selection entry the
+// current list does not know about is ignored
+const selectedConversations = computed(() => visibleConversationList.value.filter(conversation =>
+  selectedConversationKeys.value.includes(conversation.key)
+))
 
 // The open conversation once the loaded list or the retention state can supply it
 const selectedConversationKey = computed(() => {
@@ -640,6 +649,9 @@ const selectionKey = computed(() => selection.value && `${selection.value.mailbo
 // The list as it should render: fetched mails plus the ones the unread filter dropped
 const visibleList = computed(() => visibleMails(mails.value, retained.value, criteria.value))
 
+// The selected mails among the ones on screen
+const selectedMails = computed(() => visibleList.value.filter(mail => selectedMailKeys.value.includes(mailSelectionKey(mail))))
+
 // A linked mail may not be in the current list, e.g. outside the loaded pages
 const { data: linkedMail } = await useAsyncData(
   () => `mail-linked:${service.value}:${selectionKey.value ?? ''}`,
@@ -664,25 +676,58 @@ const isMailPanelOpen = computed({
   }
 })
 
-const setUnread = (uid: number, unread: boolean) => {
-  mails.value = mails.value.map(item => item.uid === uid ? { ...item, unread } : item)
+/**
+ * Applies a seen flag to several mails optimistically: the list changes first,
+ * then one batch request per mailbox (at most 200 uids each). Only the group a
+ * request rejected is rolled back. Returns false when anything failed.
+ */
+async function setSeenMany(targets: MailSummary[], seen: boolean): Promise<boolean> {
+  if (!targets.length) {
+    return true
+  }
+
+  const affected = new Set(targets.map(mailKey))
+  const previous = new Map(targets.map(mail => [mailKey(mail), mail.unread]))
+  mails.value = mails.value.map(item => affected.has(mailKey(item)) ? { ...item, unread: !seen } : item)
+
+  const groups = mailBatchGroups(targets)
+  const results = await Promise.allSettled(groups.map(group => $fetch('/api/mail/messages/seen', {
+    method: 'POST',
+    query: { service: service.value, mailbox: group.mailbox },
+    body: { uids: group.uids, seen }
+  })))
+
+  const failedKeys = new Set<string>()
+  groups.forEach((group, index) => {
+    if (results[index]?.status !== 'rejected') {
+      return
+    }
+    for (const mail of targets) {
+      if (mail.mailbox === group.mailbox && group.uids.includes(mail.uid)) {
+        failedKeys.add(mailKey(mail))
+      }
+    }
+  })
+
+  if (failedKeys.size) {
+    mails.value = mails.value.map(item => failedKeys.has(mailKey(item))
+      ? { ...item, unread: previous.get(mailKey(item)) ?? item.unread }
+      : item)
+    toast.add({ title: 'Could not update some messages', color: 'error', icon: 'i-lucide-circle-alert' })
+  }
+
+  // Update unread counts in the sidebar
+  refreshNuxtData('mail-folders')
+  if (showThreads.value) {
+    reloadConversationsFromEvents()
+  }
+
+  return failedKeys.size === 0
 }
 
 // Optimistic: update the list first, roll back if the server rejects it
 async function setSeen(mail: MailSummary, seen: boolean) {
-  setUnread(mail.uid, !seen)
-  try {
-    await $fetch(`/api/mail/messages/${mail.uid}`, {
-      method: 'PATCH',
-      query: { service: service.value, mailbox: mail.mailbox },
-      body: { seen }
-    })
-    // Update unread counts in the sidebar
-    refreshNuxtData('mail-folders')
-  } catch {
-    setUnread(mail.uid, seen)
-    toast.add({ title: 'Could not update message', color: 'error', icon: 'i-lucide-circle-alert' })
-  }
+  await setSeenMany([mail], seen)
 }
 
 watch(() => selectedMail.value && mailKey(selectedMail.value), (key) => {
@@ -730,9 +775,6 @@ function toggleUnread(mail: MailSummary) {
   }
 
   setSeen(mail, mail.unread)
-  if (showThreads.value) {
-    reloadConversationsFromEvents()
-  }
 }
 
 // --- Composing ---
@@ -1032,6 +1074,267 @@ async function deleteMail(mail: MailSummary, confirmed = false): Promise<void> {
 }
 
 /**
+ * Puts back the trashed mails of a batch undo. Where the provider reported no
+ * trash uid the mail cannot be addressed, so the list is reloaded instead.
+ */
+async function undoDeleteBatch(
+  undo: MailDeleteUndo,
+  trashed: { mailbox: string, trashMailbox: string, items: { uid: number, trashUid?: number }[] }[]
+): Promise<void> {
+  const replacements = new Map<string, number>()
+  const restoredKeys = new Set<string>()
+  let needsReload = false
+
+  for (const group of trashed) {
+    const movable = group.items.filter(item => item.trashUid)
+    if (movable.length !== group.items.length) {
+      needsReload = true
+    }
+    if (!movable.length) {
+      continue
+    }
+
+    try {
+      const result = await $fetch<MailMoveBatchResult>('/api/mail/messages/move', {
+        method: 'POST',
+        query: { service: service.value, mailbox: group.trashMailbox },
+        body: { uids: movable.map(item => item.trashUid!), target: group.mailbox }
+      })
+
+      for (const item of result.items) {
+        const original = movable.find(candidate => candidate.trashUid === item.uid)
+        if (!original) {
+          continue
+        }
+        const key = `${group.mailbox}:${original.uid}`
+        restoredKeys.add(key)
+        if (item.newUid) {
+          replacements.set(key, item.newUid)
+        }
+      }
+    } catch (error) {
+      needsReload = true
+      toast.add({ title: 'Could not undo', description: mailErrorMessage(error), color: 'error', icon: 'i-lucide-circle-alert' })
+    }
+  }
+
+  const entries = undo.entries.filter(entry => restoredKeys.has(`${entry.mail.mailbox}:${entry.mail.uid}`))
+  const state = restoreMailDelete(
+    { list: mails.value, retained: retained.value, conversations: conversations.value },
+    { entries },
+    (mail) => {
+      const uid = replacements.get(`${mail.mailbox}:${mail.uid}`)
+      return uid ? { ...mail, uid } : mail
+    }
+  )
+
+  mails.value = state.list
+  retained.value = state.retained
+  conversations.value = state.conversations
+
+  if (needsReload) {
+    reloadList()
+  }
+  refreshNuxtData('mail-folders')
+}
+
+/**
+ * Deletes several mails, optimistically: they leave the list (and the
+ * unread-retention state and the conversations) at once, the neighbour opens,
+ * and only then one batch request per mailbox is asked. A permanent delete is
+ * confirmed once for the whole selection; moving to the trash offers one undo
+ * for the whole batch. A rejected mailbox group is restored on its own.
+ */
+async function deleteMails(targets: MailSummary[], confirmed = false): Promise<void> {
+  const unique = [...new Map(targets.map(mail => [mailKey(mail), mail])).values()]
+  if (!unique.length) {
+    return
+  }
+
+  const permanent = unique.filter(isPermanentDelete)
+  if (permanent.length && !confirmed) {
+    const description = permanent.length === unique.length
+      ? `${unique.length === 1 ? 'This mail' : `These ${unique.length} mails`} will be removed permanently and cannot be restored.`
+      : `${permanent.length} of ${unique.length} mails will be removed permanently and cannot be restored.`
+    askConfirm('Delete forever?', description, 'Delete forever', () => void deleteMails(unique, true))
+    return
+  }
+
+  const deletedKeys = new Set(unique.map(mailKey))
+  const open = selectedMail.value
+  const next = open && deletedKeys.has(mailKey(open)) ? nextSelectionAfter(visibleList.value, [...deletedKeys]) : null
+
+  const state = applyMailDelete(
+    { list: mails.value, retained: retained.value, conversations: conversations.value },
+    unique
+  )
+
+  // The retention timers belong to the mails that just left
+  for (const mail of unique) {
+    const timer = retentionTimers.get(mailKey(mail))
+    if (timer) {
+      clearTimeout(timer)
+      retentionTimers.delete(mailKey(mail))
+    }
+  }
+
+  mails.value = state.list
+  retained.value = state.retained
+  conversations.value = state.conversations
+  if (open && deletedKeys.has(mailKey(open))) {
+    selectedMail.value = next
+  }
+  setSelectedKeys([])
+
+  const groups = mailBatchGroups(unique)
+  const results = await Promise.allSettled(groups.map(group => $fetch<MailDeleteBatchResult>('/api/mail/messages/delete', {
+    method: 'POST',
+    query: { service: service.value, mailbox: group.mailbox },
+    body: { uids: group.uids, permanent: confirmed }
+  })))
+
+  const failedKeys = new Set<string>()
+  const trashed: { mailbox: string, trashMailbox: string, items: { uid: number, trashUid?: number }[] }[] = []
+  let deletedCount = 0
+  let failure: unknown
+
+  groups.forEach((group, index) => {
+    const result = results[index]
+    if (!result || result.status === 'rejected') {
+      failure ??= result && result.status === 'rejected' ? result.reason : undefined
+      for (const mail of unique) {
+        if (mail.mailbox === group.mailbox && group.uids.includes(mail.uid)) {
+          failedKeys.add(mailKey(mail))
+        }
+      }
+      return
+    }
+
+    if (result.value.action === 'trashed') {
+      trashed.push({ mailbox: group.mailbox, trashMailbox: result.value.trashMailbox, items: result.value.items })
+    } else {
+      deletedCount += result.value.items.length
+    }
+  })
+
+  if (failedKeys.size) {
+    const restored = restoreMailDelete(
+      { list: mails.value, retained: retained.value, conversations: conversations.value },
+      { entries: state.undo.entries.filter(entry => failedKeys.has(mailKey(entry.mail))) }
+    )
+    mails.value = restored.list
+    retained.value = restored.retained
+    conversations.value = restored.conversations
+    if (open && failedKeys.has(mailKey(open))) {
+      selectedMail.value = open
+    }
+    setSelectedKeys([...failedKeys])
+
+    toast.add({
+      title: 'Could not delete some messages',
+      description: mailErrorMessage(failure),
+      color: 'error',
+      icon: 'i-lucide-circle-alert'
+    })
+  }
+
+  const trashedCount = trashed.reduce((sum, group) => sum + group.items.length, 0)
+  if (trashedCount || deletedCount) {
+    refreshNuxtData('mail-folders')
+  }
+
+  if (trashedCount && !deletedCount && !failedKeys.size) {
+    toast.add({
+      title: `${trashedCount} ${trashedCount === 1 ? 'mail' : 'mails'} moved to Trash`,
+      color: 'success',
+      icon: 'i-lucide-trash-2',
+      duration: 5000,
+      actions: [{ label: 'Undo', color: 'neutral', variant: 'link', onClick: () => void undoDeleteBatch(state.undo, trashed) }]
+    })
+  } else if (deletedCount && !trashedCount && !failedKeys.size) {
+    toast.add({
+      title: `${deletedCount} ${deletedCount === 1 ? 'mail' : 'mails'} deleted permanently`,
+      color: 'success',
+      icon: 'i-lucide-trash-2'
+    })
+  } else if (trashedCount || deletedCount) {
+    toast.add({
+      title: `${trashedCount + deletedCount} ${trashedCount + deletedCount === 1 ? 'mail' : 'mails'} removed`,
+      color: 'success',
+      icon: 'i-lucide-trash-2',
+      duration: 5000,
+      actions: trashedCount && !deletedCount
+        ? [{ label: 'Undo', color: 'neutral', variant: 'link', onClick: () => void undoDeleteBatch(state.undo, trashed) }]
+        : undefined
+    })
+  }
+}
+
+/** One of the selection bar's actions on the selected mails */
+async function batchSelectedMails(action: MailBatchAction): Promise<void> {
+  if (!selectedMails.value.length) {
+    return
+  }
+
+  if (action === 'delete') {
+    await deleteMails(selectedMails.value)
+    return
+  }
+
+  await setSeenMany(selectedMails.value, action === 'read')
+}
+
+/**
+ * The selection bar's actions on the selected conversations. Read state applies
+ * to every mail of those conversations; delete only to the single-mail ones, as
+ * the context menu does.
+ */
+async function batchSelectedConversations(action: MailBatchAction): Promise<void> {
+  const selected = selectedConversations.value
+  if (!selected.length) {
+    return
+  }
+
+  if (action === 'delete') {
+    const deletable = selected.filter(conversation => conversation.count === 1)
+    if (!deletable.length) {
+      return
+    }
+
+    const keys = new Set(deletable.map(conversation => conversation.key))
+    await deleteMails(deletable.map(conversation => conversation.latest))
+    if (conversationKey.value && keys.has(conversationKey.value)) {
+      closeConversation()
+    }
+    return
+  }
+
+  let mails: MailSummary[]
+  try {
+    const lists = await Promise.all(selectedConversationKeys.value.map(key =>
+      loadMailConversation(nuxtApp, requestFetch, service.value, key)
+    ))
+    mails = [...new Map(lists.flat().map(mail => [mailKey(mail), mail])).values()]
+  } catch (error) {
+    toast.add({ title: 'Could not load the selected conversations', description: mailErrorMessage(error), color: 'error', icon: 'i-lucide-circle-alert' })
+    return
+  }
+
+  const keys = new Set(selected.map(conversation => conversation.key))
+  const previous = new Map(selected.map(conversation => [conversation.key, conversation.unread]))
+  conversations.value = conversations.value.map(conversation =>
+    keys.has(conversation.key) ? { ...conversation, unread: action !== 'read' } : conversation
+  )
+
+  const applied = await setSeenMany(mails, action === 'read')
+  if (!applied) {
+    conversations.value = conversations.value.map(conversation =>
+      previous.has(conversation.key) ? { ...conversation, unread: previous.get(conversation.key)! } : conversation
+    )
+  }
+}
+
+/**
  * # / Delete remove the selected mail, in the list or the reader. A whole
  * conversation is out of scope: with no single mail open there is nothing
  * selected to delete. Backspace does the same; Nuxt UI's defineShortcuts
@@ -1279,6 +1582,7 @@ const isMobile = breakpoints.smaller('lg')
         ref="conversationListRef"
         :conversations="visibleConversationList"
         :selected-key="conversationKey"
+        :selection="selectedConversationKeys"
         :service="service"
         :own-address="ownAddress"
         :loading-more="conversationsLoading"
@@ -1290,6 +1594,8 @@ const isMobile = breakpoints.smaller('lg')
         @compose="(mode, mail) => openCompose(mode, mail)"
         @toggle-unread="toggleUnread"
         @delete="deleteMail($event)"
+        @batch="batchSelectedConversations"
+        @update-selection="setSelectedKeys"
       />
     </template>
     <template v-else>
@@ -1324,11 +1630,12 @@ const isMobile = breakpoints.smaller('lg')
         :done="pageState.done"
         :is-permanent="isPermanentDelete"
         @load-more="loadMore"
-        @update-selection="setSelectedMails"
+        @update-selection="setSelectedKeys"
         @prefetch="prefetchMessage"
         @compose="(mode, mail) => openCompose(mode, mail)"
         @toggle-unread="toggleUnread"
         @delete="deleteMail($event)"
+        @batch="batchSelectedMails"
       />
     </template>
   </UDashboardPanel>

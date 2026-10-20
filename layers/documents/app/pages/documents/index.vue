@@ -4,6 +4,8 @@ import type { DropdownMenuItem } from '@nuxt/ui'
 import type { DocumentsBulkAction, DocumentsDocument, DocumentsFilters, DocumentsPage, DocumentsSavedView } from '#layers/documents/shared/types/documents'
 import { applyBulkAction } from '#layers/documents/shared/bulk-edit'
 import { DEFAULT_PAGE_SIZE, DEFAULT_SORT, documentsQueryFromUrl, documentsQueryToUrl, documentsViewFromUrl, documentsViewToUrl, hasActiveFilters } from '#layers/documents/shared/documents-query'
+import { documentsItemContext } from '#layers/documents/app/utils/documents-item-context'
+import { documentsSelectionFromQuery, documentsSelectionToQuery, rangeDocumentSelection, toggleDocumentSelection } from '#layers/documents/app/utils/documents-selection'
 
 useSeoMeta({ title: 'Documents' })
 
@@ -88,17 +90,42 @@ const filters = computed({
 
 // --- Selection ------------------------------------------------------------
 
-const selected = ref<number[]>([])
+// Ordered document ids in `?sel=`, so the selection survives a reload and can be shared
+const selected = computed({
+  get: () => documentsSelectionFromQuery(route.query),
+  set: (ids: number[]) => updateQuery({ sel: documentsSelectionToQuery(ids) })
+})
 
-function select(document: DocumentsDocument, mode: 'replace' | 'toggle') {
-  if (mode === 'toggle') {
-    selected.value = selected.value.includes(document.id)
-      ? selected.value.filter(id => id !== document.id)
-      : [...selected.value, document.id]
+/** The document a shift-click range grows from; UI state, the selection itself is URL state */
+const selectionAnchor = ref<number | undefined>()
+
+function select(document: DocumentsDocument, mode: 'replace' | 'toggle' | 'range') {
+  if (mode === 'range') {
+    selected.value = rangeDocumentSelection(documents.value.map(item => item.id), selectionAnchor.value, document.id)
+  } else if (mode === 'toggle') {
+    selected.value = toggleDocumentSelection(selected.value, document.id)
   } else {
     selected.value = [document.id]
   }
+
+  selectionAnchor.value = document.id
 }
+
+// A changed account starts a fresh list, so a selection of the old one is dropped
+watch(service, () => {
+  if (selected.value.length) {
+    selected.value = []
+  }
+})
+
+/** The selected documents as item contexts, for the actions other layers registered */
+const selectedContexts = computed(() => documents.value
+  .filter(document => selected.value.includes(document.id))
+  .map(document => documentsItemContext(document, service.value, {
+    tag: id => documentsName(library.tags.data.value, id),
+    correspondent: id => documentsName(library.correspondents.data.value, id),
+    documentType: id => documentsName(library.documentTypes.data.value, id)
+  })))
 
 // --- Optimistic bulk edit -------------------------------------------------
 
@@ -427,6 +454,14 @@ const savedViewItems = computed<DropdownMenuItem[]>(() => [
           size="xs"
         />
       </UDropdownMenu>
+
+      <ItemActionsMenu
+        domain="documents"
+        :service="service"
+        :contexts="selectedContexts"
+        icon="i-lucide-workflow"
+        size="xs"
+      />
 
       <UButton
         label="Download zip"

@@ -5,7 +5,8 @@ import type { MailSummary } from '#layers/mail/shared/types/mail'
 import { highlightToHtml } from '#layers/mail/shared/mail-highlight'
 import { itemActionMenuItems } from '#layers/core/app/utils/item-actions'
 import { adjacentListKey, neighbourListKeys } from '#layers/mail/app/utils/mail-list-navigation'
-import { mailContextMenuItems, mailItemContext } from '#layers/mail/app/utils/mail-context-menu'
+import { mailBatchContextMenuItems, mailContextMenuItems, mailItemContext } from '#layers/mail/app/utils/mail-context-menu'
+import type { MailBatchAction } from '#layers/mail/app/utils/mail-batch'
 import { contextTargets, isMailSelected, mailSelectionKey, rangeSelection, toggleSelection } from '#layers/mail/app/utils/mail-selection'
 import { formatMailListDate } from '#layers/mail/app/utils/mail-date'
 
@@ -32,6 +33,8 @@ const emits = defineEmits<{
   compose: [mode: 'reply' | 'replyAll' | 'forward', mail: MailSummary]
   toggleUnread: [mail: MailSummary]
   delete: [mail: MailSummary]
+  /** One of the bulk actions for the whole selection */
+  batch: [action: MailBatchAction]
   /** Warm the mail's body before the reader opens it */
   prefetch: [mail: MailSummary]
   /** The page writes the new selection to the URL */
@@ -157,10 +160,20 @@ function contextItems(mail: MailSummary): ContextMenuItem[][] {
     .filter((item): item is MailSummary => !!item)
 
   if (targetMails.length > 1) {
+    const groups = mailBatchContextMenuItems(
+      `${targetMails.length} mails`,
+      { permanent: targetMails.every(mail => props.isPermanent?.(mail) ?? false) },
+      {
+        markRead: () => emits('batch', 'read'),
+        markUnread: () => emits('batch', 'unread'),
+        delete: () => emits('batch', 'delete')
+      }
+    )
+
     return itemActionMenuItems(
       'mail',
       targetMails.map(target => mailItemContext(target, props.service)),
-      [[{ label: `${targetMails.length} mails`, type: 'label' }]]
+      groups
     )
   }
 
@@ -187,6 +200,30 @@ function contextItems(mail: MailSummary): ContextMenuItem[][] {
     >
       <span class="text-sm font-medium">{{ selection.length }} selected</span>
       <span class="text-dimmed">·</span>
+      <UButton
+        label="Read"
+        icon="i-lucide-mail-open"
+        color="neutral"
+        variant="ghost"
+        size="xs"
+        @click="emits('batch', 'read')"
+      />
+      <UButton
+        label="Unread"
+        icon="i-lucide-mail"
+        color="neutral"
+        variant="ghost"
+        size="xs"
+        @click="emits('batch', 'unread')"
+      />
+      <UButton
+        label="Delete"
+        icon="i-lucide-trash-2"
+        color="neutral"
+        variant="ghost"
+        size="xs"
+        @click="emits('batch', 'delete')"
+      />
       <UButton
         label="Clear"
         color="neutral"

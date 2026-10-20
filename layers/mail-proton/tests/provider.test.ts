@@ -9,7 +9,12 @@ function fakeClient() {
   return {
     connect: vi.fn(async () => {}),
     logout: vi.fn(async () => {}),
-    mailboxCreate: vi.fn(async () => ({ created: true }))
+    getMailboxLock: vi.fn(async () => ({ release: vi.fn() })),
+    mailboxCreate: vi.fn(async () => ({ created: true })),
+    messageFlagsAdd: vi.fn(async () => {}),
+    messageFlagsRemove: vi.fn(async () => {}),
+    messageMove: vi.fn(async () => ({ uidMap: new Map<number, number>() })),
+    messageDelete: vi.fn(async () => {})
   }
 }
 
@@ -55,6 +60,48 @@ describe('createMailbox', () => {
     state.client.mailboxCreate.mockRejectedValueOnce(Object.assign(new Error('Permission denied'), { response: 'NO Permission denied' }))
 
     await expect(createProtonMailProvider(values()).createMailbox!('Labels/Invoices')).rejects.toThrow('Permission denied')
+  })
+})
+
+describe('batch mail commands', () => {
+  it('sets the seen flag for every uid with one command and one connection', async () => {
+    const provider = createProtonMailProvider(values())
+
+    await provider.setSeenMany('INBOX', [4, 7, 9], true)
+
+    expect(state.client.connect).toHaveBeenCalledOnce()
+    expect(state.client.messageFlagsAdd).toHaveBeenCalledOnce()
+    expect(state.client.messageFlagsAdd).toHaveBeenCalledWith('4,7,9', ['\\Seen'], { uid: true })
+  })
+
+  it('delegates the single setSeen call to the batch command', async () => {
+    const provider = createProtonMailProvider(values())
+
+    await provider.setSeen('INBOX', 42, false)
+
+    expect(state.client.messageFlagsRemove).toHaveBeenCalledOnce()
+    expect(state.client.messageFlagsRemove).toHaveBeenCalledWith('42', ['\\Seen'], { uid: true })
+  })
+
+  it('moves every uid with one command and returns the uid map', async () => {
+    const uidMap = new Map([[7, 100], [9, 101]])
+    state.client.messageMove.mockResolvedValueOnce({ uidMap })
+    const provider = createProtonMailProvider(values())
+
+    await expect(provider.moveMessages('INBOX', [7, 9], 'Archive')).resolves.toEqual(uidMap)
+
+    expect(state.client.messageMove).toHaveBeenCalledOnce()
+    expect(state.client.messageMove).toHaveBeenCalledWith('7,9', 'Archive', { uid: true })
+  })
+
+  it('deletes every uid with one command and one connection', async () => {
+    const provider = createProtonMailProvider(values())
+
+    await provider.deleteMessages('Trash', [4, 7])
+
+    expect(state.client.connect).toHaveBeenCalledOnce()
+    expect(state.client.messageDelete).toHaveBeenCalledOnce()
+    expect(state.client.messageDelete).toHaveBeenCalledWith('4,7', { uid: true })
   })
 })
 

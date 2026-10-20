@@ -31,6 +31,14 @@ export const facetsQuerySchema = messagesQuerySchema.omit({ limit: true, offset:
 /** The provider listing cap; loading more than this needs the search index */
 export const MAIL_PROVIDER_MAX_LIMIT = 200
 
+/** One batch request handles at most this many uids of one mailbox */
+export const MAIL_BATCH_MAX = 200
+
+/** The uids of one bulk action; the mailbox comes from the query */
+export const mailBatchBodySchema = z.object({
+  uids: z.array(z.coerce.number().int().positive()).min(1).max(MAIL_BATCH_MAX)
+})
+
 export function getUidParam(event: RequestEvent): number {
   const result = z.coerce.number().int().positive().safeParse(getRouterParam(event, 'uid'))
 

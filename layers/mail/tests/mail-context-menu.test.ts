@@ -1,12 +1,20 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ContextMenuItem } from '@nuxt/ui'
-import { mailContextMenuItems, mailItemContext, type MailContextMenuHandlers } from '../app/utils/mail-context-menu'
+import { mailBatchContextMenuItems, mailContextMenuItems, mailItemContext, type MailBatchContextMenuHandlers, type MailContextMenuHandlers } from '../app/utils/mail-context-menu'
 
 function handlers(): MailContextMenuHandlers {
   return {
     open: vi.fn(),
     compose: vi.fn(),
     toggleUnread: vi.fn(),
+    delete: vi.fn()
+  }
+}
+
+function batchHandlers(): MailBatchContextMenuHandlers {
+  return {
+    markRead: vi.fn(),
+    markUnread: vi.fn(),
     delete: vi.fn()
   }
 }
@@ -90,6 +98,50 @@ describe('mailContextMenuItems', () => {
     expect(on.compose).toHaveBeenCalledWith('replyAll')
     expect(on.compose).toHaveBeenCalledWith('forward')
     expect(on.toggleUnread).toHaveBeenCalledOnce()
+    expect(on.delete).toHaveBeenCalledOnce()
+  })
+})
+
+describe('mailBatchContextMenuItems', () => {
+  it('labels the count and offers both read states and delete', () => {
+    const groups = mailBatchContextMenuItems('3 mails', { permanent: false }, batchHandlers())
+
+    expect(labels(groups)).toEqual([
+      ['3 mails'],
+      ['Mark as read', 'Mark as unread'],
+      ['Delete']
+    ])
+    expect(groups[0]![0]!.type).toBe('label')
+  })
+
+  it('names a permanent delete and marks it as an error', () => {
+    const groups = mailBatchContextMenuItems('2 mails', { permanent: true }, batchHandlers())
+
+    expect(groups[2]![0]!.label).toBe('Delete forever')
+    expect(groups[2]![0]!.color).toBe('error')
+  })
+
+  it('leaves the delete group out when nothing can be deleted', () => {
+    const groups = mailBatchContextMenuItems('2 conversations', { permanent: false, deletable: false }, batchHandlers())
+
+    expect(labels(groups)).toEqual([
+      ['2 conversations'],
+      ['Mark as read', 'Mark as unread']
+    ])
+  })
+
+  it('calls the matching handler for each entry', () => {
+    const on = batchHandlers()
+    const groups = mailBatchContextMenuItems('2 mails', { permanent: false }, on)
+
+    for (const group of groups) {
+      for (const item of group) {
+        item.onSelect?.(new Event('select'))
+      }
+    }
+
+    expect(on.markRead).toHaveBeenCalledOnce()
+    expect(on.markUnread).toHaveBeenCalledOnce()
     expect(on.delete).toHaveBeenCalledOnce()
   })
 })

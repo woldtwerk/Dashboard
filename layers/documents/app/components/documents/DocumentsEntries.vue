@@ -15,7 +15,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   open: [document: DocumentsDocument]
-  select: [document: DocumentsDocument, mode: 'replace' | 'toggle']
+  select: [document: DocumentsDocument, mode: 'replace' | 'toggle' | 'range']
   prefetch: [document: DocumentsDocument]
 }>()
 
@@ -27,8 +27,18 @@ function isSelected(id: number): boolean {
   return props.selected.includes(id)
 }
 
-function onSelect(document: DocumentsDocument, event: MouseEvent) {
-  emit('select', document, event.shiftKey || event.metaKey || event.ctrlKey ? 'toggle' : 'replace')
+function onSelect(document: DocumentsDocument, event: MouseEvent, forced?: 'replace' | 'toggle' | 'range') {
+  const mode = event.shiftKey ? 'range' : forced ?? (event.metaKey || event.ctrlKey ? 'toggle' : 'replace')
+  emit('select', document, mode)
+}
+
+/** A modifier click selects, a plain click opens as before */
+function onRowClick(document: DocumentsDocument, event: MouseEvent) {
+  if (event.shiftKey || event.metaKey || event.ctrlKey) {
+    onSelect(document, event)
+    return
+  }
+  emit('open', document)
 }
 </script>
 
@@ -52,7 +62,7 @@ function onSelect(document: DocumentsDocument, event: MouseEvent) {
       type="button"
       class="group flex flex-col overflow-hidden rounded-lg border text-left transition"
       :class="isSelected(document.id) ? 'border-primary ring-2 ring-primary' : 'border-default hover:border-primary/50'"
-      @click="emit('open', document)"
+      @click="onRowClick(document, $event)"
       @mouseenter="emit('prefetch', document)"
     >
       <div class="relative flex aspect-[3/4] items-center justify-center overflow-hidden bg-elevated/50">
@@ -65,7 +75,7 @@ function onSelect(document: DocumentsDocument, event: MouseEvent) {
         <UCheckbox
           class="absolute end-2 top-2"
           :model-value="isSelected(document.id)"
-          @click.stop="onSelect(document, $event)"
+          @click.stop="onSelect(document, $event, 'toggle')"
         />
       </div>
       <div class="flex flex-col gap-1 p-3">
@@ -121,13 +131,13 @@ function onSelect(document: DocumentsDocument, event: MouseEvent) {
           :key="document.id"
           class="cursor-pointer border-b border-default/60 hover:bg-elevated/50"
           :class="isSelected(document.id) ? 'bg-primary/5' : ''"
-          @click="emit('open', document)"
+          @click="onRowClick(document, $event)"
           @mouseenter="emit('prefetch', document)"
         >
           <td class="p-2" @click.stop>
             <UCheckbox
               :model-value="isSelected(document.id)"
-              @click="onSelect(document, $event)"
+              @click="onSelect(document, $event, 'toggle')"
             />
           </td>
           <td class="p-2">

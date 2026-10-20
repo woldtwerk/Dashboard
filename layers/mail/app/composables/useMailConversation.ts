@@ -26,7 +26,7 @@ const cacheKey = (service: string, key: string) => `${service}:${key}`
  * `fetcher` is the caller's request-scoped fetch, so a server render forwards the
  * session cookie the same way `useFetch` does.
  */
-function loadConversation(nuxtApp: NuxtApp, fetcher: Fetcher, service: string, key: string): Promise<MailSummary[]> {
+export function loadMailConversation(nuxtApp: NuxtApp, fetcher: Fetcher, service: string, key: string): Promise<MailSummary[]> {
   const cache = conversationCache(nuxtApp)
   const id = cacheKey(service, key)
   let request = cache.get(id)
@@ -40,7 +40,7 @@ function loadConversation(nuxtApp: NuxtApp, fetcher: Fetcher, service: string, k
 
 /** Warm a conversation the panel is about to open; the panel reuses the very same request */
 export function prefetchMailConversation(nuxtApp: NuxtApp, fetcher: Fetcher, service: string, key: string) {
-  loadConversation(nuxtApp, fetcher, service, key).catch(() => {})
+  loadMailConversation(nuxtApp, fetcher, service, key).catch(() => {})
 }
 
 /**
@@ -55,7 +55,7 @@ export function useMailConversation(conversationKey: MaybeRefOrGetter<string | u
     () => `mail-conversation:${toValue(service)}:${toValue(conversationKey) ?? ''}`,
     async () => {
       const key = toValue(conversationKey)
-      return key ? loadConversation(nuxtApp, requestFetch, toValue(service), key) : []
+      return key ? loadMailConversation(nuxtApp, requestFetch, toValue(service), key) : []
     },
     { default: () => [], lazy: true }
   )

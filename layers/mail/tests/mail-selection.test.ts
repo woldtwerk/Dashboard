@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   contextTargets,
+  conversationSelectionFromQuery,
+  conversationSelectionToQuery,
   isMailSelected,
   mailSelectionKey,
   MAIL_SELECTION_MAX,
@@ -97,5 +99,32 @@ describe('mailSelectionKey', () => {
     expect(mailSelectionKey(mail)).toBe('Archive/2024:12')
     expect(isMailSelected(['Archive/2024:12'], mail)).toBe(true)
     expect(isMailSelected(['INBOX:12'], mail)).toBe(false)
+  })
+})
+
+describe('conversationSelectionToQuery', () => {
+  it('encodes every key so its own separators survive', () => {
+    const keys = ['subj:alice@example.com:hello, world', 'list:news.example']
+    const value = conversationSelectionToQuery(keys)!
+
+    expect(conversationSelectionFromQuery({ sel: value })).toEqual(keys)
+  })
+
+  it('is null for an empty selection and caps the rest', () => {
+    expect(conversationSelectionToQuery([])).toBeNull()
+
+    const keys = Array.from({ length: MAIL_SELECTION_MAX + 10 }, (_, index) => `id:${index + 1}`)
+    expect(conversationSelectionFromQuery({ sel: conversationSelectionToQuery(keys) })).toHaveLength(MAIL_SELECTION_MAX)
+  })
+})
+
+describe('conversationSelectionFromQuery', () => {
+  it('drops malformed parts and duplicates', () => {
+    expect(conversationSelectionFromQuery({ sel: 'id:a,%2C,%E0%A4%A,id:a,id:b' })).toEqual(['id:a', ',', 'id:b'])
+  })
+
+  it('reads several sel parameters and is empty without one', () => {
+    expect(conversationSelectionFromQuery({ sel: ['id:a', 'id:b'] })).toEqual(['id:a', 'id:b'])
+    expect(conversationSelectionFromQuery({})).toEqual([])
   })
 })

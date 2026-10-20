@@ -132,6 +132,55 @@ export function selectionFromQuery(query: { sel?: unknown }): MailSelectionKey[]
 }
 
 /**
+ * The URL form of a conversation selection: the keys are comma separated and
+ * URI-encoded, so a key holding a separator of its own survives. `null` means
+ * the key is removed from the query.
+ */
+export function conversationSelectionToQuery(selection: MailSelectionKey[]): string | null {
+  const capped = selection.slice(0, MAIL_SELECTION_MAX)
+  if (!capped.length) {
+    return null
+  }
+
+  return capped.map(key => encodeURIComponent(key)).join(',')
+}
+
+/** The conversation selection from the URL; malformed parts are dropped and the cap applies */
+export function conversationSelectionFromQuery(query: { sel?: unknown }): MailSelectionKey[] {
+  const values = Array.isArray(query.sel)
+    ? query.sel.filter((value): value is string => typeof value === 'string')
+    : typeof query.sel === 'string' ? [query.sel] : []
+  const selection: MailSelectionKey[] = []
+  const seen = new Set<MailSelectionKey>()
+
+  for (const value of values) {
+    for (const part of value.split(',')) {
+      if (!part) {
+        continue
+      }
+
+      let key: string
+      try {
+        key = decodeURIComponent(part)
+      } catch {
+        continue
+      }
+      if (!key || seen.has(key)) {
+        continue
+      }
+
+      seen.add(key)
+      selection.push(key)
+      if (selection.length >= MAIL_SELECTION_MAX) {
+        return selection
+      }
+    }
+  }
+
+  return selection
+}
+
+/**
  * What a context menu acts on: the whole selection when the right-clicked mail is
  * part of it, otherwise just that mail.
  */

@@ -9,8 +9,12 @@ function provider(overrides: Partial<MailProvider> = {}): MailProvider {
     listMessages: vi.fn(),
     getMessage: vi.fn(),
     setSeen: vi.fn(),
+    setSeenMany: vi.fn(),
     setFlagged: vi.fn(),
     moveMessage: vi.fn(),
+    moveMessages: vi.fn(),
+    deleteMessage: vi.fn(),
+    deleteMessages: vi.fn(),
     listMessageStates: vi.fn(),
     getMessages: vi.fn(),
     ...overrides

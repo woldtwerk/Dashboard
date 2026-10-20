@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MailSummary } from '../shared/types/mail'
-import { nextSelection, removeFromList } from '../app/utils/mail-delete'
+import { nextSelection, nextSelectionAfter, removeFromList } from '../app/utils/mail-delete'
 import { mailKey } from '../app/utils/mail'
 
 const mail = (uid: number, mailbox = 'INBOX'): MailSummary => ({
@@ -36,6 +36,26 @@ describe('nextSelection', () => {
 
   it('tells mailboxes apart', () => {
     expect(nextSelection([mail(1, 'Trash')], mailKey(mail(1)))).toBeNull()
+  })
+})
+
+describe('nextSelectionAfter', () => {
+  const list = [mail(5), mail(4), mail(3), mail(2), mail(1)]
+
+  it('opens the first remaining mail after the deleted ones', () => {
+    expect(nextSelectionAfter(list, [mailKey(mail(4)), mailKey(mail(3))])).toEqual(mail(2))
+  })
+
+  it('falls back to the mail before them when the batch was last', () => {
+    expect(nextSelectionAfter(list, [mailKey(mail(2)), mailKey(mail(1))])).toEqual(mail(3))
+  })
+
+  it('returns null when every mail went', () => {
+    expect(nextSelectionAfter([mail(1)], [mailKey(mail(1))])).toBeNull()
+  })
+
+  it('returns null when none of the keys is in the list', () => {
+    expect(nextSelectionAfter(list, [mailKey(mail(9))])).toBeNull()
   })
 })
 

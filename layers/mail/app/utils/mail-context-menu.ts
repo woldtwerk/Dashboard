@@ -73,6 +73,47 @@ export function mailContextMenuItems(
   return groups
 }
 
+/** What several targeted mails or conversations do when their menu is used */
+export interface MailBatchContextMenuHandlers {
+  markRead: () => void
+  markUnread: () => void
+  delete: () => void
+}
+
+/**
+ * The domain owned groups of a menu that acts on several targets: the label says
+ * how many, then both read states, then — where it applies — delete.
+ */
+export function mailBatchContextMenuItems(
+  label: string,
+  options: { permanent: boolean, deletable?: boolean },
+  handlers: MailBatchContextMenuHandlers
+): ContextMenuItem[][] {
+  const groups: ContextMenuItem[][] = [
+    [{ label, type: 'label' }],
+    [{
+      label: 'Mark as read',
+      icon: 'i-lucide-mail-open',
+      onSelect: () => handlers.markRead()
+    }, {
+      label: 'Mark as unread',
+      icon: 'i-lucide-mail',
+      onSelect: () => handlers.markUnread()
+    }]
+  ]
+
+  if (options.deletable !== false) {
+    groups.push([{
+      label: options.permanent ? 'Delete forever' : 'Delete',
+      icon: 'i-lucide-trash-2',
+      ...(options.permanent ? { color: 'error' as const } : {}),
+      onSelect: () => handlers.delete()
+    }])
+  }
+
+  return groups
+}
+
 /** What other layers' item actions may read from a list row */
 export function mailItemContext(mail: MailSummary, service: string): ItemActionContext {
   return {

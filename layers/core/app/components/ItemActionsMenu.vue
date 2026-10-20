@@ -12,20 +12,24 @@ const props = defineProps<{
   domain: string
   service: string
   /** The item's entity key, passed on to the actions as `ref` */
-  entityRef: string
-  item: Record<string, unknown>
+  entityRef?: string
+  item?: Record<string, unknown>
+  /** Several targeted items, e.g. a selection; takes precedence over the single item */
+  contexts?: ItemActionContext[]
   /** Domain owned entries, shown before the registered actions */
   items?: DropdownMenuItem[][]
   icon?: string
   size?: 'xs' | 'sm' | 'md'
 }>()
 
-const context = computed<ItemActionContext>(() => ({
-  domain: props.domain,
-  service: props.service,
-  ref: props.entityRef,
-  item: props.item
-}))
+const context = computed<ItemActionContext[]>(() => props.contexts?.length
+  ? props.contexts
+  : [{
+      domain: props.domain,
+      service: props.service,
+      ref: props.entityRef ?? '',
+      item: props.item ?? {}
+    }])
 
 const menuItems = computed(() => itemActionMenuItems(props.domain, context.value, props.items ?? []))
 </script>

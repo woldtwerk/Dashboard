@@ -10,6 +10,8 @@ export interface MailProvider {
   listMessages(mailbox: string, options: { limit: number, offset?: number, search?: MailSearch }): Promise<MailSummary[]>
   getMessage(mailbox: string, uid: number): Promise<MailMessage | null>
   setSeen(mailbox: string, uid: number, seen: boolean): Promise<void>
+  /** Sets the seen flag on several messages with one provider command */
+  setSeenMany(mailbox: string, uids: number[], seen: boolean): Promise<void>
   setFlagged(mailbox: string, uid: number, flagged: boolean): Promise<void>
   /**
    * Moves one message to another mailbox; the target must already exist. The
@@ -17,8 +19,16 @@ export interface MailProvider {
    * (IMAP UIDPLUS); without it the caller can only announce the move.
    */
   moveMessage(mailbox: string, uid: number, target: string): Promise<{ uid?: number }>
+  /**
+   * Moves several messages in one command. The map is old uid → uid in the
+   * target, holding only the uids the server reported (IMAP UIDPLUS); without an
+   * entry the caller can only announce the move.
+   */
+  moveMessages(mailbox: string, uids: number[], target: string): Promise<Map<number, number>>
   /** Marks one message `\Deleted` and expunges it, without touching the others */
   deleteMessage(mailbox: string, uid: number): Promise<void>
+  /** Marks several messages `\Deleted` and expunges them with one command */
+  deleteMessages(mailbox: string, uids: number[]): Promise<void>
   /**
    * Files a copy of one message under one label. Proton keeps labels as IMAP
    * folders under `Labels/`, which repeat mail stored in a real folder, so this is
