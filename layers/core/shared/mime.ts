@@ -10,6 +10,7 @@ export const MIME_TYPES_BY_EXTENSION: Readonly<Record<string, string>> = {
   csv: 'text/csv',
   doc: 'application/msword',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  eml: 'message/rfc822',
   gif: 'image/gif',
   heic: 'image/heic',
   heif: 'image/heif',

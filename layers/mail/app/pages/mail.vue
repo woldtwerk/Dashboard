@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { breakpointsTailwind, refDebounced, useDebounceFn, useDocumentVisibility, useIntervalFn } from '@vueuse/core'
-import type { LocationQuery } from 'vue-router'
+import type { LocationQueryRaw } from 'vue-router'
 import type { DropdownMenuItem } from '@nuxt/ui'
-import type { MailConversation, MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
+import type { MailConversation, MailAttachment, MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
 import { buildReply, emptyOutgoingMail, type OutgoingMail } from '#layers/mail/shared/mail-compose'
 import { trashTarget } from '#layers/mail/shared/mail-delete'
 import { labelFromMailbox } from '#layers/mail/shared/mail-labels'
 import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
 import type { RetainedConversations, RetainedMail, RetainedMails } from '#layers/mail/app/utils/mail-retention'
 import type { MailBatchAction, MailDeleteBatchResult, MailDeleteUndo, MailMoveBatchResult } from '#layers/mail/app/utils/mail-batch'
-import { mailDoneTarget, type MailShortcutState } from '#layers/mail/app/utils/mail-shortcuts'
+import { mailAttachmentTarget, mailDoneTarget, MAIL_SHORTCUT_KEYS, type MailShortcutState } from '#layers/mail/app/utils/mail-shortcuts'
 import { applyLabel, applyLabelToConversations, doneToggleState, restoreLabels } from '#layers/mail/app/utils/mail-labels'
+import { mailEntityRef, mailAttachmentByPart, visibleMailAttachments } from '#layers/mail/shared/mail-attachments'
+import { mailAttachmentPreviewFromQuery, mailAttachmentPreviewToQuery } from '#layers/mail/app/utils/mail-attachments'
+import { attachmentActionsForKey, type AttachmentActionContext } from '#layers/core/app/utils/attachment-actions'
 import type { SetupState } from '#layers/core/shared/types/setup'
 import type { MailListView, MailSettings } from '#layers/mail/shared/types/settings'
 
@@ -41,12 +44,12 @@ const { data: folders } = await useMailFolders()
 // Account, folder, search and filters live in the URL, so the sidebar and links can drive them
 const queryString = (key: string) => typeof route.query[key] === 'string' ? route.query[key] : undefined
 
-function updateQuery(patch: LocationQuery) {
+function updateQuery(patch: LocationQueryRaw) {
   router.replace({ query: Object.fromEntries(Object.entries({ ...route.query, ...patch }).filter(([, value]) => value)) })
 }
 
 // A changed filter starts a fresh list; opening a mail or loading more keeps the loaded pages
-function updateFilters(patch: LocationQuery) {
+function updateFilters(patch: LocationQueryRaw) {
   updateQuery({ ...patch, pages: null })
 }
 
@@ -739,6 +742,47 @@ const selectedMail = computed<MailSummary | null>({
   get: () => visibleList.value.find(mail => isSelectedMail(mail, selection.value)) ?? linkedMail.value ?? null,
   set: mail => updateQuery(mailSelectionToQuery(mail ? { uid: mail.uid, mailbox: mail.mailbox } : null, mailbox.value))
 })
+
+// --- Attachment preview ---
+
+// The preview lives in the URL (`?att=<part>&attuid=&attbox=`), so a link opens
+// the same file; without the uid/box it falls back to the mail the page has open.
+const attachmentPreview = computed(() => mailAttachmentPreviewFromQuery(
+  route.query,
+  selectedMail.value ? { uid: selectedMail.value.uid, mailbox: selectedMail.value.mailbox } : undefined
+))
+
+const attachmentPreviewMail = computed(() => {
+  const preview = attachmentPreview.value
+  if (!preview) {
+    return undefined
+  }
+  const open = selectedMail.value
+  const subject = open && open.uid === preview.uid && open.mailbox === preview.mailbox ? open.subject : ''
+  return { uid: preview.uid, mailbox: preview.mailbox, subject }
+})
+
+const { data: attachmentPreviewMessage, status: attachmentPreviewStatus } = useMailMessage(
+  attachmentPreviewMail,
+  () => service.value
+)
+const attachmentPreviewAttachments = computed(() => attachmentPreviewMessage.value?.attachments ?? [])
+const isAttachmentPreviewOpen = computed(() => !!attachmentPreview.value)
+
+function openAttachmentPreview(mail: Pick<MailSummary, 'uid' | 'mailbox'>, part: string) {
+  updateQuery(mailAttachmentPreviewToQuery({ part, uid: mail.uid, mailbox: mail.mailbox }))
+}
+
+function closeAttachmentPreview() {
+  updateQuery(mailAttachmentPreviewToQuery(null))
+}
+
+function setAttachmentPreviewPart(part: string) {
+  const preview = attachmentPreview.value
+  if (preview) {
+    updateQuery(mailAttachmentPreviewToQuery({ ...preview, part }))
+  }
+}
 
 const isMailPanelOpen = computed({
   get() {
@@ -1573,6 +1617,7 @@ const shortcutState = computed<MailShortcutState>(() => ({
   selectedMail: selectedMail.value,
   openConversation: openConversationSummary.value,
   composerOpen: isComposerOpen.value,
+  previewOpen: isAttachmentPreviewOpen.value,
   conversationMails: openConversationMails.value,
   own: { ownAddress: ownAddress.value, sentMailboxes: sentMailboxes.value }
 }))
@@ -1637,12 +1682,94 @@ function doneShortcut() {
   void toggleDone(target.mails)
 }
 
+/** v opens the first attachment of the mail the shortcut targets */
+async function previewAttachmentShortcut() {
+  if (isAttachmentPreviewOpen.value) {
+    return
+  }
+
+  const target = mailAttachmentTarget(shortcutState.value)
+  if (!target) {
+    return
+  }
+
+  try {
+    const message = await mailMessage(target.uid, target.mailbox)
+    const first = visibleMailAttachments(message.attachments)[0]
+    if (first?.part) {
+      openAttachmentPreview(target, first.part)
+    }
+  } catch {
+    // The reader shows the same load failure; a preview is simply not opened
+  }
+}
+
+/**
+ * shift_s runs whatever action registered that key (the drive layer's "Save to
+ * drive"). While the preview is open it saves the file on screen; otherwise all
+ * attachments of the target mail.
+ */
+async function saveAttachmentShortcut() {
+  const preview = attachmentPreview.value
+  let mail: Pick<MailSummary, 'uid' | 'mailbox'> | undefined
+  let attachments: MailAttachment[] = []
+
+  try {
+    if (preview) {
+      mail = { uid: preview.uid, mailbox: preview.mailbox }
+      const message = await mailMessage(preview.uid, preview.mailbox)
+      const current = mailAttachmentByPart(message.attachments, preview.part)
+      attachments = current ? [current] : []
+    } else {
+      const target = mailAttachmentTarget(shortcutState.value)
+      if (!target) {
+        return
+      }
+      mail = target
+      const message = await mailMessage(target.uid, target.mailbox)
+      attachments = visibleMailAttachments(message.attachments)
+    }
+  } catch {
+    toast.add({ title: 'Could not load the attachments', color: 'error', icon: 'i-lucide-circle-alert' })
+    return
+  }
+
+  if (!mail || !attachments.length) {
+    return
+  }
+
+  const context: AttachmentActionContext = {
+    source: 'mail',
+    ref: mailEntityRef(service.value, mail.mailbox, mail.uid),
+    attachments
+  }
+  const action = attachmentActionsForKey(context, MAIL_SHORTCUT_KEYS.saveAttachment[0])[0]
+  if (action) {
+    await action.run(context)
+  }
+}
+
+// A second key of a `g` chord belongs to the global navigation shortcut, not to
+// the single-letter mail action (today `g a` opened automation and replied all).
+const { shouldIgnore } = useShortcutChordGuard()
+
+function guarded(action: () => void | Promise<void>) {
+  return (event?: KeyboardEvent) => {
+    if (event?.key && shouldIgnore(event.key)) {
+      return
+    }
+    void action()
+  }
+}
+
 defineShortcuts({
   ...Object.fromEntries(MAIL_SHORTCUT_KEYS.delete.map(key => [key, deleteShortcut])),
-  ...Object.fromEntries(MAIL_SHORTCUT_KEYS.reply.map(key => [key, () => composeShortcut('reply')])),
-  ...Object.fromEntries(MAIL_SHORTCUT_KEYS.replyAll.map(key => [key, () => composeShortcut('replyAll')])),
-  ...Object.fromEntries(MAIL_SHORTCUT_KEYS.forward.map(key => [key, () => composeShortcut('forward')])),
-  ...Object.fromEntries(MAIL_SHORTCUT_KEYS.done.map(key => [key, doneShortcut]))
+  ...Object.fromEntries(MAIL_SHORTCUT_KEYS.reply.map(key => [key, guarded(() => composeShortcut('reply'))])),
+  ...Object.fromEntries(MAIL_SHORTCUT_KEYS.replyAll.map(key => [key, guarded(() => composeShortcut('replyAll'))])),
+  ...Object.fromEntries(MAIL_SHORTCUT_KEYS.forward.map(key => [key, guarded(() => composeShortcut('forward'))])),
+  ...Object.fromEntries(MAIL_SHORTCUT_KEYS.done.map(key => [key, guarded(doneShortcut)])),
+  ...Object.fromEntries(MAIL_SHORTCUT_KEYS.preview.map(key => [key, guarded(previewAttachmentShortcut)])),
+  ...Object.fromEntries(MAIL_SHORTCUT_KEYS.saveAttachment.map(key => [key, () => void saveAttachmentShortcut()]))
 })
 
 const breakpoints = useBreakpoints(breakpointsTailwind)
@@ -1900,6 +2027,7 @@ const isMobile = breakpoints.smaller('lg')
         :loading-more="conversationsLoading"
         :done="conversationState.done"
         :is-permanent="isPermanentDelete"
+        :shortcuts-disabled="isAttachmentPreviewOpen"
         @select="openConversation"
         @prefetch="prefetchConversation"
         @load-more="loadConversations(false)"
@@ -1946,6 +2074,7 @@ const isMobile = breakpoints.smaller('lg')
         :loading-more="loadingMore"
         :done="pageState.done"
         :is-permanent="isPermanentDelete"
+        :shortcuts-disabled="isAttachmentPreviewOpen"
         @load-more="loadMore"
         @update-selection="setSelectedKeys"
         @prefetch="prefetchMessage"
@@ -2036,6 +2165,18 @@ const isMobile = breakpoints.smaller('lg')
     @update:open="isComposerOpen = $event"
     @send="sendCompose"
     @discard="discardCompose"
+  />
+
+  <MailAttachmentPreview
+    v-if="attachmentPreview && attachmentPreviewMail"
+    :open="isAttachmentPreviewOpen"
+    :attachments="attachmentPreviewAttachments"
+    :part="attachmentPreview.part"
+    :service="service"
+    :mail="attachmentPreviewMail"
+    :loading="attachmentPreviewStatus === 'pending'"
+    @update:open="value => { if (!value) closeAttachmentPreview() }"
+    @update:part="setAttachmentPreviewPart"
   />
 
   <UModal v-model:open="confirmState.open" :title="confirmState.title">

@@ -65,11 +65,20 @@ export interface MailProvider {
    * folder is not an error.
    */
   createMailbox?(path: string): Promise<void>
+  /** The attachment metadata of one message, without fetching the body bytes */
+  listAttachments?(mailbox: string, uid: number): Promise<MailAttachment[]>
   /**
-   * The attachments of one message with their bytes. Optional: a provider that
-   * cannot serve them omits it, and an action that needs them fails the run.
+   * Streams one attachment part. The caller must consume or cancel the stream;
+   * `close()` is idempotent and releases the provider connection either way.
+   * Optional: a provider that cannot stream a part omits it.
    */
-  getAttachments?(mailbox: string, uid: number): Promise<Array<MailAttachment & { content: Uint8Array }>>
+  openAttachment?(mailbox: string, uid: number, part: string): Promise<{
+    meta: MailAttachment
+    stream: ReadableStream<Uint8Array>
+    close: () => Promise<void>
+    /** The mailbox's UIDVALIDITY, for a stable ETag */
+    uidValidity?: string
+  } | null>
 
   // --- Sending ---
   /**

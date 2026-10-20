@@ -3,7 +3,6 @@ import { breakpointsTailwind } from '@vueuse/core'
 import type { DriveEntry } from '#layers/drive/shared/types/drive'
 import { imageSrcset, imageUrl } from '#layers/image/app/utils/image-url'
 import { downloadUrl, entryKindLabel, entryVersion, formatDate, formatSize, previewKind } from '../../utils/drive'
-import { driveRequest } from '../../utils/drive-request'
 import { driveImageId } from '../../../shared/drive-image'
 
 const open = defineModel<boolean>('open', { required: true })
@@ -43,19 +42,6 @@ const imagePreviewSrcset = computed(() => props.entry
       widths: PREVIEW_WIDTHS
     })
   : '')
-const text = ref<string>()
-
-watch(() => props.entry?.path, async () => {
-  text.value = undefined
-  if (!import.meta.client || !props.entry || kind.value !== 'text') {
-    return
-  }
-  try {
-    text.value = await driveRequest<string>(previewUrl.value, { text: true })
-  } catch {
-    text.value = undefined
-  }
-}, { immediate: true })
 
 const rows = computed(() => {
   const entry = props.entry
@@ -77,42 +63,21 @@ const rows = computed(() => {
     <template #body>
       <div v-if="entry" class="space-y-4">
         <div class="flex h-56 items-center justify-center overflow-hidden rounded-lg border border-default bg-elevated text-muted">
-          <img
-            v-if="kind === 'image'"
-            :src="imagePreviewUrl"
-            :srcset="imagePreviewSrcset"
-            :sizes="previewSizes"
-            :alt="entry.name"
-            class="max-h-full max-w-full object-contain"
+          <FilePreview
+            :kind="kind"
+            :src="kind === 'image' ? imagePreviewUrl : previewUrl"
+            :srcset="kind === 'image' ? imagePreviewSrcset : undefined"
+            :sizes="kind === 'image' ? previewSizes : undefined"
+            :name="entry.name"
           >
-          <iframe
-            v-else-if="kind === 'pdf'"
-            :src="previewUrl"
-            title="PDF preview"
-            class="size-full"
-          />
-          <video
-            v-else-if="kind === 'video'"
-            :src="previewUrl"
-            controls
-            class="max-h-full max-w-full"
-          />
-          <audio
-            v-else-if="kind === 'audio'"
-            :src="previewUrl"
-            controls
-            class="w-full px-4"
-          />
-          <pre
-            v-else-if="kind === 'text' && text !== undefined"
-            class="size-full overflow-auto p-3 text-start text-xs whitespace-pre-wrap"
-          >{{ text }}</pre>
-          <DriveEntryIcon
-            v-else
-            :entry="entry"
-            :service="service"
-            class="size-16"
-          />
+            <template #fallback>
+              <DriveEntryIcon
+                :entry="entry"
+                :service="service"
+                class="size-16"
+              />
+            </template>
+          </FilePreview>
         </div>
 
         <p class="break-words font-medium">

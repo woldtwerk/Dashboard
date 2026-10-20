@@ -9,6 +9,7 @@
     "@allmight/image": "workspace:*",
     "@nuxt/ui": "catalog:",
     "@vueuse/core": "catalog:",
+    "drizzle-orm": "catalog:",
     "h3": "catalog:",
     "zod": "catalog:"
   },

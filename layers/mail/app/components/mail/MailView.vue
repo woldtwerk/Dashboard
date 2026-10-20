@@ -3,6 +3,7 @@ import type { MailSummary } from '#layers/mail/shared/types/mail'
 import type { EntityRef } from '#layers/core/shared/types/entities'
 import { normalizeEmail, entityKey } from '#layers/core/shared/entities'
 import { isTrustedImageSender } from '#layers/mail/shared/mail-images'
+import { visibleMailAttachments } from '#layers/mail/shared/mail-attachments'
 import { formatMailFullDate } from '#layers/mail/app/utils/mail-date'
 import { MAIL_SHORTCUT_KEYS } from '#layers/mail/app/utils/mail-shortcuts'
 
@@ -58,6 +59,7 @@ const remoteImagesAllowed = computed(() => allowRemoteImages.value || senderTrus
 
 const recipients = computed(() => message.value?.to ?? [])
 const copies = computed(() => message.value?.cc ?? [])
+const attachments = computed(() => visibleMailAttachments(message.value?.attachments))
 
 const mailEntity = computed<EntityRef>(() => ({
   type: 'mail',
@@ -242,6 +244,13 @@ function openPerson(address?: string) {
         class="m-4"
       />
       <div v-else-if="message">
+        <MailAttachmentList
+          v-if="attachments.length"
+          :attachments="attachments"
+          :mail="mail"
+          :service="service"
+          class="border-b border-default px-4 py-2 sm:px-6"
+        />
         <MailRemoteImages
           v-model:allow-remote="allowRemoteImages"
           :html="message.html"

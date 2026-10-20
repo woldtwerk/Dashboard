@@ -11,6 +11,14 @@ export const mailboxQuerySchema = serviceQuerySchema.extend({
   mailbox: z.string().min(1).default('INBOX')
 })
 
+/** An IMAP body part number, e.g. `2` or `2.1` */
+export const mailAttachmentPartSchema = z.string().regex(/^\d+(\.\d+)*$/, 'Invalid attachment part')
+
+export const mailAttachmentQuerySchema = mailboxQuerySchema.extend({
+  part: mailAttachmentPartSchema,
+  inline: z.stringbool().optional()
+})
+
 export const messagesQuerySchema = mailboxQuerySchema.extend({
   // The list fetches everything loaded so far in one go (`pages * MAIL_PAGE_SIZE`), so the cap is higher
   limit: z.coerce.number().int().min(1).max(1000).default(50),

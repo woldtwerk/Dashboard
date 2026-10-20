@@ -15,7 +15,7 @@ import { FallbackUnavailableError, runDecisionNodesBatch, runWorkflowBatch, vali
 import { undoBatches } from '../../shared/automation'
 import { modalRef } from '../../shared/extractors'
 import type { WorkflowBatchResult, WorkflowDecide, WorkflowDecideBatch, WorkflowFallbackDecideBatch } from '../../shared/workflow'
-import { parseEntityKey } from '../../../core/shared/entities'
+import { entityKey, parseEntityKey } from '../../../core/shared/entities'
 import { createDocumentsApplier, createMailApplier, toMailActionProvider } from './appliers'
 import { publishModalEvent, publishReviewEvent } from './automation-events'
 import type { AutomationApplier, AutomationDeps, AutomationLogger } from './engine'
@@ -28,13 +28,14 @@ import { fallbackEngine, hasDecisionEngine, useDecisionEngine } from './decision
 import { itemRef, loadDocumentsSince, loadItemByRef, loadItems, loadMailSince, loadRecentItems } from './automation-items'
 import { getWorkflow, listWorkflows } from './workflows'
 import { dueItems, getRun, markEvaluated, readSweepCursor, recordAttempt, recordRun, updateRun, writeSweepCursor } from './runs'
-import { forgetDriveFiles, hasDriveFile, recordDriveFile } from './drive-files'
-import type { ActionRunContext, DriveFileHistory, DriveSavePort } from './action-runner'
-import type { MailAttachment } from '../../../mail/shared/types/mail'
-import { joinPath } from '../../../drive/shared/drive-path'
-import { folderSteps } from '../../../drive/shared/drive-upload'
+import { forgetSavedFiles, hasSavedFile, recordSavedFile } from '../../../drive/server/utils/drive-files'
+import { createDriveSavePort } from '../../../drive/server/utils/drive-save'
+import type { DriveFileHistory } from '../../../drive/server/utils/drive-save'
+import type { ActionRunContext } from './action-runner'
+import type { FileSourceMeta } from '../../../core/shared/types/file-sources'
+import { getFileSource, readFileSource } from '../../../core/server/utils/file-sources'
 import { affectedPaths, invalidateDriveListings } from '../../../drive/server/utils/drive-cache'
-import { publishDriveChange, publishDriveChanges, publishDriveTrashChange } from '../../../drive/server/utils/drive-events'
+import { publishDriveChanges, publishDriveTrashChange } from '../../../drive/server/utils/drive-events'
 
 const LOCK_TTL_MS = 5 * 60_000
 // A preview with AI fallbacks asks a language model once per unsure item, so a
@@ -111,76 +112,51 @@ async function applierFor(domain: AutomationDomain, service: string): Promise<Au
 }
 
 /** The item's attachments; only mail has them, every other domain has none yet */
-async function itemFiles(item: AutomationItem): Promise<Array<MailAttachment & { content: Uint8Array }>> {
+async function itemFiles(item: AutomationItem): Promise<Array<FileSourceMeta & { content: Uint8Array }>> {
   if (item.domain !== 'mail' || !item.mailbox || item.uid === undefined) {
     return []
   }
 
-  const provider = await useMailProvider(item.service)
-  return provider.getAttachments ? await provider.getAttachments(item.mailbox, item.uid) : []
-}
-
-/**
- * The drive sink a save-to-drive action writes through. Every write drops the
- * cached listing it changed and announces the change, exactly like the drive
- * API does. `keepAlive` renews the service lease around a long upload; a lost
- * lease stops the run, and the idempotent skip keeps a takeover harmless.
- */
-function driveSavePort(keepAlive?: () => Promise<boolean>): DriveSavePort {
-  const renew = async () => {
-    if (keepAlive && !(await keepAlive())) {
-      throw new Error('The automation lock was lost while saving to the drive')
-    }
+  // The mail-specific ref is only a string here; the mail layer's file source
+  // knows how to read it, so this file never imports a mail provider for it.
+  const source = getFileSource('mail')
+  if (!source?.list) {
+    return []
   }
 
-  return {
-    async ensureFolder(service, path) {
-      const provider = await useDriveProvider(service)
+  const ref = entityKey({ type: 'mail', service: item.service, id: `${item.mailbox}/${item.uid}` })
+  const attachments = (await source.list(ref)).filter(attachment => !attachment.inline && !!attachment.part)
 
-      for (const step of folderSteps(path)) {
-        const entries = await provider.list(step.parent)
-        if (entries.some(entry => entry.type === 'folder' && entry.name === step.name)) {
-          continue
-        }
-
-        await provider.createFolder(step.parent, step.name)
-        await invalidateDriveListings(service, affectedPaths('folder', { path: step.parent }))
-        await publishDriveChange(service, step.parent)
-      }
-    },
-
-    async list(service, path) {
-      const provider = await useDriveProvider(service)
-      return (await provider.list(path)).map(entry => ({ name: entry.name, type: entry.type, size: entry.size }))
-    },
-
-    async upload(service, folder, file) {
-      const provider = await useDriveProvider(service)
-      const path = joinPath(folder, file.name)
-
-      await renew()
-      const form = new FormData()
-      const content = new Uint8Array(file.content)
-      form.append('file', new Blob([content], { type: file.contentType }), file.name)
-      const body = new Response(form)
-      await provider.upload(path, {
-        stream: body.body,
-        contentType: body.headers.get('content-type') ?? file.contentType
-      })
-      await renew()
-
-      await invalidateDriveListings(service, affectedPaths('upload', { path: folder }))
-      await publishDriveChange(service, folder)
+  const files: Array<FileSourceMeta & { content: Uint8Array }> = []
+  for (const attachment of attachments) {
+    const opened = await source.open(ref, attachment.part!)
+    if (!opened) {
+      continue
+    }
+    try {
+      files.push({ ...opened.meta, content: await readFileSource(opened.stream) })
+    } finally {
+      await opened.close()
     }
   }
+  return files
 }
 
 /** The ports generic actions need, built for one run */
 function actionContextFor(keepAlive?: () => Promise<boolean>): ActionRunContext {
   return {
     itemFiles,
-    drive: driveSavePort(keepAlive),
-    driveHistory: driveFileHistory()
+    drive: createDriveSavePort(),
+    driveHistory: driveFileHistory(),
+    // A lost lease stops the run before the next upload; the idempotent skip
+    // keeps a takeover harmless.
+    onBeforeUpload: keepAlive
+      ? async () => {
+        if (!(await keepAlive())) {
+          throw new Error('The automation lock was lost while saving to the drive')
+        }
+      }
+      : undefined
   }
 }
 
@@ -191,9 +167,9 @@ function actionContextFor(keepAlive?: () => Promise<boolean>): ActionRunContext 
  */
 function driveFileHistory(): DriveFileHistory {
   return {
-    has: (service, folder, sha256) => hasDriveFile(service, folder, sha256),
+    has: (service, folder, sha256) => hasSavedFile(service, folder, sha256),
     async record(file) {
-      const recorded = await recordDriveFile(file)
+      const recorded = await recordSavedFile(file)
       if (!recorded) {
         automationLogger(file.service).warn?.('Another worker saved the same file; the duplicate upload is kept', {
           path: file.path,
@@ -507,7 +483,7 @@ async function trashDrivePaths(service: string, paths: string[]): Promise<void> 
 
   const provider = await useDriveProvider(service)
   await provider.trash(paths)
-  await forgetDriveFiles(service, paths)
+  await forgetSavedFiles(service, paths)
 
   await invalidateDriveListings(service, affectedPaths('trash', { paths }))
   await publishDriveChanges(service, paths)

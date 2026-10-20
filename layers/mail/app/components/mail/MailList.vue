@@ -31,6 +31,8 @@ const props = defineProps<{
   done?: boolean
   /** Whether deleting this mail removes it for good, e.g. in the trash */
   isPermanent?: (mail: MailSummary) => boolean
+  /** The attachment preview is open; arrow keys belong to it */
+  shortcutsDisabled?: boolean
 }>()
 
 const emits = defineEmits<{
@@ -91,6 +93,10 @@ watch(selectedMail, () => {
 })
 
 function move(delta: 1 | -1) {
+  if (props.shortcutsDisabled) {
+    return
+  }
+
   const keys = props.mails.map(mail => mailKey(mail))
   const next = adjacentListKey(keys, selectedKey.value, delta)
 
@@ -150,6 +156,9 @@ defineShortcuts({
   arrowdown: () => move(1),
   arrowup: () => move(-1),
   escape: () => {
+    if (props.shortcutsDisabled) {
+      return
+    }
     if (selection.value.length) {
       emits('updateSelection', [])
     }

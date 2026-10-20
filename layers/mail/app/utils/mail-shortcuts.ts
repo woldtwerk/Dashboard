@@ -10,7 +10,13 @@ export const MAIL_SHORTCUT_KEYS = {
   reply: ['r'],
   replyAll: ['a'],
   forward: ['f'],
-  done: ['e']
+  done: ['e'],
+  preview: ['v'],
+  saveAttachment: ['shift_s'],
+  previewPrevious: ['arrowleft'],
+  previewNext: ['arrowright'],
+  download: ['shift_d'],
+  closePreview: ['escape']
 } as const
 
 /** One of the actions MAIL_SHORTCUT_KEYS names */
@@ -31,6 +37,8 @@ export interface MailShortcutState {
   selectedMail: MailSummary | null
   openConversation: MailOpenConversation | null
   composerOpen: boolean
+  /** The attachment preview is open; no list or single-key action may fire */
+  previewOpen?: boolean
   /** The open conversation's mails, oldest first, when the panel has loaded them */
   conversationMails?: MailSummary[]
   /** The account's own address and sent folders, to tell its own mail apart */
@@ -49,7 +57,7 @@ export type MailShortcutTarget = { kind: 'batch' }
  * mails has no single mail to delete and stays out, as it does in its menu.
  */
 export function mailShortcutTarget(state: MailShortcutState): MailShortcutTarget {
-  if (state.composerOpen) {
+  if (state.composerOpen || state.previewOpen) {
     return null
   }
 
@@ -78,7 +86,7 @@ export type MailDoneTarget = { kind: 'batch' } | { kind: 'mails', mails: MailSum
  * delete.
  */
 export function mailDoneTarget(state: MailShortcutState): MailDoneTarget {
-  if (state.composerOpen) {
+  if (state.composerOpen || state.previewOpen) {
     return null
   }
 
@@ -113,7 +121,7 @@ export function mailDoneTarget(state: MailShortcutState): MailDoneTarget {
  * Without the conversation's mails, its newest one stands in.
  */
 export function mailReplyTarget(state: MailShortcutState): MailSummary | null {
-  if (state.composerOpen) {
+  if (state.composerOpen || state.previewOpen) {
     return null
   }
 
@@ -127,4 +135,25 @@ export function mailReplyTarget(state: MailShortcutState): MailSummary | null {
   }
 
   return latestIncomingMail(state.conversationMails ?? [], state.own) ?? conversation.latest
+}
+
+/**
+ * The mail `v` previews and `shift_s` saves: the open mail in the mails list,
+ * or the newest mail of the open conversation that the index says carries an
+ * attachment. The composer and an already open preview take the keys away.
+ */
+export function mailAttachmentTarget(state: MailShortcutState): MailSummary | null {
+  if (state.composerOpen || state.previewOpen) {
+    return null
+  }
+
+  if (state.view === 'mails') {
+    return state.selectedMail
+  }
+
+  const mails = state.conversationMails?.length
+    ? state.conversationMails
+    : (state.openConversation ? [state.openConversation.latest] : [])
+
+  return [...mails].reverse().find(mail => mail.hasAttachment) ?? null
 }

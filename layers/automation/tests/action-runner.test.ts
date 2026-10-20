@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { extractValue, runActions } from '../server/utils/action-runner'
-import type { ActionRunContext, DriveFileHistory, DriveSavePort } from '../server/utils/action-runner'
+import type { ActionRunContext } from '../server/utils/action-runner'
+import type { DriveFileHistory, DriveSavePort } from '../../drive/server/utils/drive-save'
 import type { AutomationApplier } from '../server/utils/engine'
 import type { MailAttachment } from '../../mail/shared/types/mail'
-import { sha256Hex } from '../../drive/shared/drive-upload'
 import type { AppliedAction, AutomationItem, PlannedAction, UndoOperation } from '../shared/types/automation'
 
 function mailItem(overrides: Partial<AutomationItem> = {}): AutomationItem {
@@ -202,58 +202,6 @@ describe('runActions: save-to-drive', () => {
     expect(applied).toEqual([{ type: 'save-to-drive', service: 'drive-1', paths: ['/my-files/Public/salsa/clip.mp4'] }])
   })
 
-  it('skips a file that is already there with the same name and size', async () => {
-    const { drive, uploaded } = fakeDrive([{ name: 'clip.mp4', size: 5 }])
-
-    const { applied } = await runActions(planned([
-      { type: 'save-to-drive', service: 'drive-1', folder: '/my-files/Public', accept: ['video/*'] }
-    ]), mailItem(), fakeApplier(), saveContext([attachment('clip.mp4', 'video/mp4', 'video')], drive))
-
-    expect(uploaded).toEqual([])
-    expect(applied).toEqual([])
-  })
-
-  it('renames a same-name file of another size', async () => {
-    const { drive, uploaded } = fakeDrive([
-      { name: 'clip.mp4', size: 1 },
-      { name: 'clip (1).mp4', size: 2 }
-    ])
-
-    await runActions(planned([
-      { type: 'save-to-drive', service: 'drive-1', folder: '/my-files/Public', accept: ['video/*'] }
-    ]), mailItem(), fakeApplier(), saveContext([attachment('clip.mp4', 'video/mp4', 'video')], drive))
-
-    expect(uploaded.map(file => file.name)).toEqual(['clip (2).mp4'])
-  })
-
-  it('skips a same-name file of another size when the action says so', async () => {
-    const { drive, uploaded } = fakeDrive([{ name: 'clip.mp4', size: 1 }])
-
-    const { applied } = await runActions(planned([
-      { type: 'save-to-drive', service: 'drive-1', folder: '/my-files/Public', accept: ['video/*'], conflict: 'skip' }
-    ]), mailItem(), fakeApplier(), saveContext([attachment('clip.mp4', 'video/mp4', 'video')], drive))
-
-    expect(uploaded).toEqual([])
-    expect(applied).toEqual([])
-  })
-
-  it('renames the second of two attachments that share a name', async () => {
-    const { drive, uploaded } = fakeDrive()
-
-    const { applied } = await runActions(planned([
-      { type: 'save-to-drive', service: 'drive-1', folder: '/my-files/Public', accept: ['image/*'] }
-    ]), mailItem(), fakeApplier(), saveContext([
-      attachment('photo.jpg', 'image/jpeg', 'first'),
-      attachment('photo.jpg', 'image/jpeg', 'second!')
-    ], drive))
-
-    expect(uploaded.map(file => file.name)).toEqual(['photo.jpg', 'photo (1).jpg'])
-    expect(applied[0]).toMatchObject({
-      type: 'save-to-drive',
-      paths: ['/my-files/Public/photo.jpg', '/my-files/Public/photo (1).jpg']
-    })
-  })
-
   it('succeeds without touching the drive when no attachment matches', async () => {
     const { drive, ensured, listed, uploaded } = fakeDrive()
 
@@ -265,6 +213,18 @@ describe('runActions: save-to-drive', () => {
     expect(listed).toEqual([])
     expect(uploaded).toEqual([])
     expect(applied).toEqual([])
+  })
+
+  it('saves into the normalised path of a hand-written folder', async () => {
+    const { drive, ensured, uploaded } = fakeDrive()
+
+    const { applied } = await runActions(planned([
+      { type: 'save-to-drive', service: 'drive-1', folder: 'Public/salsa/', accept: ['video/*'] }
+    ]), mailItem(), fakeApplier(), saveContext([attachment('clip.mp4', 'video/mp4', 'video')], drive))
+
+    expect(ensured).toEqual(['/my-files/Public/salsa'])
+    expect(uploaded).toEqual([{ folder: '/my-files/Public/salsa', name: 'clip.mp4', contentType: 'video/mp4' }])
+    expect(applied).toEqual([{ type: 'save-to-drive', service: 'drive-1', paths: ['/my-files/Public/salsa/clip.mp4'] }])
   })
 
   it('stops before a following trash when an upload fails', async () => {
@@ -282,126 +242,5 @@ describe('runActions: save-to-drive', () => {
       .rejects.toThrow('Drive is full')
 
     expect(applier.calls).toEqual([])
-  })
-
-  it('saves the same content once, even when it arrives under another name', async () => {
-    const { drive, uploaded } = fakeDrive()
-    const { history, recorded } = fakeHistory()
-
-    const { applied } = await runActions(planned([
-      { type: 'save-to-drive', service: 'drive-1', folder: '/my-files/Public', accept: ['video/*'] }
-    ]), mailItem(), fakeApplier(), saveContext([
-      attachment('holiday.mp4', 'video/mp4', 'same video'),
-      attachment('holiday-copy.mp4', 'video/mp4', 'same video')
-    ], drive, history))
-
-    expect(uploaded.map(file => file.name)).toEqual(['holiday.mp4'])
-    expect(applied).toEqual([{ type: 'save-to-drive', service: 'drive-1', paths: ['/my-files/Public/holiday.mp4'] }])
-    expect(recorded).toHaveLength(1)
-    expect(recorded[0]).toMatchObject({
-      service: 'drive-1',
-      folder: '/my-files/Public',
-      path: '/my-files/Public/holiday.mp4',
-      size: 10
-    })
-  })
-
-  it('renames a same-name attachment when its content differs', async () => {
-    const { drive, uploaded } = fakeDrive()
-
-    const { applied } = await runActions(planned([
-      { type: 'save-to-drive', service: 'drive-1', folder: '/my-files/Public', accept: ['video/*'] }
-    ]), mailItem(), fakeApplier(), saveContext([
-      attachment('holiday.mp4', 'video/mp4', 'first video'),
-      attachment('holiday.mp4', 'video/mp4', 'the second video')
-    ], drive))
-
-    expect(uploaded.map(file => file.name)).toEqual(['holiday.mp4', 'holiday (1).mp4'])
-    expect(applied[0]).toMatchObject({
-      type: 'save-to-drive',
-      paths: ['/my-files/Public/holiday.mp4', '/my-files/Public/holiday (1).mp4']
-    })
-  })
-
-  it('skips a file whose content was already saved into the folder', async () => {
-    const { drive, uploaded } = fakeDrive()
-    const content = attachment('new-name.mp4', 'video/mp4', 'known video')
-    const sha256 = await sha256Hex(content.content)
-    const { history } = fakeHistory([
-      { service: 'drive-1', folder: '/my-files/Public', sha256, path: '/my-files/Public/old-name.mp4', size: content.size }
-    ])
-
-    const { applied } = await runActions(planned([
-      { type: 'save-to-drive', service: 'drive-1', folder: '/my-files/Public', accept: ['video/*'] }
-    ]), mailItem(), fakeApplier(), saveContext([content], drive, history))
-
-    expect(uploaded).toEqual([])
-    expect(applied).toEqual([])
-  })
-
-  it('saves the same content again when the duplicate check is off', async () => {
-    const { drive, uploaded } = fakeDrive()
-    const content = attachment('new-name.mp4', 'video/mp4', 'known video')
-    const sha256 = await sha256Hex(content.content)
-    const { history, recorded } = fakeHistory([
-      { service: 'drive-1', folder: '/my-files/Public', sha256, path: '/my-files/Public/old-name.mp4', size: content.size }
-    ])
-
-    const { applied } = await runActions(planned([
-      { type: 'save-to-drive', service: 'drive-1', folder: '/my-files/Public', accept: ['video/*'], checkDuplicates: false }
-    ]), mailItem(), fakeApplier(), saveContext([content], drive, history))
-
-    expect(uploaded.map(file => file.name)).toEqual(['new-name.mp4'])
-    expect(applied).toEqual([{ type: 'save-to-drive', service: 'drive-1', paths: ['/my-files/Public/new-name.mp4'] }])
-    // The row is already there, and the lost race is not an error
-    expect(recorded).toEqual([])
-  })
-
-  it('renames a same-name file of the same size when the duplicate check is off', async () => {
-    const { drive, uploaded } = fakeDrive([{ name: 'clip.mp4', size: 5 }])
-
-    const { applied } = await runActions(planned([
-      { type: 'save-to-drive', service: 'drive-1', folder: '/my-files/Public', accept: ['video/*'], checkDuplicates: false }
-    ]), mailItem(), fakeApplier(), saveContext([attachment('clip.mp4', 'video/mp4', 'video')], drive))
-
-    expect(uploaded.map(file => file.name)).toEqual(['clip (1).mp4'])
-    expect(applied).toEqual([{ type: 'save-to-drive', service: 'drive-1', paths: ['/my-files/Public/clip (1).mp4'] }])
-  })
-
-  it('saves into the normalised path of a hand-written folder', async () => {
-    const { drive, ensured, uploaded } = fakeDrive()
-
-    const { applied } = await runActions(planned([
-      { type: 'save-to-drive', service: 'drive-1', folder: 'Public/salsa/', accept: ['video/*'] }
-    ]), mailItem(), fakeApplier(), saveContext([attachment('clip.mp4', 'video/mp4', 'video')], drive))
-
-    expect(ensured).toEqual(['/my-files/Public/salsa'])
-    expect(uploaded).toEqual([{ folder: '/my-files/Public/salsa', name: 'clip.mp4', contentType: 'video/mp4' }])
-    expect(applied).toEqual([{ type: 'save-to-drive', service: 'drive-1', paths: ['/my-files/Public/salsa/clip.mp4'] }])
-  })
-
-  it('records each file right after its own upload, so a later failure keeps the earlier row', async () => {
-    const { history, recorded } = fakeHistory()
-    let calls = 0
-    const drive: DriveSavePort = {
-      async ensureFolder() {},
-      async list() { return [] },
-      async upload(_service, _folder, file) {
-        calls++
-        if (calls === 2) {
-          throw new Error('Drive is full')
-        }
-        expect(file.name).toBe('first.mp4')
-      }
-    }
-
-    await expect(runActions(planned([
-      { type: 'save-to-drive', service: 'drive-1', folder: '/my-files/Public', accept: ['video/*'] }
-    ]), mailItem(), fakeApplier(), saveContext([
-      attachment('first.mp4', 'video/mp4', 'first video'),
-      attachment('second.mp4', 'video/mp4', 'second video')
-    ], drive, history))).rejects.toThrow('Drive is full')
-
-    expect(recorded.map(row => row.path)).toEqual(['/my-files/Public/first.mp4'])
   })
 })

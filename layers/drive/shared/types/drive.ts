@@ -67,3 +67,10 @@ export interface DriveInvitation {
 export type DriveSort = 'name' | 'modified' | 'size'
 export type DriveOrder = 'asc' | 'desc'
 export type DriveView = 'grid' | 'list'
+
+/** What the import endpoint saved and skipped; a failing part does not discard the rest */
+export interface DriveImportResult {
+  saved: string[]
+  skipped: Array<{ name: string, reason: 'duplicate' | 'exists' }>
+  failed: Array<{ part: string, reason: string }>
+}

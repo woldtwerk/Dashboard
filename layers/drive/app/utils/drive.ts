@@ -1,4 +1,6 @@
 import type { DriveEntry, DriveOrder, DriveSection, DriveSectionKey, DriveSort } from '../../shared/types/drive'
+import type { FilePreviewKind } from '../../../core/shared/file-preview'
+import { filePreviewKind } from '../../../core/shared/file-preview'
 import { DRIVE_MY_FILES_ROOT, DRIVE_SHARED_ROOT, DRIVE_TRASH_ROOT, normalizePath } from '../../shared/drive-path'
 
 /** The three top-level areas of the explorer, in the order their tabs appear. */
@@ -72,34 +74,14 @@ export function entryKindLabel(entry: Pick<DriveEntry, 'type' | 'mediaType' | 'n
   return extension ? `${extension} file` : 'File'
 }
 
-export type DrivePreviewKind = 'image' | 'pdf' | 'text' | 'video' | 'audio'
+export type DrivePreviewKind = FilePreviewKind
 
 /** How a file can be previewed inline, or undefined when it cannot. */
 export function previewKind(entry: Pick<DriveEntry, 'type' | 'mediaType' | 'name'>): DrivePreviewKind | undefined {
   if (entry.type === 'folder') {
     return undefined
   }
-
-  const mime = entry.mediaType ?? ''
-  const extension = entry.name.includes('.') ? entry.name.split('.').pop()!.toLowerCase() : ''
-
-  if (mime.startsWith('image/') || ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'svg'].includes(extension)) {
-    return 'image'
-  }
-  if (mime === 'application/pdf' || extension === 'pdf') {
-    return 'pdf'
-  }
-  if (mime.startsWith('video/') || ['mp4', 'webm', 'mov'].includes(extension)) {
-    return 'video'
-  }
-  if (mime.startsWith('audio/') || ['mp3', 'wav', 'ogg', 'm4a'].includes(extension)) {
-    return 'audio'
-  }
-  if (mime.startsWith('text/') || ['txt', 'md', 'json', 'csv', 'log', 'xml', 'yml', 'yaml'].includes(extension)) {
-    return 'text'
-  }
-
-  return undefined
+  return filePreviewKind(entry.mediaType, entry.name)
 }
 
 /** The largest image whose whole file is worth fetching as a grid thumbnail. */

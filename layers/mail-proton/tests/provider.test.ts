@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { Readable } from 'node:stream'
 import type { SetupValues } from '../../core/shared/types/setup'
 import { createProtonMailProvider } from '../server/proton/provider'
 import { isMailboxExistsError, isMailboxNotFoundError } from '../server/proton/bridge'
@@ -15,7 +16,8 @@ function fakeClient() {
     messageFlagsRemove: vi.fn(async () => {}),
     messageMove: vi.fn(async () => ({ uidMap: new Map<number, number>() })),
     messageDelete: vi.fn(async () => {}),
-    fetchOne: vi.fn(async (): Promise<{ uid: number, source: Buffer } | null> => null),
+    download: vi.fn(async (_range: string, _part: string) => ({ meta: {}, content: Readable.from([]) })),
+    fetchOne: vi.fn(async (): Promise<{ uid: number, source?: Buffer, bodyStructure?: unknown } | null> => null),
     messageCopy: vi.fn(async () => ({ uidMap: new Map<number, number>() })),
     search: vi.fn(async () => [] as number[]),
     fetch: vi.fn(async function* (): AsyncGenerator<{ uid: number, envelope?: { messageId?: string } }> {})
@@ -109,51 +111,124 @@ describe('batch mail commands', () => {
   })
 })
 
-describe('getAttachments', () => {
-  const source = [
-    'From: Alice <alice@example.com>',
-    'To: Bob <bob@example.com>',
-    'Subject: Two files',
-    'MIME-Version: 1.0',
-    'Content-Type: multipart/mixed; boundary="BB"',
-    '',
-    '--BB',
-    'Content-Type: text/plain; charset=utf-8',
-    '',
-    'Hello',
-    '--BB',
-    'Content-Type: application/pdf',
-    'Content-Disposition: attachment; filename="report.pdf"',
-    'Content-Transfer-Encoding: base64',
-    '',
-    'SGVsbG8=',
-    '--BB',
-    'Content-Type: image/png',
-    'Content-Disposition: attachment',
-    'Content-Transfer-Encoding: base64',
-    '',
-    'aGVsbG8=',
-    '--BB--',
-    ''
-  ].join('\r\n')
+const bodyStructure = {
+  type: 'multipart/mixed',
+  childNodes: [
+    { part: '1', type: 'text/plain' },
+    {
+      part: '2',
+      type: 'application/pdf',
+      disposition: 'attachment',
+      dispositionParameters: { filename: 'report.pdf' },
+      encoding: '7bit',
+      size: 5
+    },
+    { part: '3', type: 'image/png', disposition: 'attachment', encoding: '7bit', size: 5 }
+  ]
+}
 
-  it('returns the bytes, type and size of every attachment', async () => {
-    state.client.fetchOne.mockResolvedValueOnce({ uid: 7, source: Buffer.from(source) })
+describe('listAttachments', () => {
+  it('lists the parts without fetching their bytes', async () => {
+    state.client.fetchOne.mockResolvedValue({ uid: 7, bodyStructure })
 
-    const attachments = await createProtonMailProvider(values()).getAttachments!('INBOX', 7)
+    const attachments = await createProtonMailProvider(values()).listAttachments!('INBOX', 7)
 
     expect(attachments.map(({ filename, contentType, size }) => ({ filename, contentType, size }))).toEqual([
       { filename: 'report.pdf', contentType: 'application/pdf', size: 5 },
       { filename: 'attachment-2.png', contentType: 'image/png', size: 5 }
     ])
-    expect(Buffer.from(attachments[0]!.content).toString()).toBe('Hello')
-    expect(state.client.fetchOne).toHaveBeenCalledWith('7', expect.objectContaining({ source: true }), { uid: true })
+    expect(state.client.fetchOne).toHaveBeenCalledWith('7', { bodyStructure: true }, { uid: true })
+    expect(state.client.download).not.toHaveBeenCalled()
   })
 
-  it('returns nothing for a message that is gone', async () => {
-    state.client.fetchOne.mockResolvedValueOnce(null)
+  it('marks a cid image referenced by the raw html as inline', async () => {
+    state.client.fetchOne.mockResolvedValue({
+      uid: 7,
+      bodyStructure: {
+        type: 'multipart/related',
+        childNodes: [
+          { part: '1', type: 'text/html' },
+          {
+            part: '2',
+            type: 'image/png',
+            id: '<logo@example.com>',
+            dispositionParameters: { filename: 'signature.png' },
+            size: 5
+          },
+          { part: '3', type: 'application/pdf', disposition: 'attachment', dispositionParameters: { filename: 'report.pdf' }, size: 5 }
+        ]
+      }
+    })
+    state.client.download.mockResolvedValue({
+      meta: {},
+      content: Readable.from([Buffer.from('<img src="cid:logo@example.com">')])
+    })
 
-    await expect(createProtonMailProvider(values()).getAttachments!('INBOX', 7)).resolves.toEqual([])
+    const attachments = await createProtonMailProvider(values()).listAttachments!('INBOX', 7)
+
+    expect(attachments.find(attachment => attachment.filename === 'signature.png')?.inline).toBe(true)
+    expect(attachments.find(attachment => attachment.filename === 'report.pdf')?.inline).toBe(false)
+    expect(state.client.download).toHaveBeenCalledWith('7', '1', { uid: true })
+  })
+})
+
+describe('openAttachment', () => {
+  it('keeps the connection open until the stream ended', async () => {
+    const release = vi.fn()
+    state.client.getMailboxLock.mockResolvedValueOnce({ release })
+    state.client.fetchOne.mockResolvedValue({ uid: 7, bodyStructure })
+    state.client.download.mockResolvedValue({ meta: {}, content: Readable.from([Buffer.from('Hello')]) })
+
+    const opened = await createProtonMailProvider(values()).openAttachment!('INBOX', 7, '2')
+
+    expect(opened).not.toBeNull()
+    expect(opened!.meta).toMatchObject({ filename: 'report.pdf', part: '2' })
+    expect(state.client.logout).not.toHaveBeenCalled()
+
+    expect(await new Response(opened!.stream).text()).toBe('Hello')
+    await vi.waitFor(() => expect(state.client.logout).toHaveBeenCalledOnce())
+    expect(release).toHaveBeenCalledOnce()
+  })
+
+  it('releases the connection when the stream is cancelled', async () => {
+    const release = vi.fn()
+    state.client.getMailboxLock.mockResolvedValueOnce({ release })
+    state.client.fetchOne.mockResolvedValue({ uid: 7, bodyStructure })
+    state.client.download.mockResolvedValue({ meta: {}, content: Readable.from([Buffer.from('Hello')]) })
+
+    const opened = await createProtonMailProvider(values()).openAttachment!('INBOX', 7, '2')
+    await opened!.stream.cancel()
+
+    await vi.waitFor(() => expect(state.client.logout).toHaveBeenCalledOnce())
+    expect(release).toHaveBeenCalledOnce()
+  })
+
+  it('closes the connection of an unconsumed stream', async () => {
+    const release = vi.fn()
+    state.client.getMailboxLock.mockResolvedValueOnce({ release })
+    state.client.fetchOne.mockResolvedValue({ uid: 7, bodyStructure })
+    state.client.download.mockResolvedValue({ meta: {}, content: Readable.from([Buffer.from('Hello')]) })
+
+    const opened = await createProtonMailProvider(values()).openAttachment!('INBOX', 7, '2')
+    await opened!.close()
+
+    expect(state.client.logout).toHaveBeenCalledOnce()
+    expect(release).toHaveBeenCalledOnce()
+  })
+
+  it('refuses a part the attachment parser does not list', async () => {
+    state.client.fetchOne.mockResolvedValue({ uid: 7, bodyStructure })
+
+    await expect(createProtonMailProvider(values()).openAttachment!('INBOX', 7, '1')).resolves.toBeNull()
+    expect(state.client.download).not.toHaveBeenCalled()
+    expect(state.client.logout).toHaveBeenCalledOnce()
+  })
+
+  it('returns null when the message has no body structure', async () => {
+    state.client.fetchOne.mockResolvedValue({ uid: 7 })
+
+    await expect(createProtonMailProvider(values()).openAttachment!('INBOX', 7, '2')).resolves.toBeNull()
+    expect(state.client.logout).toHaveBeenCalledOnce()
   })
 })
 

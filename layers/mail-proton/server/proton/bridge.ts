@@ -106,6 +106,15 @@ async function connect(settings: ProtonSettings): Promise<ImapFlow> {
   return client
 }
 
+/**
+ * Opens a connection the caller closes itself. A streaming download must keep
+ * the connection (and its mailbox lock) until the stream ends, so it cannot use
+ * `withProtonBridge`, which logs out as soon as its callback returns.
+ */
+export async function openProtonConnection(settings: ProtonSettings): Promise<ImapFlow> {
+  return connect(settings)
+}
+
 /** Opens and closes a connection to verify the settings. */
 export async function testProtonConnection(settings: ProtonSettings): Promise<void> {
   const client = await connect(settings)

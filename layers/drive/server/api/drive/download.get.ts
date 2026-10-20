@@ -2,8 +2,9 @@ import { sendWebResponse } from 'h3'
 import type { H3Event } from 'h3'
 import { defineEventHandler, getRequestHeader, getValidatedQuery } from 'nuxt/server'
 import { baseName } from '../../../shared/drive-path'
-import { matchesEtag } from '../../../shared/drive-preview'
-import { driveFileResponse, PRIVATE_CACHE } from '../../utils/drive-file'
+import { matchesEtag } from '../../../../core/shared/file-preview'
+import { PRIVATE_CACHE } from '../../../../core/server/utils/file-response'
+import { driveFileResponse } from '../../utils/drive-file'
 
 // Streams the selected entries back; a single file as itself, several as a zip.
 // The headers, including the preview policy, are built by driveFileResponse.

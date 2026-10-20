@@ -1,13 +1,16 @@
-import type { FetchMessageObject, SearchObject } from 'imapflow'
+import type { FetchMessageObject, ImapFlow, SearchObject } from 'imapflow'
 import { simpleParser } from 'mailparser'
+import { Readable } from 'node:stream'
 import type { SetupValues } from '../../../core/shared/types/setup'
 import type { MailProvider } from '../../../mail/server/utils/mail-provider'
 import type { Mailbox, MailMessage, MailMessageState, MailSearch, MailStreamHeader, MailSummary } from '../../../mail/shared/types/mail'
+import { attachmentsFromStructure, contentIdsFromHtml, normalizeContentId, type MailPartStructure } from '../../../mail/shared/mail-attachments'
+import { baseMimeType } from '../../../core/shared/mime'
 import { mailStreamFlags, parseRawStreamHeaders } from '../../../mail/shared/mail-thread'
 import { labelMailbox } from '../../../mail/shared/mail-labels'
 import { sequenceRange, uidPage } from './sequence'
 import { isProtonLabel, protonSpecialUse } from './special-use'
-import { toMailAddresses, toMailSummary, toProtonSettings, isMailboxExistsError, isMailboxNotFoundError, withProtonBridge, withProtonMailbox } from './bridge'
+import { toMailAddresses, toMailSummary, toProtonSettings, isMailboxExistsError, isMailboxNotFoundError, openProtonConnection, withProtonBridge, withProtonMailbox } from './bridge'
 import { sendProtonMail } from './mailer'
 
 const MESSAGE_QUERY = { uid: true, flags: true, envelope: true, internalDate: true } as const
@@ -15,42 +18,58 @@ const INDEX_SOURCE_BYTES = 256 * 1024
 /** The only headers the stream backfill needs; the body is never fetched */
 const STREAM_HEADERS = ['list-id', 'list-unsubscribe', 'precedence', 'auto-submitted']
 
-/** File extensions for the media types a mail usually carries */
-const MIME_EXTENSIONS: Record<string, string> = {
-  'application/json': 'json',
-  'application/msword': 'doc',
-  'application/octet-stream': 'bin',
-  'application/pdf': 'pdf',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
-  'application/zip': 'zip',
-  'image/gif': 'gif',
-  'image/jpeg': 'jpg',
-  'image/png': 'png',
-  'image/svg+xml': 'svg',
-  'image/webp': 'webp',
-  'text/calendar': 'ics',
-  'text/csv': 'csv',
-  'text/html': 'html',
-  'text/plain': 'txt',
-  'video/mp4': 'mp4'
-}
-
-/** The media type without its parameters, lower-cased */
-function baseContentType(contentType: string | undefined): string {
-  return (contentType ?? 'application/octet-stream').split(';')[0]!.trim().toLocaleLowerCase()
-}
-
-/** A part without a filename gets `attachment-<n>.<ext>`, derived from its media type */
-export function attachmentFileName(filename: string | undefined, contentType: string | undefined, index: number): string {
-  const name = filename?.trim()
-  if (name) {
-    return name
+/** The first text/html body part, whose `cid:` references decide what is inline. */
+function htmlPart(node: MailPartStructure): string | undefined {
+  if (baseMimeType(node.type) === 'message/rfc822') {
+    return undefined
   }
-  const type = baseContentType(contentType)
-  const subtype = type.split('/')[1]?.replace(/[^a-z0-9]+/g, '') || 'bin'
-  const extension = MIME_EXTENSIONS[type] ?? subtype
-  return `attachment-${index + 1}.${extension}`
+  if (baseMimeType(node.type) === 'text/html') {
+    return node.part
+  }
+  for (const child of node.childNodes ?? []) {
+    const part = htmlPart(child)
+    if (part) {
+      return part
+    }
+  }
+  return undefined
+}
+
+/** Whether any part carries a Content-ID, i.e. whether the HTML can matter. */
+function hasContentId(node: MailPartStructure): boolean {
+  if (baseMimeType(node.type) === 'message/rfc822') {
+    return false
+  }
+  if (node.id) {
+    return true
+  }
+  return (node.childNodes ?? []).some(child => hasContentId(child))
+}
+
+async function downloadText(client: ImapFlow, uid: number, part: string): Promise<string | undefined> {
+  const download = await client.download(String(uid), part, { uid: true })
+  if (!download.content) {
+    return undefined
+  }
+  return new Response(Readable.toWeb(download.content) as ReadableStream<Uint8Array>).text()
+}
+
+/**
+ * The Content-IDs mailparser found in the body. It rewrites `cid:` to `data:`
+ * in `html`, so `related`/`cid` is the reliable source for the parsed message.
+ */
+function referencedContentIds(attachments: Array<{ related?: boolean, cid?: string }>): Set<string> {
+  const ids = new Set<string>()
+  for (const attachment of attachments) {
+    if (!attachment.related) {
+      continue
+    }
+    const id = normalizeContentId(attachment.cid)
+    if (id) {
+      ids.add(id)
+    }
+  }
+  return ids
 }
 
 async function toMailMessage(mailbox: string, message: FetchMessageObject): Promise<MailMessage> {
@@ -65,6 +84,8 @@ async function toMailMessage(mailbox: string, message: FetchMessageObject): Prom
     autoSubmitted: parsed.headers.get('auto-submitted')
   })
 
+  const attachments = attachmentsFromStructure(message.bodyStructure, referencedContentIds(parsed.attachments))
+
   return {
     ...summary,
     ...stream,
@@ -76,7 +97,9 @@ async function toMailMessage(mailbox: string, message: FetchMessageObject): Prom
     replyTo: toMailAddresses(parsed.replyTo),
     text: parsed.text,
     html: parsed.html || undefined,
-    hasAttachment: parsed.attachments.length > 0
+    attachments,
+    // Inline images (signature logos, tracking pixels) belong to the body, not to the attachment list
+    hasAttachment: attachments.some(attachment => !attachment.inline)
   }
 }
 
@@ -251,6 +274,100 @@ export function createProtonMailProvider(values: SetupValues): MailProvider {
     })
   }
 
+  /** The attachment metadata of one message, fetched without its body bytes. */
+  const listAttachments: NonNullable<MailProvider['listAttachments']> = (mailbox, uid) => {
+    return withProtonMailbox(settings, mailbox, async (client) => {
+      const message = await client.fetchOne(String(uid), { bodyStructure: true }, { uid: true })
+      if (!message || !message.bodyStructure) {
+        return []
+      }
+
+      // A signature logo only says inline through the body's cid: reference, so
+      // read the small HTML body part when the structure has any Content-ID.
+      const part = hasContentId(message.bodyStructure) ? htmlPart(message.bodyStructure) : undefined
+      const html = part ? await downloadText(client, uid, part) : undefined
+
+      return attachmentsFromStructure(message.bodyStructure, contentIdsFromHtml(html))
+    })
+  }
+
+  /**
+   * Streams one attachment part. The connection is opened here, not by
+   * withProtonMailbox: it has to stay (and keep the mailbox lock) until the
+   * response stream ends, errors or is cancelled.
+   *
+   * N+1 Bridge logins: one part downloads on its own connection. A single
+   * stream cannot be multiplexed safely across the provider's mailbox lock.
+   */
+  const openAttachment: NonNullable<MailProvider['openAttachment']> = async (mailbox, uid, part) => {
+    const client = await openProtonConnection(settings)
+    let lock: { release: () => void } | undefined
+    let content: Readable | undefined
+    let closed = false
+
+    const close = async () => {
+      if (closed) {
+        return
+      }
+      closed = true
+      // An unconsumed download must not keep the socket open while we log out
+      content?.destroy()
+      try {
+        lock?.release()
+      } catch {
+        // The lock is gone either way; logging out still frees the connection
+      } finally {
+        await client.logout().catch(() => client.close())
+      }
+    }
+
+    try {
+      lock = await client.getMailboxLock(mailbox).catch((error) => {
+        throw createError({ status: 404, statusText: `Mailbox "${mailbox}" not found`, cause: error })
+      })
+
+      const message = await client.fetchOne(String(uid), { bodyStructure: true }, { uid: true })
+      if (!message || !message.bodyStructure) {
+        await close()
+        return null
+      }
+
+      // Only a part the same parser lists may be streamed, so a caller cannot
+      // ask for an arbitrary body part (e.g. the HTML or a nested message).
+      const meta = attachmentsFromStructure(message.bodyStructure).find(attachment => attachment.part === part)
+      if (!meta) {
+        await close()
+        return null
+      }
+
+      const download = await client.download(String(uid), part, { uid: true })
+      if (!download.content) {
+        await close()
+        return null
+      }
+
+      content = download.content
+      // Releasing on every way a Node stream can end: end, error, or the close
+      // emitted when Readable.toWeb's cancel() destroys it.
+      const release = () => {
+        void close()
+      }
+      download.content.once('end', release)
+      download.content.once('error', release)
+      download.content.once('close', release)
+
+      return {
+        meta,
+        stream: Readable.toWeb(download.content) as ReadableStream<Uint8Array>,
+        close,
+        uidValidity: client.mailbox && client.mailbox.uidValidity ? String(client.mailbox.uidValidity) : undefined
+      }
+    } catch (error) {
+      await close()
+      throw error
+    }
+  }
+
   return {
     listMailboxes() {
       return withProtonBridge(settings, async (client) => {
@@ -310,30 +427,15 @@ export function createProtonMailProvider(values: SetupValues): MailProvider {
 
     getMessage(mailbox, uid) {
       return withProtonMailbox(settings, mailbox, async (client) => {
-        const message = await client.fetchOne(String(uid), { ...MESSAGE_QUERY, source: true }, { uid: true })
+        const message = await client.fetchOne(String(uid), { ...MESSAGE_QUERY, bodyStructure: true, source: true }, { uid: true })
 
         return message && message.source ? toMailMessage(mailbox, message) : null
       })
     },
 
-    getAttachments(mailbox, uid) {
-      return withProtonMailbox(settings, mailbox, async (client) => {
-        // Attachments live in the source, so this fetches the whole message; the
-        // list and index paths above cap the source, this one must not.
-        const message = await client.fetchOne(String(uid), { ...MESSAGE_QUERY, source: true }, { uid: true })
-        if (!message || !message.source) {
-          return []
-        }
+    listAttachments,
 
-        const parsed = await simpleParser(message.source)
-        return parsed.attachments.map((attachment, index) => ({
-          filename: attachmentFileName(attachment.filename, attachment.contentType, index),
-          contentType: baseContentType(attachment.contentType),
-          size: attachment.size ?? attachment.content.length,
-          content: new Uint8Array(attachment.content)
-        }))
-      })
-    },
+    openAttachment,
 
     listMessageStates(mailbox) {
       return withProtonMailbox(settings, mailbox, async (client) => {
@@ -358,7 +460,7 @@ export function createProtonMailProvider(values: SetupValues): MailProvider {
         }
 
         // The text parts come first; large attachments are cut off
-        for await (const message of client.fetch(uids.join(','), { ...MESSAGE_QUERY, source: { maxLength: INDEX_SOURCE_BYTES } }, { uid: true })) {
+        for await (const message of client.fetch(uids.join(','), { ...MESSAGE_QUERY, bodyStructure: true, source: { maxLength: INDEX_SOURCE_BYTES } }, { uid: true })) {
           if (message.source) {
             messages.push(await toMailMessage(mailbox, message))
           }

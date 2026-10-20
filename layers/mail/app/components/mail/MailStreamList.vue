@@ -3,6 +3,7 @@ import type { MailAddress, MailMessage, MailSummary } from '#layers/mail/shared/
 import type { OwnMailContext } from '#layers/mail/shared/mail-thread'
 import { isTrustedImageSender } from '#layers/mail/shared/mail-images'
 import { entityKey } from '#layers/core/shared/entities'
+import { visibleMailAttachments } from '#layers/mail/shared/mail-attachments'
 import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
 import { formatMailFullDate } from '#layers/mail/app/utils/mail-date'
 
@@ -155,6 +156,10 @@ function recipientLine(value: string): string {
 
 function copyLine(value: string): string {
   return addressLine(messageFor(value)?.cc)
+}
+
+function attachmentsFor(value: string) {
+  return visibleMailAttachments(messageFor(value)?.attachments)
 }
 
 function allowsRemote(value: string): boolean {
@@ -315,6 +320,12 @@ function actionContext(value: string): Record<string, unknown> {
         />
 
         <template v-else-if="messageFor(item.value)">
+          <MailAttachmentList
+            v-if="mailFor(item.value) && attachmentsFor(item.value).length"
+            :attachments="attachmentsFor(item.value)"
+            :mail="mailFor(item.value)!"
+            :service="service"
+          />
           <MailRemoteImages
             :html="messageFor(item.value)?.html"
             :sender="messageFor(item.value)?.from[0]?.address"

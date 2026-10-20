@@ -1,3 +1,5 @@
+import type { FileSourceMeta } from '../../../core/shared/types/file-sources'
+
 export interface MailAddress {
   name?: string
   address?: string
@@ -55,11 +57,7 @@ export interface MailSummary {
 }
 
 /** One attachment of a mail, without its bytes */
-export interface MailAttachment {
-  filename: string
-  contentType: string
-  size: number
-}
+export type MailAttachment = FileSourceMeta
 
 export interface MailMessage extends MailSummary {
   /** RFC 5322 Message-ID; identifies the same mail in several folders/labels */
@@ -84,6 +82,8 @@ export interface MailMessage extends MailSummary {
   replyTo?: MailAddress[]
   text?: string
   html?: string
+  /** Every attachment part, including inline parts embedded in the body */
+  attachments?: MailAttachment[]
 }
 
 /**

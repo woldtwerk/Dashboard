@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { ATTACHMENT_SECURITY_POLICY, documentsFileResponse, inlineSecurityHeaders } from '../server/utils/documents-file'
+import { ATTACHMENT_SECURITY_POLICY, inlineSecurityHeaders } from '../../core/shared/file-preview'
+import { documentsFileResponse } from '../server/utils/documents-file'
 
 function upstream(body = 'bytes', headers: Record<string, string> = {}): Response {
   return new Response(body, { headers })
@@ -33,7 +34,7 @@ describe('documentsFileResponse', () => {
     const result = documentsFileResponse(upstream('pdf', { 'content-type': 'application/pdf' }), { filename: 'report.pdf', inline: true })
 
     expect(result.headers.get('content-type')).toBe('application/pdf')
-    expect(result.headers.get('content-disposition')).toBe('inline; filename="report.pdf"')
+    expect(result.headers.get('content-disposition')).toBe('inline; filename="report.pdf"; filename*=UTF-8\'\'report.pdf')
     expect(result.headers.get('content-security-policy')).toBe('frame-ancestors \'self\'')
     expect(result.headers.get('x-content-type-options')).toBe('nosniff')
   })
@@ -42,7 +43,7 @@ describe('documentsFileResponse', () => {
     const result = documentsFileResponse(upstream('img', { 'content-type': 'image/png' }), { filename: 'scan.png', inline: true })
 
     expect(result.headers.get('content-type')).toBe('image/png')
-    expect(result.headers.get('content-disposition')).toBe('inline; filename="scan.png"')
+    expect(result.headers.get('content-disposition')).toBe('inline; filename="scan.png"; filename*=UTF-8\'\'scan.png')
     expect(result.headers.get('content-security-policy')).toBe('default-src \'none\'; frame-ancestors \'self\'')
   })
 
@@ -51,7 +52,7 @@ describe('documentsFileResponse', () => {
       const result = documentsFileResponse(upstream('<script>', { 'content-type': type }), { filename: 'evil', inline: true })
 
       expect(result.headers.get('content-type')).toBe(type)
-      expect(result.headers.get('content-disposition')).toBe('attachment; filename="evil"')
+      expect(result.headers.get('content-disposition')).toBe('attachment; filename="evil"; filename*=UTF-8\'\'evil')
       expect(result.headers.get('content-security-policy')).toBe(ATTACHMENT_SECURITY_POLICY)
     }
   })
@@ -59,7 +60,7 @@ describe('documentsFileResponse', () => {
   it('keeps a requested download strict even for a PDF', () => {
     const result = documentsFileResponse(upstream('pdf', { 'content-type': 'application/pdf' }), { filename: 'report.pdf' })
 
-    expect(result.headers.get('content-disposition')).toBe('attachment; filename="report.pdf"')
+    expect(result.headers.get('content-disposition')).toBe('attachment; filename="report.pdf"; filename*=UTF-8\'\'report.pdf')
     expect(result.headers.get('content-security-policy')).toBe('sandbox; default-src \'none\'')
   })
 
@@ -67,7 +68,7 @@ describe('documentsFileResponse', () => {
     const result = documentsFileResponse(upstream('x', { 'content-type': 'text/html; evil="</style>"' }), { filename: 'a/../../b.pdf' })
 
     expect(result.headers.get('content-type')).toBe('application/octet-stream')
-    expect(result.headers.get('content-disposition')).toBe('attachment; filename="a_.._.._b.pdf"')
+    expect(result.headers.get('content-disposition')).toBe('attachment; filename="a_.._.._b.pdf"; filename*=UTF-8\'\'a%2F..%2F..%2Fb.pdf')
   })
 
   it('passes the upstream length through', () => {

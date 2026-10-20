@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ContextMenuItem } from '@nuxt/ui'
 import type { MailConversation, MailSummary } from '../shared/types/mail'
 import {
   MAIL_SHORTCUT_KEYS,
+  mailAttachmentTarget,
   mailDoneTarget,
   mailReplyTarget,
   mailShortcutTarget,
@@ -17,6 +18,8 @@ import {
   type MailBatchContextMenuHandlers,
   type MailContextMenuHandlers
 } from '../app/utils/mail-context-menu'
+import { mailAttachmentMenuItems } from '../app/utils/mail-attachment-menu'
+import { registerAttachmentAction, resetAttachmentActions } from '../../core/app/utils/attachment-actions'
 
 const mail = (uid: number, overrides: Partial<MailSummary> = {}): MailSummary => ({
   uid,
@@ -45,6 +48,7 @@ const state = (overrides: Partial<MailShortcutState> = {}): MailShortcutState =>
   selectedMail: null,
   openConversation: null,
   composerOpen: false,
+  previewOpen: false,
   ...overrides
 })
 
@@ -84,6 +88,11 @@ describe('mailShortcutTarget', () => {
     [
       'leaves the composer alone',
       state({ view: 'conversations', selectionCount: 1, selectedMail: onlyMail, openConversation: singleConversation, composerOpen: true }),
+      null
+    ],
+    [
+      'leaves the attachment preview alone',
+      state({ view: 'conversations', openConversation: singleConversation, previewOpen: true }),
       null
     ]
   ]
@@ -169,11 +178,61 @@ describe('mailReplyTarget', () => {
       'leaves the composer alone',
       state({ view: 'conversations', openConversation: singleConversation, composerOpen: true }),
       null
+    ],
+    [
+      'leaves the attachment preview alone',
+      state({ view: 'conversations', openConversation: singleConversation, previewOpen: true }),
+      null
     ]
   ]
 
   it.each(cases)('%s', (_name, input, expected) => {
     expect(mailReplyTarget(input)).toEqual(expected)
+  })
+})
+
+describe('mailAttachmentTarget', () => {
+  const withAttachment = mail(1, { hasAttachment: true })
+  const withoutAttachment = mail(2, { hasAttachment: false })
+  const newestWithAttachment = mail(3, { hasAttachment: true })
+
+  const cases: [name: string, input: MailShortcutState, expected: MailSummary | null][] = [
+    ['previews the open mail in the mails list', state({ view: 'mails', selectedMail: onlyMail }), onlyMail],
+    ['has nothing to preview in the mails list', state({ view: 'mails' }), null],
+    [
+      'takes the newest conversation mail the index says has an attachment',
+      state({
+        view: 'conversations',
+        openConversation: threadConversation,
+        conversationMails: [withAttachment, withoutAttachment, newestWithAttachment]
+      }),
+      newestWithAttachment
+    ],
+    [
+      'falls back to the conversation latest when its mails are not loaded',
+      state({ view: 'conversations', openConversation: conversation([newestWithAttachment]) }),
+      newestWithAttachment
+    ],
+    [
+      'has nothing when no conversation mail has an attachment',
+      state({ view: 'conversations', openConversation: conversation([withoutAttachment]), conversationMails: [withoutAttachment] }),
+      null
+    ],
+    ['has nothing without an open conversation', state({ view: 'conversations' }), null],
+    [
+      'leaves the composer alone',
+      state({ view: 'mails', selectedMail: onlyMail, composerOpen: true }),
+      null
+    ],
+    [
+      'leaves an open preview alone',
+      state({ view: 'mails', selectedMail: onlyMail, previewOpen: true }),
+      null
+    ]
+  ]
+
+  it.each(cases)('%s', (_name, input, expected) => {
+    expect(mailAttachmentTarget(input)).toEqual(expected)
   })
 })
 
@@ -186,7 +245,10 @@ describe('context menu badges', () => {
     'Delete': 'delete',
     'Delete forever': 'delete',
     'Mark as done': 'done',
-    'Mark as not done': 'done'
+    'Mark as not done': 'done',
+    'Preview': 'preview',
+    'Download': 'download',
+    'Save to drive': 'saveAttachment'
   }
 
   // The options the two lists really pass: a mail's menu and a conversation's
@@ -213,10 +275,28 @@ describe('context menu badges', () => {
       : [])
   }
 
+  afterEach(() => {
+    resetAttachmentActions()
+  })
+
   it('badges each action with exactly the keys the page binds', () => {
+    registerAttachmentAction({
+      id: 'contract-save',
+      label: 'Save to drive',
+      icon: 'i-lucide-hard-drive',
+      kbds: [...MAIL_SHORTCUT_KEYS.saveAttachment],
+      run: vi.fn()
+    })
+
+    const attachmentEntries = badged(mailAttachmentMenuItems(
+      { source: 'mail', ref: 'mail:mail-1:INBOX%2F7', attachments: [{ filename: 'a.pdf', contentType: 'application/pdf', size: 1, part: '1' }] },
+      { preview: vi.fn(), download: vi.fn(), action: vi.fn() }
+    ))
+
     const entries = [
       ...OPTIONS.flatMap(options => badged(mailContextMenuItems({ unread: false }, options, handlers()))),
-      ...OPTIONS.flatMap(options => badged(mailBatchContextMenuItems('2 mails', options, batchHandlers())))
+      ...OPTIONS.flatMap(options => badged(mailBatchContextMenuItems('2 mails', options, batchHandlers()))),
+      ...attachmentEntries
     ]
 
     expect(entries.length).toBeGreaterThan(0)
@@ -231,6 +311,10 @@ describe('context menu badges', () => {
     for (const [action, keys] of byAction) {
       expect([...keys].sort()).toEqual([...MAIL_SHORTCUT_KEYS[action]].sort())
     }
-    expect([...byAction.keys()].sort()).toEqual(Object.keys(MAIL_SHORTCUT_KEYS).sort())
+
+    // The preview's own keys are tooltips, not menu entries; every other key
+    // must be advertised by a menu entry.
+    const previewOnly: MailShortcutAction[] = ['previewPrevious', 'previewNext', 'closePreview']
+    expect([...byAction.keys(), ...previewOnly].sort()).toEqual(Object.keys(MAIL_SHORTCUT_KEYS).sort())
   })
 })

@@ -10,6 +10,8 @@ const props = withDefaults(defineProps<{
   service: string
   title?: string
   confirmLabel?: string
+  /** Where the picker opens; defaults to My files */
+  initialPath?: string
   /** Paths that cannot be a target, e.g. the folder being moved */
   exclude?: string[]
 }>(), {
@@ -44,7 +46,7 @@ async function load() {
 
 watch(open, (value) => {
   if (value) {
-    path.value = '/my-files'
+    path.value = props.initialPath || '/my-files'
     load()
   }
 })
