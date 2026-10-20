@@ -8,6 +8,7 @@
     "@allmight/core": "workspace:*",
     "@nuxt/ui": "catalog:",
     "@vueuse/core": "catalog:",
+    "drizzle-orm": "catalog:",
     "tsdav": "catalog:",
     "zod": "catalog:"
   },

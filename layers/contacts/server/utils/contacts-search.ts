@@ -3,11 +3,10 @@ import { matchContact } from '../../app/utils/contacts'
 
 /** Contacts of one service (or one address book) that match the free-text query */
 export async function listServiceContacts(service: string, addressBook: string | undefined, q: string | undefined): Promise<Contact[]> {
-  const provider = await useContactsProvider(service)
-  const books = addressBook ? [addressBook] : (await provider.listAddressBooks()).map(item => item.url)
-  const lists = await Promise.all(books.map(url => provider.listContacts(url)))
+  await ensureContactsSynced(service)
+  const contacts = await cachedContacts(service, addressBook)
 
-  return lists.flat()
+  return contacts
     .filter(contact => matchContact(contact, q ?? ''))
     .map(item => ({ ...item, service }))
 }

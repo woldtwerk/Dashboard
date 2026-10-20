@@ -23,10 +23,25 @@ function toDavSettings(values: SetupValues): DavSettings {
   }
 }
 
+/** An address book with the collection state the sync diffs against. */
+export interface RemoteAddressBook extends AddressBook {
+  ctag?: string
+  syncToken?: string
+}
+
+/** One card as the sync sees it; `data` is the raw vCard. */
+export interface RemoteCard {
+  url: string
+  etag?: string
+  data: string
+}
+
 /** Port a contacts adapter implements; the generic CardDAV one is below. */
 export interface ContactsProvider {
-  listAddressBooks(): Promise<AddressBook[]>
-  listContacts(addressBookUrl: string): Promise<Contact[]>
+  listAddressBooks(): Promise<RemoteAddressBook[]>
+  fetchCards(addressBookUrl: string): Promise<RemoteCard[]>
+  /** The single card at that URL; used after a write and by the update check */
+  fetchCard(addressBookUrl: string, url: string): Promise<RemoteCard | undefined>
   createContact(addressBookUrl: string, input: ContactInput): Promise<Contact>
   updateContact(contact: Contact, input: ContactInput): Promise<void>
   deleteContact(contact: Contact): Promise<void>
@@ -59,12 +74,23 @@ function toText(value: unknown): string | undefined {
   return undefined
 }
 
-function toAddressBook(collection: DAVAddressBook): AddressBook {
+function toAddressBook(collection: DAVAddressBook): RemoteAddressBook {
   return {
     url: collection.url,
     name: toText(collection.displayName) ?? collection.url.split('/').filter(Boolean).at(-1) ?? 'Contacts',
-    description: toText(collection.description)
+    description: toText(collection.description),
+    ctag: toText(collection.ctag),
+    syncToken: toText(collection.syncToken)
   }
+}
+
+/** tsdav returns the card data and etag together; a card without data is skipped. */
+function toRemoteCard(card: { url: string, etag?: string, data?: unknown }): RemoteCard | undefined {
+  if (card.data === undefined || card.data === null || card.data === '') {
+    return undefined
+  }
+
+  return { url: card.url, etag: card.etag, data: String(card.data) }
 }
 
 function checkResponse(response: Response, action: string): void {
@@ -115,21 +141,26 @@ export function createCardDavProvider(values: SetupValues): ContactsProvider {
    * multiget filter returns other cards too; taking the first of them would
    * let the edit overwrite an unrelated contact, so a miss is a 404.
    */
-  async function fetchCard(client: DavClient, addressBook: DAVAddressBook, url: string, expectedUid: string) {
+  async function cardAt(client: DavClient, addressBook: DAVAddressBook, url: string): Promise<RemoteCard | undefined> {
     const cards = await client.fetchVCards({ addressBook, objectUrls: [url], urlFilter: () => true })
     const card = cards.find(item => sameResolvedUrl(addressBook.url, url, item.url))
-    if (!card || !card.data) {
+
+    return card ? toRemoteCard(card) : undefined
+  }
+
+  async function fetchCardForUpdate(client: DavClient, addressBook: DAVAddressBook, url: string, expectedUid: string): Promise<RemoteCard> {
+    const card = await cardAt(client, addressBook, url)
+    if (!card) {
       throw createError({ status: 404, statusText: 'Contact not found' })
     }
 
-    const data = String(card.data)
     // A card without a UID is identified by its object URL, which the match above already checked
-    const uid = readVCardUid(data)
+    const uid = readVCardUid(card.data)
     if (uid !== undefined && uid !== expectedUid) {
       throw createError({ status: 409, statusText: 'The contact at that URL is not the expected one' })
     }
 
-    return { data, etag: card.etag }
+    return card
   }
 
   return {
@@ -137,15 +168,23 @@ export function createCardDavProvider(values: SetupValues): ContactsProvider {
       return (await addressBookList()).map(toAddressBook)
     },
 
-    async listContacts(addressBookUrl) {
+    async fetchCards(addressBookUrl) {
       const client = await connect()
       const addressBook = await resolve(addressBookUrl)
       const cards = await client.fetchVCards({ addressBook, urlFilter: () => true })
 
-      return cards.map((card) => {
-        const parsed = parseVCard(String(card.data ?? ''))
-        return { ...parsed, uid: parsed.uid || card.url, url: card.url, etag: card.etag, addressBook: addressBook.url }
+      return cards.flatMap((card) => {
+        const remote = toRemoteCard(card)
+        return remote ? [remote] : []
       })
+    },
+
+    async fetchCard(addressBookUrl, url) {
+      const client = await connect()
+      const addressBook = await resolve(addressBookUrl)
+      const trusted = trustedObjectUrl(addressBook, url)
+
+      return cardAt(client, addressBook, trusted)
     },
 
     async createContact(addressBookUrl, input) {
@@ -168,7 +207,7 @@ export function createCardDavProvider(values: SetupValues): ContactsProvider {
       const client = await connect()
       const addressBook = await resolve(contact.addressBook)
       const url = trustedObjectUrl(addressBook, contact.url)
-      const existing = await fetchCard(client, addressBook, url, contact.uid)
+      const existing = await fetchCardForUpdate(client, addressBook, url, contact.uid)
       const data = patchVCard(existing.data, input, displayName(input))
 
       const response = await client.updateVCard({
