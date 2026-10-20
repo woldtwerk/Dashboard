@@ -21,7 +21,7 @@ export interface DriveProvider {
   list(path: string): Promise<DriveEntry[]>
   info(path: string): Promise<DriveEntry>
   createFolder(parentPath: string, name: string): Promise<void>
-  /** Streams an upload (multipart body) into `path` */
+  /** Streams an upload (multipart body) into the folder at `path` */
   upload(path: string, upload: DriveUpload): Promise<void>
   /** Streams the selected entries back as an archive or a single file */
   download(paths: string[]): Promise<Response>

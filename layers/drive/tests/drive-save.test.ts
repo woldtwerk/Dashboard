@@ -1,7 +1,16 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DriveFileHistory, DriveSavePort } from '../server/utils/drive-save'
-import { saveFilesToDrive, uploadBody } from '../server/utils/drive-save'
+import { createDriveSavePort, saveFilesToDrive, uploadBody } from '../server/utils/drive-save'
 import { sha256Hex } from '../shared/drive-upload'
+
+vi.mock('../server/utils/drive-cache', () => ({
+  affectedPaths: vi.fn(() => ['/my-files/Public/salsa']),
+  invalidateDriveListings: vi.fn()
+}))
+
+vi.mock('../server/utils/drive-events', () => ({
+  publishDriveChange: vi.fn()
+}))
 
 const encoder = new TextEncoder()
 
@@ -61,6 +70,27 @@ describe('uploadBody', () => {
     expect(contentLength).toBe(String(body.byteLength))
     expect(boundary).toBeTruthy()
     expect(new TextDecoder().decode(body)).toContain(`--${boundary}`)
+  })
+})
+
+describe('createDriveSavePort', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('uploads into the folder, not into a path named after the file', async () => {
+    const upload = vi.fn(async (_path: string, _upload: unknown) => {})
+    vi.stubGlobal('useDriveProvider', () => Promise.resolve({ upload }))
+
+    await createDriveSavePort().upload('drive-1', '/my-files/Public/salsa', {
+      name: 'clip.mp4',
+      contentType: 'video/mp4',
+      content: encoder.encode('video')
+    })
+
+    expect(upload).toHaveBeenCalledTimes(1)
+    // The provider takes the target folder; the file name travels in the multipart body
+    expect(upload.mock.calls[0]?.[0]).toBe('/my-files/Public/salsa')
   })
 })
 

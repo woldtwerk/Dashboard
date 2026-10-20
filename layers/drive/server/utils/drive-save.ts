@@ -92,10 +92,9 @@ export function createDriveSavePort(): DriveSavePort {
 
     async upload(service, folder, file) {
       const provider = await useDriveProvider(service)
-      const path = joinPath(folder, file.name)
       const body = await uploadBody(file.name, file.contentType, file.content)
 
-      await provider.upload(path, {
+      await provider.upload(folder, {
         stream: bytesStream(body.body),
         contentType: body.contentType,
         contentLength: body.contentLength
