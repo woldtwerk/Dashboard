@@ -106,6 +106,48 @@ of its own.
 - Name generic components after what they render, not after the first page
   that used them.
 
+## Tests
+
+A test earns its place by catching a bug a reasonable refactor could
+introduce. Write few, and test behaviour, not the source restated.
+
+Test:
+- domain rules and their edge cases, parsers and serializers, query/filter
+  building including escaping
+- security: validation, sanitizing, injection, auth, response headers
+- data loss, undo, optimistic rollback, idempotency, concurrency and locks
+- a regression test for every bug fix
+- contract tests where two places must agree (shortcut keys ↔ menu `kbds`,
+  emitted filter fields ↔ `filterableAttributes`)
+
+Do not test:
+- copy, labels, toasts, tooltips, prompt wording, icon names, colour tokens —
+  assert the branch or state that was chosen, not the string
+- constants, defaults objects, limits or lookup tables compared with
+  themselves or a literal; anything `satisfies`/the compiler already enforces
+- library or framework behaviour: zod basics (`min`, `max`, `enum`,
+  `optional`), Intl, date-fns, ical.js, markdown-it, base64, SHA-256, drizzle
+  CRUD without a rule of its own
+- trivial code: renaming mappers, filters, passthroughs, getters, empty input
+  → empty output, `undefined` → `undefined`
+- pure wiring: "the mock was called with what the code obviously passes"
+- registry boilerplate (register / order / replace / reset) per registry
+- benchmarks or timing in the unit suite
+
+How:
+- One test per branch. Symmetric cases go into one `it.each` table with one
+  row per distinct branch, not one row per keyword.
+- Test a rule once, at the lowest level. A wrapper, a `*Many` variant or a
+  route gets at most one test proving the rule is wired in.
+- No happy-path "accepts a well-formed X" when a boundary test already has a
+  passing case.
+- Call production code, never a copy of it; extract a function first if it is
+  not reachable.
+- DB tests build their tables from the real migrations, never from a
+  hand-written `CREATE TABLE`.
+- Duplicated code makes duplicated tests: move shared logic into one place
+  (usually `core`) and test it there.
+
 
 ## Local data
 
