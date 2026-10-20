@@ -50,6 +50,7 @@ catalog:
   tsdav: ^2.5.0
   typescript: ^6.0.3
   unstorage: ^1.17.5
+  uqr: 0.1.2
   vitest: 4.1.11
   vue-tsc: ^3.3.13
   web-push: 3.6.7

@@ -299,6 +299,9 @@ catalogs:
     unstorage:
       specifier: ^1.17.5
       version: 1.17.5
+    uqr:
+      specifier: 0.1.2
+      version: 0.1.2
     vitest:
       specifier: 4.1.11
       version: 4.1.11
@@ -799,6 +802,36 @@ importers:
       nuxt:
         specifier: 'catalog:'
         version: 4.6.1(f8ab6371222f92aa2ed2a0cab6123ae7)
+
+  layers/payments:
+    dependencies:
+      '@allmight/contacts':
+        specifier: workspace:*
+        version: link:../contacts
+      '@allmight/core':
+        specifier: workspace:*
+        version: link:../core
+      '@allmight/mail':
+        specifier: workspace:*
+        version: link:../mail
+      '@nuxt/ui':
+        specifier: 'catalog:'
+        version: 4.11.3(e7c810f2319f4cba3b2245243452f0d3)
+      '@vueuse/core':
+        specifier: 'catalog:'
+        version: 15.0.0(vue@3.5.43(typescript@6.0.3))
+      drizzle-orm:
+        specifier: 'catalog:'
+        version: 0.45.4
+      nuxt:
+        specifier: 'catalog:'
+        version: 4.6.1(f8ab6371222f92aa2ed2a0cab6123ae7)
+      uqr:
+        specifier: 'catalog:'
+        version: 0.1.2
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
 
   layers/proton-dav:
     dependencies:
@@ -7601,6 +7634,9 @@ packages:
     hasBin: true
     peerDependencies:
       browserslist: '>= 4.21.0'
+
+  uqr@0.1.2:
+    resolution: {integrity: sha512-MJu7ypHq6QasgF5YRTjqscSzQp/W11zoUk6kvmlH+fmWEs63Y0Eib13hYFwAzagRJcVY8WVnlV+eBDUGMJ5IbA==}
 
   uqr@0.1.3:
     resolution: {integrity: sha512-0rjE8iEJe4YmT9TOhwsZtqCMRLc5DXZUI2UEYUUg63ikBkqqE5EYWaI0etFe/5KUcmcYwLih2RND1kq+hrUJXA==}
@@ -15381,6 +15417,8 @@ snapshots:
       browserslist: 4.29.3
       escalade: 3.2.0
       picocolors: 1.1.1
+
+  uqr@0.1.2: {}
 
   uqr@0.1.3: {}
 
