@@ -1,13 +1,16 @@
 import { normalizeEmail } from '../../../core/shared/entities'
 import { dashboardStorage } from '../../../core/server/utils/dashboard'
+import { mergeSenderAddresses } from '../../shared/mail-sender-addresses'
 import type { MailSummary } from '../../shared/types/mail'
+import type { MailSettings } from '../../shared/types/settings'
 
 /** Newest sent mails whose senders count as the account's own addresses */
 const ALIAS_LIMIT = 20
 const OWN_ADDRESSES_TTL_SECONDS = 10 * 60
 const SENT_SPECIAL_USE = '\\sent'
+const IDENTITY_PREFIX = 'mail:identity:'
 
-const cacheKey = (serviceId: string) => `mail:identity:${serviceId}`
+const cacheKey = (serviceId: string) => `${IDENTITY_PREFIX}${serviceId}`
 
 /**
  * The mail account's own address, from the service setup. Every mail connector
@@ -37,11 +40,23 @@ async function sentAddresses(serviceId: string, mailbox: string): Promise<string
     .filter((email): email is string => !!email)
 }
 
+/** Extra From addresses the user added for this account in the mail settings */
+async function manualSenderAddresses(serviceId: string): Promise<string[]> {
+  try {
+    const settings = await getSettings<MailSettings>('mail')
+    return settings.senderAddresses?.[serviceId] ?? []
+  } catch {
+    // Without the settings the sent mail and setup address still stand
+    return []
+  }
+}
+
 /**
- * Every address the account sends from: its login plus the From addresses of
- * its newest sent mail. A forwarded alias (e.g. a Gmail address arriving in
- * Proton) is filed in Sent under that alias, so it counts as own too.
- * Cached for ten minutes, since sent mail changes rarely.
+ * Every address the account sends from: its login, the addresses added by hand
+ * and the From addresses of its newest sent mail. A forwarded alias (e.g. a
+ * Gmail address arriving in Proton) is filed in Sent under that alias, so it
+ * counts as own too. Cached for ten minutes, since sent mail changes rarely;
+ * a changed settings section drops the cache (see `invalidateMailIdentity`).
  */
 export async function mailOwnAddresses(serviceId: string): Promise<string[]> {
   const storage = dashboardStorage()
@@ -54,30 +69,42 @@ export async function mailOwnAddresses(serviceId: string): Promise<string[]> {
     // Without the cache the addresses are resolved again
   }
 
-  const addresses = new Set<string>()
   const account = await mailAccountAddress(serviceId)
-  if (account) {
-    addresses.add(account)
-  }
+  const manual = await manualSenderAddresses(serviceId)
 
+  const sent: string[] = []
   try {
     const mailbox = await sentMailbox(serviceId)
     if (mailbox) {
-      for (const email of await sentAddresses(serviceId, mailbox)) {
-        addresses.add(email)
-      }
+      sent.push(...await sentAddresses(serviceId, mailbox))
     }
   } catch {
-    // The aliases are best effort; the setup address always stands
+    // The sent aliases are best effort; the setup address always stands
   }
 
-  const list = [...addresses]
+  const list = mergeSenderAddresses(account, manual, sent)
   try {
     await storage.setItem(cacheKey(serviceId), list, { ttl: OWN_ADDRESSES_TTL_SECONDS })
   } catch {
     // Best effort: a cache write never makes the request fail
   }
   return list
+}
+
+/**
+ * Drops the cached own-address lists of every account. Manual addresses live in
+ * the `mail` settings section, so a changed section must not keep serving a list
+ * from before it. Every cluster worker receives the settings event and clears
+ * the shared cache; the invalidation is idempotent.
+ */
+export async function invalidateMailIdentity(): Promise<void> {
+  try {
+    const storage = dashboardStorage()
+    const keys = await storage.getKeys(IDENTITY_PREFIX)
+    await Promise.all(keys.map(key => storage.removeItem(key)))
+  } catch {
+    // A stale list expires after ten minutes anyway
+  }
 }
 
 /** The outcome of choosing the From address for a send */

@@ -335,7 +335,8 @@ const conversationsView = computed({
     updateQuery(mailViewToQuery(value ? 'threads' : 'mails'))
     void saveMailSettings({
       trustedImageSenders: mailSettings.value.trustedImageSenders ?? [],
-      listView: value ? 'conversations' : 'mails'
+      listView: value ? 'conversations' : 'mails',
+      senderAddresses: mailSettings.value.senderAddresses ?? {}
     })
   }
 })

@@ -13,8 +13,9 @@ export function useTrustedImageSenders() {
   const trustedImageSenders = computed(() => data.value.trustedImageSenders ?? [])
   const listView = computed<MailListView>(() => data.value.listView === 'conversations' ? 'conversations' : 'mails')
 
+  // The PUT replaces the whole section, so the other mail settings ride along
   function write(trusted: string[], view = listView.value) {
-    return save({ trustedImageSenders: trusted, listView: view })
+    return save({ ...data.value, trustedImageSenders: trusted, listView: view })
   }
 
   /** Trust an address or `@domain`; a duplicate or invalid entry changes nothing */

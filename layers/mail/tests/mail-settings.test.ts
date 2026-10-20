@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { mailSettingsDefaults, mailSettingsSchema, TRUSTED_IMAGE_SENDERS_MAX } from '../server/utils/mail-settings'
+import { SENDER_ADDRESSES_MAX } from '../shared/mail-sender-addresses'
 
 const parse = (value: unknown) => mailSettingsSchema.safeParse(value)
 
 describe('mail settings schema', () => {
-  it('has empty trusted senders and the mails view by default', () => {
-    expect(mailSettingsDefaults).toEqual({ trustedImageSenders: [], listView: 'mails' })
+  it('has no trusted senders or manual addresses and the mails view by default', () => {
+    expect(mailSettingsDefaults).toEqual({ trustedImageSenders: [], listView: 'mails', senderAddresses: {} })
   })
 
   it('accepts addresses and domain entries', () => {
@@ -46,5 +47,43 @@ describe('mail settings schema', () => {
 
     expect(parse({ trustedImageSenders: entries(TRUSTED_IMAGE_SENDERS_MAX), listView: 'mails' }).success).toBe(true)
     expect(parse({ trustedImageSenders: entries(TRUSTED_IMAGE_SENDERS_MAX + 1), listView: 'mails' }).success).toBe(false)
+  })
+})
+
+describe('manual sender addresses', () => {
+  const settings = (senderAddresses: unknown) => ({ trustedImageSenders: [], listView: 'mails', senderAddresses })
+
+  it('defaults to none when the stored section predates the field', () => {
+    const result = parse({ trustedImageSenders: [], listView: 'mails' })
+
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.senderAddresses).toEqual({})
+    }
+  })
+
+  it('accepts a list per account and normalizes every address', () => {
+    const result = parse(settings({ 'mail-1': [' Alias@Example.COM ', 'Me <me@example.com>'] }))
+
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.senderAddresses).toEqual({ 'mail-1': ['alias@example.com', 'me@example.com'] })
+    }
+  })
+
+  it('rejects an entry that is not an email address', () => {
+    const result = parse(settings({ 'mail-1': ['alias@example.com', 'not-an-address'] }))
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toContain('not-an-address')
+    }
+  })
+
+  it('caps the list of one account at the limit', () => {
+    const addresses = (count: number) => Array.from({ length: count }, (_, index) => `alias${index}@example.com`)
+
+    expect(parse(settings({ 'mail-1': addresses(SENDER_ADDRESSES_MAX) })).success).toBe(true)
+    expect(parse(settings({ 'mail-1': addresses(SENDER_ADDRESSES_MAX + 1) })).success).toBe(false)
   })
 })

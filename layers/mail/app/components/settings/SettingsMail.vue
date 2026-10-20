@@ -2,6 +2,14 @@
 import { normalizeTrustedImageSender } from '#layers/mail/shared/mail-images'
 
 const { trustedImageSenders, trust, untrust } = useTrustedImageSenders()
+const { senderAddresses, add: addSender, remove: removeSender } = useMailSenderAddresses()
+const { data: services } = useServices()
+
+const mailServices = computed(() => services.value.filter(service => service.domain === 'mail'))
+
+// The address typed for each account, and the reason the last add failed
+const entries = reactive<Record<string, string>>({})
+const errors = reactive<Record<string, string>>({})
 
 const entry = ref('')
 const error = ref('')
@@ -24,6 +32,17 @@ function add() {
 
 function remove(value: string) {
   void untrust(value)
+}
+
+async function addSenderAddress(serviceId: string) {
+  const problem = await addSender(serviceId, entries[serviceId])
+  if (problem) {
+    errors[serviceId] = problem
+    return
+  }
+
+  errors[serviceId] = ''
+  entries[serviceId] = ''
 }
 </script>
 
@@ -88,6 +107,78 @@ function remove(value: string) {
             @click="add"
           />
         </div>
+      </div>
+    </UCard>
+
+    <UCard>
+      <template #header>
+        <div>
+          <h2 class="font-semibold text-highlighted">
+            Send as
+          </h2>
+          <p class="text-sm text-muted">
+            Proton does not tell the dashboard which aliases an account has. Add an address here and
+            it appears in the From list of new mails and replies. Sending from an address the account
+            does not own fails at the mail server.
+          </p>
+        </div>
+      </template>
+
+      <div class="space-y-6">
+        <div v-for="service in mailServices" :key="service.id" class="space-y-3">
+          <h3 class="text-sm font-medium text-highlighted">
+            {{ service.name }}
+          </h3>
+
+          <div v-if="senderAddresses[service.id]?.length" class="divide-y divide-default">
+            <div
+              v-for="address in senderAddresses[service.id]"
+              :key="address"
+              class="flex items-center justify-between gap-2 py-2"
+            >
+              <span class="min-w-0 truncate text-sm text-highlighted">{{ address }}</span>
+              <UButton
+                label="Remove"
+                icon="i-lucide-x"
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                :aria-label="`Remove ${address}`"
+                @click="removeSender(service.id, address)"
+              />
+            </div>
+          </div>
+          <p v-else class="text-sm text-muted">
+            No extra addresses.
+          </p>
+
+          <div class="flex items-start gap-2">
+            <UFormField
+              label="Add an address"
+              :error="errors[service.id] || undefined"
+              class="min-w-0 flex-1"
+            >
+              <UInput
+                v-model="entries[service.id]"
+                icon="i-lucide-at-sign"
+                placeholder="alias@example.com"
+                class="w-full"
+                @keyup.enter="addSenderAddress(service.id)"
+              />
+            </UFormField>
+            <UButton
+              label="Add"
+              icon="i-lucide-plus"
+              :disabled="!(entries[service.id] ?? '').trim()"
+              class="mt-6"
+              @click="addSenderAddress(service.id)"
+            />
+          </div>
+        </div>
+
+        <p v-if="!mailServices.length" class="text-sm text-muted">
+          No mail account is configured yet.
+        </p>
       </div>
     </UCard>
   </div>
