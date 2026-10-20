@@ -14,7 +14,14 @@ const {
   registerRelationProvider,
   resetRelationProviders
 } = await import('../server/utils/relations')
-const { coreTools } = await import('../server/tools')
+const {
+  CORE_GRAPH_SOURCE_LIMIT,
+  coreTools,
+  graphSources,
+  knownPeopleSources,
+  personSources,
+  relatedSources
+} = await import('../server/tools')
 
 registerDomainTools(coreTools)
 
@@ -69,6 +76,7 @@ describe('core tool registration', () => {
 
     expect(names).toEqual(['find_person', 'get_graph', 'get_related', 'list_known_people'])
     expect(coreTools.every(tool => !tool.writes)).toBe(true)
+    expect(coreTools.every(tool => typeof tool.sources === 'function')).toBe(true)
   })
 })
 
@@ -270,5 +278,132 @@ describe('list_known_people', () => {
       .rejects.toMatchObject({ statusCode: 400 })
     await expect(runDomainTool('list_known_people', { limit: 101 }, context))
       .rejects.toMatchObject({ statusCode: 400 })
+  })
+})
+
+describe('core tool sources', () => {
+  const mailItem = {
+    ref: 'mail:work:INBOX%2F1',
+    type: 'mail' as const,
+    title: 'Subject 1',
+    subtitle: 'Jane <jane@example.com>',
+    date: '2026-10-18T09:00:00Z'
+  }
+
+  it('maps every related item to a row named after its entity type', () => {
+    const sources = relatedSources({
+      groups: [
+        { domain: 'mail', label: 'Mail', truncated: false, items: [mailItem] },
+        {
+          domain: 'calendar',
+          label: 'Calendar',
+          truncated: false,
+          items: [{
+            ref: 'event:work:https%3A%2F%2Fcal.example.com%2Fcal%2Fdefault%7Cuid-1%7C',
+            type: 'event',
+            title: 'Standup'
+          }]
+        },
+        {
+          domain: 'drive',
+          label: 'Drive',
+          truncated: false,
+          items: [{ ref: 'file:drive:%2Fshared-with-me%2FTeam', type: 'file', title: 'Team' }]
+        }
+      ]
+    })
+
+    expect(sources).toEqual([
+      {
+        kind: 'mail',
+        title: 'Subject 1',
+        subtitle: 'Jane <jane@example.com>',
+        date: '2026-10-18T09:00:00Z',
+        link: '/mail?service=work&mailbox=INBOX&uid=1'
+      },
+      {
+        kind: 'event',
+        title: 'Standup',
+        link: '/calendar?event=uid-1&recurrence='
+      },
+      {
+        kind: 'file',
+        title: 'Team',
+        link: '/drive?path=%2Fshared-with-me&item=%2Fshared-with-me%2FTeam'
+      }
+    ])
+  })
+
+  it('falls back to the group domain when an item carries no type', () => {
+    const sources = relatedSources({
+      groups: [{ domain: 'documents', label: 'Documents', truncated: false, items: [{ ref: 'document:paperless:42', title: 'Invoice' }] }]
+    })
+
+    expect(sources).toEqual([{ kind: 'documents', title: 'Invoice', link: '/documents/42?service=paperless' }])
+  })
+
+  it('leaves the link out when a ref cannot be read, and ignores unknown output', () => {
+    expect(relatedSources({ groups: [{ domain: 'mail', label: 'Mail', truncated: false, items: [{ ref: 'nope', type: 'mail', title: 'Broken' }] }] }))
+      .toEqual([{ kind: 'mail', title: 'Broken' }])
+    expect(relatedSources(undefined)).toEqual([])
+    expect(relatedSources({ groups: 'nope' })).toEqual([])
+  })
+
+  it('puts the person in front of the items linked to them', () => {
+    const sources = personSources({
+      person: { key: 'jane@example.com', name: 'Jane Doe', emails: ['jane@example.com'], contacts: [] },
+      groups: [{ domain: 'mail', label: 'Mail', truncated: false, items: [mailItem] }]
+    })
+
+    expect(sources).toEqual([
+      { kind: 'person', title: 'Jane Doe', subtitle: 'jane@example.com', link: '/people/jane%40example.com' },
+      {
+        kind: 'mail',
+        title: 'Subject 1',
+        subtitle: 'Jane <jane@example.com>',
+        date: '2026-10-18T09:00:00Z',
+        link: '/mail?service=work&mailbox=INBOX&uid=1'
+      }
+    ])
+  })
+
+  it('falls back to the address when the person has no name, and keeps the groups of an unknown address', () => {
+    expect(personSources({ person: { key: 'jane@example.com', emails: [], contacts: [] }, groups: [] }))
+      .toEqual([{ kind: 'person', title: 'jane@example.com', link: '/people/jane%40example.com' }])
+    expect(personSources({ person: null, groups: [] })).toEqual([])
+  })
+
+  it('maps the graph nodes with their own type as kind', () => {
+    const sources = graphSources({
+      nodes: [
+        { key: 'person::jane%40example.com', type: 'person', title: 'jane@example.com' },
+        { key: 'mail:work:INBOX%2F1', type: 'mail', title: 'Subject 1' }
+      ]
+    })
+
+    expect(sources).toEqual([
+      { kind: 'person', title: 'jane@example.com', link: '/people/jane%40example.com' },
+      { kind: 'mail', title: 'Subject 1', link: '/mail?service=work&mailbox=INBOX&uid=1' }
+    ])
+  })
+
+  it(`caps the graph rows at ${CORE_GRAPH_SOURCE_LIMIT}`, () => {
+    const nodes = Array.from({ length: CORE_GRAPH_SOURCE_LIMIT + 5 }, (_, index) => ({
+      key: `mail:work:INBOX%2F${index}`,
+      type: 'mail' as const,
+      title: `Subject ${index}`
+    }))
+
+    expect(graphSources({ nodes })).toHaveLength(CORE_GRAPH_SOURCE_LIMIT)
+    expect(graphSources(undefined)).toEqual([])
+  })
+
+  it('maps every known address to a person row', () => {
+    expect(knownPeopleSources({ people: ['alice@example.com', 'bob@example.com'] })).toEqual([
+      { kind: 'person', title: 'alice@example.com', link: '/people/alice%40example.com' },
+      { kind: 'person', title: 'bob@example.com', link: '/people/bob%40example.com' }
+    ])
+    expect(knownPeopleSources({ people: ['alice@example.com', ''] })).toHaveLength(1)
+    expect(knownPeopleSources(undefined)).toEqual([])
   })
 })

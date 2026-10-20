@@ -1,7 +1,7 @@
 import { z } from 'zod'
-import { entityKey, normalizeEmail, parseEntityKey } from '../shared/entities'
+import { entityKey, entityLink, normalizeEmail, parseEntityKey } from '../shared/entities'
 import type { EntityType, RelatedGroup } from '../shared/types/entities'
-import type { DomainTool } from '../shared/types/tools'
+import type { DomainTool, ToolSource } from '../shared/types/tools'
 import { entityGraph, knownAddresses, relatedTo, resolvePerson } from './utils/relations'
 
 /** One related item as a tool client sees it: no bodies, no links, no icons. */
@@ -54,6 +54,96 @@ const refDescription = [
   'Document: `document:<service>:<id>`. File: `file:<service>:<path>`.',
   `Examples: ${REF_EXAMPLES}`
 ].join(' ')
+
+/** A node of the compact graph output, as `get_graph` returns it. */
+export interface CoreToolNode {
+  key: string
+  type: EntityType
+  title: string
+}
+
+/** The compact form of a person, as `find_person` returns it. */
+export interface CoreToolPerson {
+  key: string
+  name?: string
+  emails: string[]
+  contacts: string[]
+}
+
+/**
+ * A source row never shows more than this many graph nodes; the registry caps
+ * every tool's cards, and the graph is the one output that routinely exceeds it.
+ */
+export const CORE_GRAPH_SOURCE_LIMIT = 20
+
+/** One row per related item, named after the entity type it is; the domain it was found in is the fallback. */
+export function relatedSources(output: unknown): ToolSource[] {
+  const groups = (output as { groups?: CoreToolGroup[] } | undefined)?.groups
+  if (!Array.isArray(groups)) {
+    return []
+  }
+
+  return groups.flatMap(group => (group.items ?? []).map((item): ToolSource => {
+    const ref = parseEntityKey(item.ref)
+
+    return {
+      kind: item.type || group.domain,
+      title: item.title || item.ref,
+      ...(item.subtitle ? { subtitle: item.subtitle } : {}),
+      ...(item.date ? { date: item.date } : {}),
+      ...(ref ? { link: entityLink(ref) } : {})
+    }
+  }))
+}
+
+/** The person first, then the items linked to them. */
+export function personSources(output: unknown): ToolSource[] {
+  const person = (output as { person?: CoreToolPerson | null } | undefined)?.person
+  const rows: ToolSource[] = person
+    ? [{
+        kind: 'person',
+        title: person.name || person.key,
+        ...(person.name ? { subtitle: person.key } : {}),
+        link: entityLink({ type: 'person', id: person.key })
+      }]
+    : []
+
+  return [...rows, ...relatedSources(output)]
+}
+
+/** The graph nodes as rows, capped so a large graph does not flood the chat. */
+export function graphSources(output: unknown): ToolSource[] {
+  const nodes = (output as { nodes?: CoreToolNode[] } | undefined)?.nodes
+  if (!Array.isArray(nodes)) {
+    return []
+  }
+
+  return nodes.slice(0, CORE_GRAPH_SOURCE_LIMIT).map((node): ToolSource => {
+    const ref = parseEntityKey(node.key)
+
+    return {
+      kind: node.type,
+      title: node.title || node.key,
+      ...(ref ? { link: entityLink(ref) } : {})
+    }
+  })
+}
+
+/** One row per known address; the service knows no display name for it. */
+export function knownPeopleSources(output: unknown): ToolSource[] {
+  const people = (output as { people?: string[] } | undefined)?.people
+  if (!Array.isArray(people)) {
+    return []
+  }
+
+  return people
+    .filter(address => typeof address === 'string' && address.length > 0)
+    .map(address => ({
+      kind: 'person',
+      title: address,
+      link: entityLink({ type: 'person', id: address })
+    }))
+}
 
 /** A ref that fails validation as a clear 400 before the tool runs */
 const refInput = z.string().trim().min(1)
@@ -110,7 +200,8 @@ export const coreTools: DomainTool[] = [
       const groups = await relatedTo(input.ref, input.limit)
 
       return { groups: compactGroups(groups) }
-    }
+    },
+    sources: relatedSources
   },
   {
     name: 'find_person',
@@ -144,7 +235,8 @@ export const coreTools: DomainTool[] = [
           : null,
         groups: compactGroups(groups)
       }
-    }
+    },
+    sources: personSources
   },
   {
     name: 'get_graph',
@@ -164,7 +256,8 @@ export const coreTools: DomainTool[] = [
         links: graph.links.map(link => ({ source: link.source, target: link.target })),
         truncated: graph.frontier.length > 0
       }
-    }
+    },
+    sources: graphSources
   },
   {
     name: 'list_known_people',
@@ -182,6 +275,7 @@ export const coreTools: DomainTool[] = [
         .slice(0, input.limit)
 
       return { people }
-    }
+    },
+    sources: knownPeopleSources
   }
 ]
