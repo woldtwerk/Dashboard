@@ -20,7 +20,7 @@ concrete todos — files, functions, behaviour, tests to add — with the resear
 and design decisions already made:
 
 ```
-opencode run --auto --session ses_<task> --title "<task>" "<plan>" </dev/null
+opencode run --auto -m 'opencode-go/deepseek-v4.1-flash#high' --session ses_<task> --title "<task>" "<plan>" </dev/null
 ```
 
 - Name the session (`--session` creates it), so the user can watch the run
@@ -36,7 +36,7 @@ opencode run --auto --session ses_<task> --title "<task>" "<plan>" </dev/null
 - Review the diff (correctness, security, this file's rules) and run
   `ddev exec pnpm run lint`, `ddev exec pnpm run typecheck` and the tests.
 - Send findings back as concrete todos with
-  `opencode run --auto --session ses_<task> "<findings>"` until the review
+  `opencode run --auto -m 'opencode-go/deepseek-v4.1-flash#high' --session ses_<task> "<findings>"` until the review
   passes.
 - `--auto` approves every permission opencode asks for, so commits, deploys,
   migrations and deletions still need the user's go-ahead first.
