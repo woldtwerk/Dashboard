@@ -6,6 +6,7 @@ import type { WorkflowValidationError } from '../../../shared/workflow'
 import type { DecisionFallbackType } from '../../utils/decision-fallbacks'
 import type { MimePresetValue } from '../../utils/drive-save'
 import DriveFolderPicker from '#layers/drive/app/components/drive/DriveFolderPicker.vue'
+import { normalizeDriveFolderInput } from '#layers/drive/shared/drive-path'
 import { parseMimeGlobs } from '../../../shared/mime'
 import { acceptForPreset, formatAccept, MIME_PRESETS, mimePresetFor } from '../../utils/drive-save'
 import {
@@ -245,7 +246,8 @@ function setActionType(type: string) {
       service: driveServices.value[0]?.id ?? '',
       folder: '',
       accept: [],
-      conflict: 'rename'
+      conflict: 'rename',
+      checkDuplicates: true
     }
   } else if (type === 'add-tag') {
     node.data.action = { type: 'add-tag', tag: tags.value[0]?.id ?? 0 }
@@ -364,6 +366,26 @@ function setDriveAcceptText(value: string) {
     setDriveField({ accept })
   }
 }
+
+/**
+ * Commits a typed folder, e.g. `Public/salsa` or `/shared-with-me/Invoices`.
+ * A value the drive cannot use stays as typed, so validation shows the error.
+ */
+function setDriveFolder(value: string) {
+  if (action.value?.type !== 'save-to-drive') {
+    return
+  }
+  const typed = value.trim()
+  setDriveField({ folder: normalizeDriveFolderInput(typed) ?? typed })
+}
+
+/** The duplicate check is on unless the action turns it off */
+const driveDuplicatesChecked = computed(() => action.value?.type !== 'save-to-drive' || action.value.checkDuplicates !== false)
+
+/** What the duplicate check does in the state the toggle is in */
+const driveDuplicateHint = computed(() => driveDuplicatesChecked.value
+  ? 'A file already saved here is skipped, by content (even under another name) or by same name and size, so a rerun saves nothing twice.'
+  : 'Every attachment is saved again, even the same bytes. A same-name file is renamed or skipped as set above.')
 
 // --- Fallbacks (when the engine is unsure) ---
 
@@ -824,13 +846,14 @@ function updateFallbackEntry(index: number, entry: DecisionFallback) {
               />
             </UFormField>
 
-            <UFormField label="Folder" description="Missing folders are created. A same-name file of another size is renamed or skipped.">
+            <UFormField label="Folder" description="Missing folders are created. Type a path like Public/salsa or pick one.">
               <div class="flex gap-2">
                 <UInput
                   :model-value="action.folder"
                   placeholder="/my-files/…"
                   class="min-w-0 flex-1 font-mono"
-                  readonly
+                  @change="event => setDriveFolder((event.target as HTMLInputElement).value)"
+                  @blur="event => setDriveFolder((event.target as HTMLInputElement).value)"
                 />
                 <UButton
                   label="Choose"
@@ -870,8 +893,23 @@ function updateFallbackEntry(index: number, entry: DecisionFallback) {
               />
             </UFormField>
 
+            <div class="flex items-start justify-between gap-3">
+              <div class="space-y-1">
+                <p class="text-sm font-medium text-highlighted">
+                  Check for duplicates
+                </p>
+                <p class="text-xs text-muted">
+                  Skip files already saved here, by content (even under another name) or by same name and size.
+                </p>
+              </div>
+              <USwitch
+                :model-value="driveDuplicatesChecked"
+                @update:model-value="value => setDriveField({ checkDuplicates: value })"
+              />
+            </div>
+
             <p class="text-xs text-muted">
-              A file with the same name and size is always skipped, so a rerun saves nothing twice.
+              {{ driveDuplicateHint }}
             </p>
 
             <DriveFolderPicker

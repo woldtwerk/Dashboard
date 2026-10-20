@@ -107,6 +107,11 @@ describe('generic action labels', () => {
     expect(nodeSubtitle(node)).toBe('Choose a drive folder')
   })
 
+  it('says so when a save-to-drive node skips the duplicate check', () => {
+    const node = actionNode({ type: 'save-to-drive', service: 'drive-1', folder: '/my-files/Public', checkDuplicates: false })
+    expect(actionSummary(node.data.action)).toBe('Save attachments to /my-files/Public, no duplicate check')
+  })
+
   it('names a mixed or custom file filter as files', () => {
     expect(attachmentLabel(['video/*', 'image/*'])).toBe('files')
     expect(attachmentLabel(['text/csv'])).toBe('files')

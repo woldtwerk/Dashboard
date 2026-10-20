@@ -7,11 +7,17 @@
 
 export const DRIVE_ROOT = '/'
 
+/** The My files section's root folder, and where a folder typed without one belongs. */
+export const DRIVE_MY_FILES_ROOT = '/my-files'
+
 /** The trash section's root folder; trashing, restoring and purging all change its listing. */
 export const DRIVE_TRASH_ROOT = '/trash'
 
 /** The section that lists the folders shared with the account; accepting an invitation changes it. */
 export const DRIVE_SHARED_ROOT = '/shared-with-me'
+
+/** The section roots a folder may live in; the trash only holds what was deleted. */
+export const DRIVE_FOLDER_ROOTS = [DRIVE_MY_FILES_ROOT, DRIVE_SHARED_ROOT] as const
 
 /** Escapes a name for use as one path segment. */
 export function escapeSegment(name: string): string {
@@ -99,4 +105,28 @@ export function isWithinPath(root: string, path: string): boolean {
   const normalized = normalizePath(path)
   const target = normalizePath(root)
   return normalized === target || normalized.startsWith(`${target}/`)
+}
+
+/**
+ * Turns a typed folder into the absolute path the action stores and checks.
+ * Repeated and trailing slashes go, then a path without a section root is taken
+ * relative to My files, so `Public/salsa` becomes `/my-files/Public/salsa`.
+ * `null` means the value cannot name a folder: nothing at all, a `.`/`..`
+ * segment, or a path in the trash.
+ */
+export function normalizeDriveFolderInput(value: string): string | null {
+  const path = normalizePath(value.trim())
+  const segments = splitPath(path)
+
+  if (!segments.length || segments.some(segment => segment === '.' || segment === '..')) {
+    return null
+  }
+  if (isWithinPath(DRIVE_TRASH_ROOT, path)) {
+    return null
+  }
+  if (DRIVE_FOLDER_ROOTS.some(root => isWithinPath(root, path))) {
+    return path
+  }
+
+  return `${DRIVE_MY_FILES_ROOT}${path}`
 }

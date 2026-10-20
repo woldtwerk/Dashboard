@@ -7,7 +7,7 @@ import type {
   SaveToDriveAction
 } from '../../shared/types/automation'
 import type { MailAttachment } from '../../../mail/shared/types/mail'
-import { joinPath } from '../../../drive/shared/drive-path'
+import { joinPath, normalizeDriveFolderInput } from '../../../drive/shared/drive-path'
 import { sanitizeDriveFileName, sha256Hex, uniqueDriveName } from '../../../drive/shared/drive-upload'
 import type { DriveNameConflict } from '../../../drive/shared/drive-upload'
 import { resolveMimeType } from '../../../core/shared/mime'
@@ -121,12 +121,15 @@ function renderNotify(action: NotifyAction, nodeId: string, values: Record<strin
 }
 
 /**
- * Saves the item's attachments the action accepts into its drive folder. A file
- * whose bytes were already saved into the folder is skipped, whatever its name,
- * so the same video arriving in several mails is stored once. A file already
- * there by name and size is skipped too — that catches files put there by hand.
- * A same-name file of another size is renamed or skipped as the action asks, and
- * no matching file is not an error: there is simply nothing to record.
+ * Saves the item's attachments the action accepts into its drive folder. With the
+ * duplicate check on (the default) a file whose bytes were already saved into the
+ * folder is skipped, whatever its name, so the same video arriving in several mails
+ * is stored once, and a file already there by name and size is skipped too — that
+ * catches files put there by hand. With it off, both skips are gone: the same bytes
+ * are stored again and a same-name file is renamed or skipped as the action asks.
+ * The content record is written either way, so turning the check back on later
+ * knows the file. No matching file is not an error: there is simply nothing to
+ * record.
  */
 async function saveToDrive(
   action: SaveToDriveAction,
@@ -155,13 +158,16 @@ async function saveToDrive(
   }
   const drive = context.drive
   const history = context.driveHistory
+  // A stored graph may hold a hand-written folder, e.g. `Public/salsa`
+  const folder = normalizeDriveFolderInput(action.folder) ?? action.folder
 
-  await drive.ensureFolder(action.service, action.folder)
-  const existing = (await drive.list(action.service, action.folder))
+  await drive.ensureFolder(action.service, folder)
+  const existing = (await drive.list(action.service, folder))
     .filter(entry => entry.type === 'file')
     .map(entry => ({ name: entry.name, size: entry.size ?? 0 }))
 
   const conflict: DriveNameConflict = action.conflict ?? 'rename'
+  const checkDuplicates = action.checkDuplicates !== false
   const paths: string[] = []
 
   for (const file of files) {
@@ -169,23 +175,23 @@ async function saveToDrive(
     const sha256 = await sha256Hex(file.content)
 
     // The same bytes under another name are the same file; do not store them twice
-    if (await history.has(action.service, action.folder, sha256)) {
+    if (checkDuplicates && await history.has(action.service, folder, sha256)) {
       continue
     }
 
-    const name = uniqueDriveName(existing, file.filename, size, conflict)
+    const name = uniqueDriveName(existing, file.filename, size, conflict, checkDuplicates)
     if (!name) {
       continue
     }
 
-    await drive.upload(action.service, action.folder, { name, contentType: file.contentType, content: file.content })
-    const path = joinPath(action.folder, name)
+    await drive.upload(action.service, folder, { name, contentType: file.contentType, content: file.content })
+    const path = joinPath(folder, name)
     paths.push(path)
     // Two attachments of one mail may share a name; the next one must not overwrite this
     existing.push({ name, size })
 
     // Insert right after each upload: a later failure keeps what already succeeded
-    await history.record({ service: action.service, folder: action.folder, sha256, path, size })
+    await history.record({ service: action.service, folder, sha256, path, size })
   }
 
   return paths.length ? { type: 'save-to-drive', service: action.service, paths } : undefined

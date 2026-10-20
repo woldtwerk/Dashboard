@@ -111,13 +111,27 @@ describe('automationActionSchema', () => {
 
     expect(save({})).toBe(true)
     expect(save({ folder: '/my-files/Public/salsa', accept: ['video/*', 'application/pdf'], conflict: 'skip' })).toBe(true)
+    expect(save({ folder: 'Public/salsa' })).toBe(true)
+    expect(save({ checkDuplicates: false })).toBe(true)
     expect(save({ service: '' })).toBe(false)
-    expect(save({ folder: 'my-files/Attachments' })).toBe(false)
+    expect(save({ folder: 'my-files/Attachments' })).toBe(true)
+    expect(save({ folder: '/trash/old' })).toBe(false)
+    expect(save({ folder: '/my-files/../etc' })).toBe(false)
     expect(save({ folder: '' })).toBe(false)
     expect(save({ accept: ['video'] })).toBe(false)
     expect(save({ accept: ['VIDEO/*'] })).toBe(true)
     expect(save({ accept: ['video/mp4', 'image/*'] })).toBe(true)
     expect(save({ conflict: 'overwrite' })).toBe(false)
+  })
+
+  it('defaults the save-to-drive duplicate check on', () => {
+    const parsed = automationActionSchema.parse({
+      type: 'save-to-drive',
+      service: 'drive-1',
+      folder: '/my-files/Attachments'
+    })
+
+    expect(parsed).toMatchObject({ checkDuplicates: true })
   })
 })
 

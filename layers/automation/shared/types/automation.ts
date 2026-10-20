@@ -129,6 +129,11 @@ export interface SaveToDriveAction {
   accept?: string[]
   /** Defaults to `rename`: `name (1).ext`, `name (2).ext`, … */
   conflict?: DriveConflict
+  /**
+   * Skip files already in the folder, by content (even under another name) or by
+   * same name and size. Defaults to true; `false` saves everything again.
+   */
+  checkDuplicates?: boolean
 }
 
 /** Actions every domain understands; the runner handles them itself */

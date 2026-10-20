@@ -26,6 +26,16 @@ describe('uniqueDriveName', () => {
     expect(uniqueDriveName([{ name: 'report.pdf', size: 9 }], 'report.pdf', 10, 'skip')).toBeNull()
   })
 
+  it('takes a same-name file of the same size through the conflict rule when the check is off', () => {
+    const existing = [{ name: 'report.pdf', size: 10 }]
+    expect(uniqueDriveName(existing, 'report.pdf', 10, 'rename', false)).toBe('report (1).pdf')
+    expect(uniqueDriveName(existing, 'report.pdf', 10, 'skip', false)).toBeNull()
+    expect(uniqueDriveName([
+      { name: 'report.pdf', size: 10 },
+      { name: 'report (1).pdf', size: 10 }
+    ], 'report.pdf', 10, 'rename', false)).toBe('report (2).pdf')
+  })
+
   it('recognises an already saved renamed file on a rerun', () => {
     expect(uniqueDriveName([
       { name: 'report.pdf', size: 9 },

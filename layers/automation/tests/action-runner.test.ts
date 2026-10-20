@@ -339,6 +339,47 @@ describe('runActions: save-to-drive', () => {
     expect(applied).toEqual([])
   })
 
+  it('saves the same content again when the duplicate check is off', async () => {
+    const { drive, uploaded } = fakeDrive()
+    const content = attachment('new-name.mp4', 'video/mp4', 'known video')
+    const sha256 = await sha256Hex(content.content)
+    const { history, recorded } = fakeHistory([
+      { service: 'drive-1', folder: '/my-files/Public', sha256, path: '/my-files/Public/old-name.mp4', size: content.size }
+    ])
+
+    const { applied } = await runActions(planned([
+      { type: 'save-to-drive', service: 'drive-1', folder: '/my-files/Public', accept: ['video/*'], checkDuplicates: false }
+    ]), mailItem(), fakeApplier(), saveContext([content], drive, history))
+
+    expect(uploaded.map(file => file.name)).toEqual(['new-name.mp4'])
+    expect(applied).toEqual([{ type: 'save-to-drive', service: 'drive-1', paths: ['/my-files/Public/new-name.mp4'] }])
+    // The row is already there, and the lost race is not an error
+    expect(recorded).toEqual([])
+  })
+
+  it('renames a same-name file of the same size when the duplicate check is off', async () => {
+    const { drive, uploaded } = fakeDrive([{ name: 'clip.mp4', size: 5 }])
+
+    const { applied } = await runActions(planned([
+      { type: 'save-to-drive', service: 'drive-1', folder: '/my-files/Public', accept: ['video/*'], checkDuplicates: false }
+    ]), mailItem(), fakeApplier(), saveContext([attachment('clip.mp4', 'video/mp4', 'video')], drive))
+
+    expect(uploaded.map(file => file.name)).toEqual(['clip (1).mp4'])
+    expect(applied).toEqual([{ type: 'save-to-drive', service: 'drive-1', paths: ['/my-files/Public/clip (1).mp4'] }])
+  })
+
+  it('saves into the normalised path of a hand-written folder', async () => {
+    const { drive, ensured, uploaded } = fakeDrive()
+
+    const { applied } = await runActions(planned([
+      { type: 'save-to-drive', service: 'drive-1', folder: 'Public/salsa/', accept: ['video/*'] }
+    ]), mailItem(), fakeApplier(), saveContext([attachment('clip.mp4', 'video/mp4', 'video')], drive))
+
+    expect(ensured).toEqual(['/my-files/Public/salsa'])
+    expect(uploaded).toEqual([{ folder: '/my-files/Public/salsa', name: 'clip.mp4', contentType: 'video/mp4' }])
+    expect(applied).toEqual([{ type: 'save-to-drive', service: 'drive-1', paths: ['/my-files/Public/salsa/clip.mp4'] }])
+  })
+
   it('records each file right after its own upload, so a later failure keeps the earlier row', async () => {
     const { history, recorded } = fakeHistory()
     let calls = 0

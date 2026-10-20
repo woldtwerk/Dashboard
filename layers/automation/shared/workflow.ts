@@ -17,6 +17,7 @@ import { CHOICE_OTHER } from './types/automation'
 import { isGenericAction, matchesConditions } from './automation'
 import { BUILTIN_VARIABLES, extractActionError, templateVariables } from './extractors'
 import { isMimeGlob } from './mime'
+import { normalizeDriveFolderInput } from '../../drive/shared/drive-path'
 
 /** A decision engine caller; the automation layer injects Laya through this */
 export type WorkflowDecide = (state: string, questions: Record<string, DecisionQuestion>) => Promise<Record<string, DecisionAnswer>>
@@ -278,8 +279,8 @@ export function validateWorkflow(graph: WorkflowGraph, domain?: AutomationDomain
         const folder = action.folder.trim()
         if (!folder) {
           errors.push({ nodeId: node.id, message: 'The save-to-drive action needs a folder' })
-        } else if (!folder.startsWith('/')) {
-          errors.push({ nodeId: node.id, message: 'The save-to-drive folder must be an absolute path' })
+        } else if (!normalizeDriveFolderInput(folder)) {
+          errors.push({ nodeId: node.id, message: 'The save-to-drive folder must be a path like /my-files/Public' })
         }
         for (const glob of action.accept ?? []) {
           if (!isMimeGlob(glob)) {

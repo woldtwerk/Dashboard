@@ -6,6 +6,7 @@ import type { AutomationWorkflow, AutomationWorkflowInput, WorkflowGraph } from 
 import { createDefaultGraph, validateWorkflow } from '../../shared/workflow'
 import { MAX_EXTRACT_PATTERN_LENGTH, VARIABLE_NAME_RE } from '../../shared/extractors'
 import { isMimeGlob } from '../../shared/mime'
+import { normalizeDriveFolderInput } from '../../../drive/shared/drive-path'
 import { automationWorkflows } from '../db/schema'
 import type { AutomationWorkflowRow } from '../db/schema'
 import { forgetWorkflowRuns } from './runs'
@@ -58,11 +59,13 @@ export const automationActionSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('save-to-drive'),
     service: z.string().trim().min(1).max(80),
-    folder: z.string().trim().min(1).max(1000).refine(folder => folder.startsWith('/'), 'The folder must be an absolute path'),
+    folder: z.string().trim().min(1).max(1000)
+      .refine(folder => normalizeDriveFolderInput(folder) !== null, 'The folder must be a path like /my-files/Public'),
     accept: z.array(z.string().trim().max(100).refine(isMimeGlob, 'Expected a media type like video/* or application/pdf'))
       .max(50)
       .optional(),
-    conflict: z.enum(['rename', 'skip']).optional()
+    conflict: z.enum(['rename', 'skip']).optional(),
+    checkDuplicates: z.boolean().default(true)
   })
 ])
 

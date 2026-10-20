@@ -1,11 +1,11 @@
 import type { DriveEntry, DriveOrder, DriveSection, DriveSectionKey, DriveSort } from '../../shared/types/drive'
-import { normalizePath } from '../../shared/drive-path'
+import { DRIVE_MY_FILES_ROOT, DRIVE_SHARED_ROOT, DRIVE_TRASH_ROOT, normalizePath } from '../../shared/drive-path'
 
 /** The three top-level areas of the explorer, in the order their tabs appear. */
 export const DRIVE_SECTIONS: DriveSection[] = [
-  { key: 'my-files', label: 'My files', icon: 'i-lucide-hard-drive', root: '/my-files' },
-  { key: 'shared', label: 'Shared with me', icon: 'i-lucide-users', root: '/shared-with-me', listsInvitations: true },
-  { key: 'trash', label: 'Trash', icon: 'i-lucide-trash-2', root: '/trash', emptyable: true }
+  { key: 'my-files', label: 'My files', icon: 'i-lucide-hard-drive', root: DRIVE_MY_FILES_ROOT },
+  { key: 'shared', label: 'Shared with me', icon: 'i-lucide-users', root: DRIVE_SHARED_ROOT, listsInvitations: true },
+  { key: 'trash', label: 'Trash', icon: 'i-lucide-trash-2', root: DRIVE_TRASH_ROOT, emptyable: true }
 ]
 
 /** The section a path belongs to, defaulting to My files. */

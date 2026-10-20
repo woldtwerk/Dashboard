@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DriveEntry } from '../shared/types/drive'
-import { baseName, breadcrumbs, escapeSegment, isWithinPath, joinPath, parentPath, splitPath, unescapeSegment } from '../shared/drive-path'
+import { baseName, breadcrumbs, escapeSegment, isWithinPath, joinPath, normalizeDriveFolderInput, parentPath, splitPath, unescapeSegment } from '../shared/drive-path'
 import { applySelection, downloadUrl, entryIcon, entryKindLabel, entryVersion, filterEntries, formatDate, formatSize, previewKind, sectionOf, sortEntries, thumbnailAllowed } from '../app/utils/drive'
 
 const file = (name: string, overrides: Partial<DriveEntry> = {}): DriveEntry => ({
@@ -43,6 +43,26 @@ describe('drive paths', () => {
     expect(isWithinPath('/my-files', '/my-files/Docs')).toBe(true)
     expect(isWithinPath('/my-files', '/my-files')).toBe(true)
     expect(isWithinPath('/my-files', '/trash')).toBe(false)
+  })
+})
+
+describe('normalizeDriveFolderInput', () => {
+  it('makes a typed folder a path below a section root', () => {
+    expect(normalizeDriveFolderInput('Public/salsa')).toBe('/my-files/Public/salsa')
+    expect(normalizeDriveFolderInput('/Public/salsa')).toBe('/my-files/Public/salsa')
+    expect(normalizeDriveFolderInput('  /my-files/Public//salsa/  ')).toBe('/my-files/Public/salsa')
+    expect(normalizeDriveFolderInput('/shared-with-me/Invoices')).toBe('/shared-with-me/Invoices')
+    expect(normalizeDriveFolderInput('my-files')).toBe('/my-files')
+  })
+
+  it('rejects a value that cannot name a folder', () => {
+    expect(normalizeDriveFolderInput('')).toBeNull()
+    expect(normalizeDriveFolderInput('   ')).toBeNull()
+    expect(normalizeDriveFolderInput('/')).toBeNull()
+    expect(normalizeDriveFolderInput('./Public')).toBeNull()
+    expect(normalizeDriveFolderInput('/my-files/../etc')).toBeNull()
+    expect(normalizeDriveFolderInput('/trash')).toBeNull()
+    expect(normalizeDriveFolderInput('/trash/old')).toBeNull()
   })
 })
 

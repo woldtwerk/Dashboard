@@ -102,22 +102,25 @@ export function suffixedDriveName(name: string, index: number): string {
 /**
  * The name to upload a file under, or `null` to skip it.
  *
- * A file with the same name and the same size is already there, so it is skipped
- * whatever the conflict rule: a rerun, a retry or a second worker cannot upload
- * it twice. A same-name file of another size is renamed (`name (1).ext`, then
- * `name (2).ext`, …) or skipped, as the action asks.
+ * With `checkDuplicates` on (the default), a file with the same name and the same
+ * size is already there, so it is skipped whatever the conflict rule: a rerun, a
+ * retry or a second worker cannot upload it twice. With it off, that skip does not
+ * happen and a same-name file always goes through the conflict rule. A same-name
+ * file of another size is renamed (`name (1).ext`, then `name (2).ext`, …) or
+ * skipped, as the action asks.
  */
 export function uniqueDriveName(
   existing: ReadonlyArray<ExistingDriveFile>,
   name: string,
   size: number,
-  conflict: DriveNameConflict = 'rename'
+  conflict: DriveNameConflict = 'rename',
+  checkDuplicates = true
 ): string | null {
   const sizes = new Map(existing.map(file => [file.name, file.size]))
   let candidate = name
 
   for (let index = 1; sizes.has(candidate); index++) {
-    if (sizes.get(candidate) === size) {
+    if (checkDuplicates && sizes.get(candidate) === size) {
       return null
     }
     if (conflict === 'skip') {

@@ -76,7 +76,7 @@ export function actionSummary(action: AutomationAction): string {
     case 'notify':
       return 'Send notification'
     case 'save-to-drive':
-      return `Save ${attachmentLabel(action.accept)} to ${driveFolderLabel(action.folder)}`
+      return `Save ${attachmentLabel(action.accept)} to ${driveFolderLabel(action.folder)}${action.checkDuplicates === false ? ', no duplicate check' : ''}`
     case 'add-tag':
       return `Add tag #${action.tag}`
     case 'set-correspondent':

@@ -360,7 +360,8 @@ const attachmentsToDrive: WorkflowTemplate = {
       service: '',
       folder: '',
       accept: [],
-      conflict: 'rename'
+      conflict: 'rename',
+      checkDuplicates: true
     }, 0, 140),
     actionNode('trash', { type: 'trash' }, 0, 280),
     endNode(320, 280)
