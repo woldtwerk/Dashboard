@@ -7,6 +7,7 @@ import {
   buildMoveArgs,
   buildSetShareArgs,
   buildSizeArgs,
+  isRenameLookupMiss,
   parseEntries,
   parseEntry,
   parseInvitations,
@@ -46,6 +47,16 @@ describe('argv building', () => {
   it('accepts or rejects an invitation', () => {
     expect(buildInvitationArgs('uid-1', true)).toEqual(['invitation', 'accept', 'uid-1'])
     expect(buildInvitationArgs('uid-1', false)).toEqual(['invitation', 'reject', 'uid-1'])
+  })
+})
+
+describe('isRenameLookupMiss', () => {
+  it.each([
+    ['  Node not found: Setenta m.SW(1).mp4\n', 'Setenta m.SW(1).mp4', true],
+    ['Node not found: other.mp4', 'Setenta m.SW(1).mp4', false],
+    ['Invalid name: Setenta m.SW(1).mp4', 'Setenta m.SW(1).mp4', false]
+  ])('reads %j for %j as %s', (line, name, expected) => {
+    expect(isRenameLookupMiss(line, name)).toBe(expected)
   })
 })
 

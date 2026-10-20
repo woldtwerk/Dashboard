@@ -2,6 +2,7 @@ import { createError } from 'nuxt/server'
 import type { SetupValues } from '../../../core/shared/types/setup'
 import type { DriveProvider, DriveProviderStatus, DriveUpload } from '../../../drive/server/utils/drive-provider'
 import type { DriveEntry, DriveInvitation, DriveShare } from '../../../drive/shared/types/drive'
+import { baseName, joinPath, parentPath } from '../../../drive/shared/drive-path'
 import { useProtonDriveControl } from './control'
 import {
   buildCopyArgs,
@@ -20,6 +21,7 @@ import {
   buildShareStatusArgs,
   buildSizeArgs,
   buildTrashArgs,
+  isRenameLookupMiss,
   parseEntries,
   parseEntry,
   parseInvitations,
@@ -122,8 +124,28 @@ export function createProtonDriveProvider(_values: SetupValues, serviceId?: stri
       return response
     },
 
-    rename(path, name) {
-      return run(buildRenameArgs(path, name), 'rename the entry')
+    async rename(path, name) {
+      const action = 'rename the entry'
+      const result = await control.command(buildRenameArgs(path, name)).catch(error => fail(action, error))
+
+      if (result.exitCode === 0) {
+        return
+      }
+
+      const message = errorLine(result.stderr)
+      if (isRenameLookupMiss(message, baseName(path))) {
+        // The CLI renames first, then looks the node up again by its old name.
+        const renamed = joinPath(parentPath(path), name)
+        const check = await control.command(buildInfoArgs(renamed)).catch(() => undefined)
+        if (check?.exitCode === 0 && parseEntry(check.stdout, renamed)) {
+          logger?.warn('Proton Drive reported a rename as failed, but the entry has its new name', { path, name })
+          return
+        }
+      }
+
+      const reason = message || `Proton Drive could not ${action}`
+      logger?.error(`Proton Drive could not ${action}`, { error: reason })
+      throw createError({ status: 502, statusText: reason })
     },
 
     move(paths, target) {

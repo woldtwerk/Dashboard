@@ -46,6 +46,16 @@ export function buildRenameArgs(path: string, name: string): string[] {
   return ['filesystem', 'rename', path, name]
 }
 
+/**
+ * Whether a failure line is the CLI looking a renamed node up by its old name.
+ * It renames first and reports `Node not found: <old name>` afterwards, so the
+ * rename has already gone through. The name is compared literally: it may
+ * contain `(`, `.` and spaces.
+ */
+export function isRenameLookupMiss(stderrLine: string, oldName: string): boolean {
+  return stderrLine.trim() === `Node not found: ${oldName}`
+}
+
 export function buildMoveArgs(paths: string[], target: string): string[] {
   return ['filesystem', 'move', ...paths, target]
 }
