@@ -2,6 +2,7 @@ import type { ContextMenuItem } from '@nuxt/ui'
 import type { MailSummary } from '#layers/mail/shared/types/mail'
 import type { ItemActionContext } from '#layers/core/app/utils/item-actions'
 import { entityKey } from '#layers/core/shared/entities'
+import { MAIL_SHORTCUT_KEYS, type MailShortcutAction } from './mail-shortcuts'
 
 /** What the rows of a list do when their context menu is used */
 export interface MailContextMenuHandlers {
@@ -18,11 +19,12 @@ export interface MailContextMenuHandlers {
  */
 export function mailContextMenuItems(
   mail: Pick<MailSummary, 'unread'>,
-  options: { permanent: boolean, deletable?: boolean, kbds?: boolean },
+  options: { permanent: boolean, deletable?: boolean },
   handlers: MailContextMenuHandlers
 ): ContextMenuItem[][] {
-  // A view whose shortcuts differ (or that has none) hides the badges
-  const shortcut = (keys: string[]) => options.kbds === false ? {} : { kbds: keys }
+  // Every entry that names a key gets it from the one place the page binds them,
+  // so a badge cannot advertise a shortcut that does nothing
+  const shortcut = (action: MailShortcutAction) => ({ kbds: [...MAIL_SHORTCUT_KEYS[action]] })
 
   const groups: ContextMenuItem[][] = [
     [{
@@ -33,17 +35,17 @@ export function mailContextMenuItems(
     [{
       label: 'Reply',
       icon: 'i-lucide-reply',
-      ...shortcut(['r']),
+      ...shortcut('reply'),
       onSelect: () => handlers.compose('reply')
     }, {
       label: 'Reply all',
       icon: 'i-lucide-reply-all',
-      ...shortcut(['a']),
+      ...shortcut('replyAll'),
       onSelect: () => handlers.compose('replyAll')
     }, {
       label: 'Forward',
       icon: 'i-lucide-forward',
-      ...shortcut(['f']),
+      ...shortcut('forward'),
       onSelect: () => handlers.compose('forward')
     }],
     [mail.unread
@@ -64,7 +66,7 @@ export function mailContextMenuItems(
     groups.push([{
       label: options.permanent ? 'Delete forever' : 'Delete',
       icon: 'i-lucide-trash-2',
-      ...shortcut(['#']),
+      ...shortcut('delete'),
       ...(options.permanent ? { color: 'error' as const } : {}),
       onSelect: () => handlers.delete()
     }])
@@ -106,6 +108,7 @@ export function mailBatchContextMenuItems(
     groups.push([{
       label: options.permanent ? 'Delete forever' : 'Delete',
       icon: 'i-lucide-trash-2',
+      kbds: [...MAIL_SHORTCUT_KEYS.delete],
       ...(options.permanent ? { color: 'error' as const } : {}),
       onSelect: () => handlers.delete()
     }])

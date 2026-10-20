@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ContextMenuItem } from '@nuxt/ui'
 import { mailBatchContextMenuItems, mailContextMenuItems, mailItemContext, type MailBatchContextMenuHandlers, type MailContextMenuHandlers } from '../app/utils/mail-context-menu'
+import { MAIL_SHORTCUT_KEYS } from '../app/utils/mail-shortcuts'
 
 function handlers(): MailContextMenuHandlers {
   return {
@@ -64,23 +65,15 @@ describe('mailContextMenuItems', () => {
     ])
   })
 
-  it('shows the shortcuts on the answer and delete entries', () => {
+  it('shows the shortcuts the page binds on the answer and delete entries', () => {
     const groups = mailContextMenuItems({ unread: false }, { permanent: false }, handlers())
 
-    expect(groups[1]!.map(item => item.kbds)).toEqual([['r'], ['a'], ['f']])
-    expect(groups[3]![0]!.kbds).toEqual(['#'])
-  })
-
-  it('leaves the shortcuts off when the view does not have them', () => {
-    const groups = mailContextMenuItems({ unread: false }, { permanent: false, kbds: false }, handlers())
-
-    expect(groups.flat().every(item => item.kbds === undefined)).toBe(true)
-    expect(labels(groups)).toEqual([
-      ['Open'],
-      ['Reply', 'Reply all', 'Forward'],
-      ['Mark as unread'],
-      ['Delete']
+    expect(groups[1]!.map(item => item.kbds)).toEqual([
+      [...MAIL_SHORTCUT_KEYS.reply],
+      [...MAIL_SHORTCUT_KEYS.replyAll],
+      [...MAIL_SHORTCUT_KEYS.forward]
     ])
+    expect(groups[3]![0]!.kbds).toEqual([...MAIL_SHORTCUT_KEYS.delete])
   })
 
   it('calls the matching handler for each entry', () => {

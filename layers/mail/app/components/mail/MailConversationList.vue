@@ -173,10 +173,7 @@ function contextItems(conversation: MailConversation): ContextMenuItem[][] {
     {
       permanent: props.isPermanent?.(mail) ?? false,
       // A conversation with several mails has no single mail to delete
-      deletable: conversation.count === 1,
-      // r/a/f only work on the open mail and # deletes the selected mail,
-      // neither of which this view has
-      kbds: false
+      deletable: conversation.count === 1
     },
     {
       open: () => emits('select', conversation.key),

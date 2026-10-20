@@ -2,7 +2,7 @@
 import { useDebounceFn } from '@vueuse/core'
 import type { MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
 import { buildReply, defaultSenderAddress } from '#layers/mail/shared/mail-compose'
-import { isOwnMail, isStreamKey, streamLabel, stripSubjectPrefix, type OwnMailContext } from '#layers/mail/shared/mail-thread'
+import { isStreamKey, latestIncomingMail, streamLabel, stripSubjectPrefix, type OwnMailContext } from '#layers/mail/shared/mail-thread'
 import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
 
 const props = defineProps<{
@@ -106,7 +106,7 @@ const ownAddresses = computed(() => props.addresses.length
   : (props.ownAddress ? [props.ownAddress] : []))
 
 // The reply answers the newest mail that is not the account's own
-const latestIncoming = computed(() => [...(mails.value ?? [])].reverse().find(mail => !isOwnMail(mail, ownContext.value)))
+const latestIncoming = computed(() => latestIncomingMail(mails.value ?? [], ownContext.value))
 
 const pendingMail = computed<MailSummary | null>(() => {
   const draft = pendingReply.value

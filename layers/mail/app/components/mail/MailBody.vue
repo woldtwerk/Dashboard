@@ -23,10 +23,53 @@ const srcdoc = computed(() => props.html && [
 
 const frame = ref<HTMLIFrameElement | null>(null)
 let observer: ResizeObserver | null = null
+let forwarded: { window: Window, handler: (event: KeyboardEvent) => void } | null = null
+
+/** Stop listening to the document that is going away */
+function stopForwarding() {
+  forwarded?.window.removeEventListener('keydown', forwarded.handler)
+  forwarded = null
+}
+
+/**
+ * Clicking the mail body gives it the keyboard: its keydown events stay inside
+ * the frame, so no shortcut of the page would fire. Each key is dispatched on
+ * the parent window again — unless the reader is typing inside the frame.
+ */
+function forwardKeys() {
+  stopForwarding()
+
+  const target = frame.value?.contentWindow
+  if (!target) {
+    return
+  }
+
+  const handler = (event: KeyboardEvent) => {
+    const element = event.target as HTMLElement | null
+    const tag = element?.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || element?.isContentEditable) {
+      return
+    }
+
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: event.key,
+      code: event.code,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      shiftKey: event.shiftKey,
+      altKey: event.altKey,
+      bubbles: true
+    }))
+  }
+
+  target.addEventListener('keydown', handler)
+  forwarded = { window: target, handler }
+}
 
 function disconnect() {
   observer?.disconnect()
   observer = null
+  stopForwarding()
 }
 
 // The document's scrollHeight never reports less than the frame's own viewport, so the
@@ -48,6 +91,8 @@ function observe() {
 
   const doc = frame.value?.contentDocument
   disconnect()
+  // The new document takes the keyboard with it
+  forwardKeys()
   if (!doc?.documentElement) {
     return
   }

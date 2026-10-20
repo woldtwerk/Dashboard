@@ -409,6 +409,11 @@ export function isOwnMail(mail: Pick<MailSummary, 'from' | 'mailbox'>, own: OwnM
   return (own.sentMailboxes ?? []).includes(mail.mailbox)
 }
 
+/** The mail a reply answers: the newest one the account did not send itself, if any */
+export function latestIncomingMail(mails: MailSummary[], own: OwnMailContext = {}): MailSummary | undefined {
+  return [...mails].reverse().find(mail => !isOwnMail(mail, own))
+}
+
 /** How a participant is shown in a conversation; own address becomes "me" */
 export function conversationParticipantLabel(address: MailAddress, ownAddress?: string): string {
   const email = normalizeMailAddress(address.address)

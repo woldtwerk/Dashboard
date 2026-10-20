@@ -21,13 +21,6 @@ const emits = defineEmits<{
   prefetch: [mode: 'reply' | 'replyAll' | 'forward']
 }>()
 
-// r / a / f start a reply, a reply-all or a forward; not while typing in a field
-defineShortcuts({
-  r: () => emits('compose', 'reply'),
-  a: () => emits('compose', 'replyAll'),
-  f: () => emits('compose', 'forward')
-})
-
 const route = useRoute()
 const router = useRouter()
 

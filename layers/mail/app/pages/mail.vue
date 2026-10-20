@@ -8,6 +8,7 @@ import { trashTarget } from '#layers/mail/shared/mail-delete'
 import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
 import type { RetainedConversations, RetainedMail, RetainedMails } from '#layers/mail/app/utils/mail-retention'
 import type { MailBatchAction, MailDeleteBatchResult, MailDeleteUndo, MailMoveBatchResult } from '#layers/mail/app/utils/mail-batch'
+import type { MailShortcutState } from '#layers/mail/app/utils/mail-shortcuts'
 import type { SetupState } from '#layers/core/shared/types/setup'
 import type { MailListView, MailSettings } from '#layers/mail/shared/types/settings'
 
@@ -421,6 +422,39 @@ const selectedConversationKey = computed(() => {
   }
   return conversations.value.some(item => item.key === key) || retainedConversations.value.has(key) ? key : undefined
 })
+
+// What the shortcuts may act on while it is open; the key alone is not enough,
+// a single-mail conversation also needs its mail
+const openConversationSummary = computed<MailConversation | null>(() => {
+  const key = selectedConversationKey.value
+  if (!key) {
+    return null
+  }
+  return conversations.value.find(item => item.key === key)
+    ?? retainedConversations.value.get(key)?.conversation
+    ?? null
+})
+
+// The open conversation's mails, oldest first, for the reply shortcut. The panel
+// asks for the same conversation through the same cache, so this costs no request.
+const openConversationMails = ref<MailSummary[]>([])
+
+watch(selectedConversationKey, async (key) => {
+  openConversationMails.value = []
+  if (!key) {
+    return
+  }
+
+  const account = service.value
+  try {
+    const mails = await loadMailConversation(nuxtApp, requestFetch, account, key)
+    if (service.value === account && selectedConversationKey.value === key) {
+      openConversationMails.value = mails
+    }
+  } catch {
+    // Without the mails, the conversation's newest one stands in for the reply
+  }
+}, { immediate: import.meta.client })
 
 // Keep the open conversation in the list while it is unread-filtered, then let it go
 watch(selectedConversationKey, (key) => {
@@ -1348,25 +1382,60 @@ async function batchSelectedConversations(action: MailBatchAction): Promise<void
   }
 }
 
+// What the shortcuts act on, from the URL and the lists the page already holds
+const shortcutState = computed<MailShortcutState>(() => ({
+  view: showThreads.value ? 'conversations' : 'mails',
+  selectionCount: (showThreads.value ? selectedConversationKeys.value : selectedMailKeys.value).length,
+  selectedMail: selectedMail.value,
+  openConversation: openConversationSummary.value,
+  composerOpen: isComposerOpen.value,
+  conversationMails: openConversationMails.value,
+  own: { ownAddress: ownAddress.value, sentMailboxes: sentMailboxes.value }
+}))
+
 /**
- * # / Delete remove the selected mail, in the list or the reader. A whole
- * conversation is out of scope: with no single mail open there is nothing
- * selected to delete. Backspace does the same; Nuxt UI's defineShortcuts
- * already ignores a focused input, so typing in the search box or the composer
- * never deletes a mail.
+ * # / Delete remove what the shortcut points at: the list's selection, the open
+ * mail, or the only mail of an open conversation, which then closes with it. A
+ * conversation with several mails is out of scope, as in its context menu.
+ * Backspace does the same; Nuxt UI's defineShortcuts already ignores a focused
+ * input, so typing in the search box or the composer never deletes a mail.
  */
-function deleteSelectedMail() {
-  const mail = selectedMail.value
-  if (!mail || isComposerOpen.value) {
+function deleteShortcut() {
+  const target = mailShortcutTarget(shortcutState.value)
+  if (!target) {
     return
   }
-  void deleteMail(mail)
+
+  if (target.kind === 'batch') {
+    if (showThreads.value) {
+      void batchSelectedConversations('delete')
+    } else {
+      void batchSelectedMails('delete')
+    }
+    return
+  }
+
+  if (target.kind === 'conversation' && conversationKey.value === target.key) {
+    closeConversation()
+  }
+
+  void deleteMail(target.mail)
+}
+
+/** r / a / f answer the open mail or the newest mail of the open conversation */
+function composeShortcut(mode: MailComposeMode) {
+  const mail = mailReplyTarget(shortcutState.value)
+  if (!mail) {
+    return
+  }
+  openCompose(mode, mail)
 }
 
 defineShortcuts({
-  '#': deleteSelectedMail,
-  'delete': deleteSelectedMail,
-  'backspace': deleteSelectedMail
+  ...Object.fromEntries(MAIL_SHORTCUT_KEYS.delete.map(key => [key, deleteShortcut])),
+  ...Object.fromEntries(MAIL_SHORTCUT_KEYS.reply.map(key => [key, () => composeShortcut('reply')])),
+  ...Object.fromEntries(MAIL_SHORTCUT_KEYS.replyAll.map(key => [key, () => composeShortcut('replyAll')])),
+  ...Object.fromEntries(MAIL_SHORTCUT_KEYS.forward.map(key => [key, () => composeShortcut('forward')]))
 })
 
 const breakpoints = useBreakpoints(breakpointsTailwind)
