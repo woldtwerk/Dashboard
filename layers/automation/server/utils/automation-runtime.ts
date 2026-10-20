@@ -17,7 +17,7 @@ import { modalRef } from '../../shared/extractors'
 import type { WorkflowBatchResult, WorkflowDecide, WorkflowDecideBatch, WorkflowFallbackDecideBatch } from '../../shared/workflow'
 import { entityKey, parseEntityKey } from '../../../core/shared/entities'
 import { createDocumentsApplier, createMailApplier, toMailActionProvider } from './appliers'
-import { publishModalEvent, publishReviewEvent } from './automation-events'
+import { publishModalEvent, publishReviewEvent, publishReviewNeeded } from './automation-events'
 import type { AutomationApplier, AutomationDeps, AutomationLogger } from './engine'
 import { announceRunNotifications, answerReview, applyRunActions, errorMessage, evaluateCandidates, runService, runWorkflowOnItems, undoPlan } from './engine'
 import { MANUAL_RUN_LOCK_TTL_MS, runManualGroups } from './manual-run'
@@ -36,6 +36,17 @@ import type { FileSourceMeta } from '../../../core/shared/types/file-sources'
 import { getFileSource, readFileSource } from '../../../core/server/utils/file-sources'
 import { affectedPaths, invalidateDriveListings } from '../../../drive/server/utils/drive-cache'
 import { publishDriveChanges, publishDriveTrashChange } from '../../../drive/server/utils/drive-events'
+import {
+  cancelPaymentRequest,
+  createPaymentRequests,
+  getPaymentRequest,
+  markPaid as markPaymentPaid,
+  markUnpaid,
+  openRequestsForMatching,
+  requestForPaymentSource
+} from '../../../payments/server/utils/payment-requests'
+import { sendPaymentRequest } from '../../../payments/server/utils/payment-send'
+import { trustedAuthservIds } from '../../../payments/server/utils/trusted-authserv-ids'
 
 const LOCK_TTL_MS = 5 * 60_000
 // A preview with AI fallbacks asks a language model once per unsure item, so a
@@ -142,6 +153,26 @@ async function itemFiles(item: AutomationItem): Promise<Array<FileSourceMeta & {
   return files
 }
 
+/** The notification a payment action leaves when it cannot confirm a mail */
+async function announcePaymentReview(input: { service: string, itemKey: string, title: string, body: string }): Promise<void> {
+  // The event refreshes the automation badge even if the notification fails
+  try {
+    await publishReviewNeeded(input.service)
+  } catch {
+    // Best-effort, like every other announcement
+  }
+
+  await notify({
+    category: 'automation',
+    title: input.title,
+    body: input.body,
+    to: '/payments',
+    domain: 'automation',
+    service: input.service,
+    dedupeKey: `automation:payment-review:${input.service}:${input.itemKey}`
+  })
+}
+
 /** The ports generic actions need, built for one run */
 function actionContextFor(keepAlive?: () => Promise<boolean>): ActionRunContext {
   return {
@@ -156,7 +187,32 @@ function actionContextFor(keepAlive?: () => Promise<boolean>): ActionRunContext 
           throw new Error('The automation lock was lost while saving to the drive')
         }
       }
-      : undefined
+      : undefined,
+    payments: {
+      async createRequests(service, input, options) {
+        const rows = await createPaymentRequests(service, input, options)
+        return rows.map(row => ({ id: row.id, reference: row.reference, amountCents: row.amountCents }))
+      },
+      async sendRequest(id) {
+        await sendPaymentRequest(id)
+      },
+      openRequests: service => openRequestsForMatching(service),
+      markPaid: (id, input) => markPaymentPaid(id, input),
+      async getRequest(id) {
+        const request = await getPaymentRequest(id)
+        return request ? { status: request.status, paidCents: request.paidCents } : undefined
+      },
+      async paidRequestForSource(service, source) {
+        const request = await requestForPaymentSource(service, source)
+        return request ? { requestId: request.id, reference: request.reference } : undefined
+      }
+    },
+    mailAuthenticationResults: async (service, mailbox, uid) => {
+      const provider = await useMailProvider(service)
+      return await provider.getAuthenticationResults(mailbox, uid)
+    },
+    trustedAuthservIds: trustedAuthservIds(),
+    announcePaymentReview
   }
 }
 
@@ -499,6 +555,25 @@ async function undoAppliedActions(run: AutomationRun, applier: AutomationApplier
   for (const batch of undoBatches(undoPlan(run))) {
     if (batch.kind === 'drive') {
       await trashDrivePaths(batch.service, batch.paths)
+      continue
+    }
+    if (batch.kind === 'payment-cancel') {
+      for (const id of batch.requests) {
+        const request = await getPaymentRequest(id)
+        // A request paid meanwhile stays paid; the cancellation is best-effort
+        if (request?.status === 'open') {
+          await cancelPaymentRequest(id)
+        }
+      }
+      continue
+    }
+    if (batch.kind === 'payment-unpay') {
+      const request = await getPaymentRequest(batch.requestId)
+      // Only the state this run left is reversed: a later payment or a manual
+      // change keeps its money
+      if (request?.status === 'paid' && request.paidCents === batch.paidCents) {
+        await markUnpaid(batch.requestId)
+      }
       continue
     }
     await applier.undo(batch.operations)

@@ -272,6 +272,22 @@ export async function cancelPaymentRequest(id: string): Promise<PaymentRequestRo
   return updated
 }
 
+/**
+ * The request a payment source already landed on. A redelivered bank or mail
+ * payment is recognized by it before any matching, so a closed request is not
+ * reported as an unmatched payment.
+ */
+export async function requestForPaymentSource(service: string, source: string): Promise<PaymentRequestRow | undefined> {
+  const row = await (await useDb())
+    .select({ request: paymentRequests })
+    .from(paymentReceipts)
+    .innerJoin(paymentRequests, eq(paymentReceipts.requestId, paymentRequests.id))
+    .where(and(eq(paymentReceipts.service, service), eq(paymentReceipts.source, source)))
+    .get()
+
+  return row?.request
+}
+
 /** Requests the bank/PayPal matching may still close, optionally of one payee. */
 export async function openRequestsForMatching(service?: string): Promise<OpenRequest[]> {
   const conditions = [

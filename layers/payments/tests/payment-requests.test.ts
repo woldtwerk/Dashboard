@@ -13,7 +13,8 @@ import {
   markPaid,
   markSent,
   markUnpaid,
-  openRequestsForMatching
+  openRequestsForMatching,
+  requestForPaymentSource
 } from '../server/utils/payment-requests'
 import type { PaymentRequestInput } from '../server/utils/payment-requests'
 
@@ -90,6 +91,14 @@ describe('creating payment requests', () => {
       { id: open!.id, reference: open!.reference, amountCents: 1000, payerName: 'Anna Müller' }
     ])
     expect(await openRequestsForMatching('another-payee')).toEqual([])
+  })
+
+  it('finds the request a payment source was already applied to', async () => {
+    const [request] = await createPaymentRequests(SERVICE, [input()])
+    await markPaid(request!.id, { cents: 1000, via: 'paypal', source: 'paypal-mail:mail-1:m1' })
+
+    expect(await requestForPaymentSource(SERVICE, 'paypal-mail:mail-1:m1')).toMatchObject({ id: request!.id })
+    expect(await requestForPaymentSource(SERVICE, 'paypal-mail:mail-1:m2')).toBeUndefined()
   })
 })
 

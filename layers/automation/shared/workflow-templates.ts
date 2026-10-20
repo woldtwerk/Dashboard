@@ -374,6 +374,73 @@ const attachmentsToDrive: WorkflowTemplate = {
   requiresSetup: true
 }
 
+const splitSubscriptionReceipt: WorkflowTemplate = {
+  id: 'mail-split-subscription-receipt',
+  name: 'Split a subscription receipt',
+  description: 'Reads the total from a Spotify receipt, splits it into six shares and asks the payers for their part. Pick the payments service and add the payers on the request action; until you do, the workflow stays invalid and cannot be enabled.',
+  domain: 'mail',
+  icon: 'i-lucide-hand-coins',
+  graph: graph([
+    triggerNode('INBOX', 0, 0),
+    conditionNode('from-spotify', [from('spotify')], 'all', 0, 140),
+    actionNode('extract-total', {
+      type: 'extract',
+      variable: 'amount',
+      extractor: 'regex',
+      pattern: '(?:Gesamt|Total|Summe)[^0-9€]*([0-9.,]+\\s?€|€\\s?[0-9.,]+)',
+      source: 'text'
+    }, 0, 280),
+    actionNode('request-payment', {
+      type: 'request-payment',
+      payee: '',
+      amount: '{{amount}}',
+      title: 'Spotify',
+      shares: 6,
+      payers: [],
+      send: true
+    }, 0, 420),
+    actionNode('notify-payment', {
+      type: 'notify',
+      title: 'Payment requests sent',
+      body: '{{paymentTotal}} split: each pays {{paymentShare}} ({{paymentReferences}})'
+    }, 0, 560),
+    endNode(320, 560)
+  ], [
+    edge('trigger', 'next', 'from-spotify'),
+    edge('from-spotify', 'true', 'extract-total'),
+    edge('from-spotify', 'false', 'end'),
+    edge('extract-total', 'next', 'request-payment'),
+    edge('request-payment', 'next', 'notify-payment'),
+    edge('notify-payment', 'next', 'end')
+  ]),
+  bindings: [],
+  requiresSetup: true
+}
+
+const confirmPaypalPayments: WorkflowTemplate = {
+  id: 'mail-confirm-paypal-payments',
+  name: 'Confirm PayPal payments',
+  description: 'Marks the matching open request paid when a PayPal "money received" mail arrives. Only a mail whose DKIM signature passes for PayPal is trusted; anything else is recorded for you to check on the payments page. Pick the payments service on the action; until you do, the workflow stays invalid.',
+  domain: 'mail',
+  icon: 'i-lucide-badge-euro',
+  graph: graph([
+    triggerNode('INBOX', 0, 0),
+    conditionNode('from-paypal', [from('paypal')], 'all', 0, 140),
+    actionNode('confirm-paypal', {
+      type: 'confirm-paypal-payment',
+      payee: ''
+    }, 0, 280),
+    endNode(320, 280)
+  ], [
+    edge('trigger', 'next', 'from-paypal'),
+    edge('from-paypal', 'true', 'confirm-paypal'),
+    edge('from-paypal', 'false', 'end'),
+    edge('confirm-paypal', 'next', 'end')
+  ]),
+  bindings: [],
+  requiresSetup: true
+}
+
 // --- Document templates ---------------------------------------------------
 const classifyInvoices: WorkflowTemplate = {
   id: 'documents-classify',
@@ -463,6 +530,8 @@ export const workflowTemplates: WorkflowTemplate[] = [
   calendarInvitations,
   loginCodes,
   attachmentsToDrive,
+  splitSubscriptionReceipt,
+  confirmPaypalPayments,
   classifyInvoices,
   taxRelevant
 ]

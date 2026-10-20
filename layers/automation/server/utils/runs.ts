@@ -48,6 +48,7 @@ export function toAutomationRun(row: AutomationRunRow): AutomationRun {
 }
 
 export interface AutomationRunInput {
+  id?: string
   workflow: string
   workflowName: string
   domain: AutomationDomain
@@ -63,7 +64,7 @@ export interface AutomationRunInput {
 }
 
 export async function recordRun(input: AutomationRunInput): Promise<AutomationRun> {
-  const id = randomUUID()
+  const id = input.id ?? randomUUID()
   const at = input.at ?? new Date()
   const db = await automationCacheDb()
 

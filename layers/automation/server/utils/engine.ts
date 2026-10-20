@@ -12,6 +12,7 @@ import type {
   WorkflowRunItemResult
 } from '../../shared/types/automation'
 import { createError } from 'nuxt/server'
+import { randomUUID } from 'node:crypto'
 import { nextAttempt, planUndo, selectActions } from '../../shared/automation'
 import { nodeOutputs, runWorkflowBatch } from '../../shared/workflow'
 import type { PresetDecision, WorkflowDecide, WorkflowDecideBatch, WorkflowFallbackDecideBatch } from '../../shared/workflow'
@@ -43,6 +44,8 @@ export interface AutomationStore {
   /** A transient failure; a null `nextAttemptAt` means the item is given up */
   recordAttempt(domain: AutomationDomain, service: string, itemKey: string, attempts: number, nextAttemptAt: Date | null, now: Date): Promise<void>
   record(input: {
+    /** Set when the actions already carried it, e.g. `workflow:<runId>` in an origin */
+    id?: string
     workflow: string
     workflowName: string
     domain: AutomationDomain
@@ -476,7 +479,7 @@ async function actionContextFor(
   deps: Pick<AutomationDeps, 'actionContext'>,
   domain: AutomationDomain,
   service: string,
-  extra: Pick<ActionRunContext, 'workflow' | 'now'>
+  extra: Pick<ActionRunContext, 'workflow' | 'now' | 'runId'>
 ): Promise<ActionRunContext> {
   return { ...(await deps.actionContext?.(domain, service)), ...extra }
 }
@@ -558,8 +561,10 @@ async function recordWorkflow(
   const applier = await deps.applierFor(domain, service)
 
   try {
-    const { applied } = await runActions(actions, item, applier, await actionContextFor(deps, domain, service, { workflow: workflow.name, now: deps.now }))
+    const runId = randomUUID()
+    const { applied } = await runActions(actions, item, applier, await actionContextFor(deps, domain, service, { workflow: workflow.name, now: deps.now, runId }))
     const run = await deps.store.record({
+      id: runId,
       workflow: workflow.id,
       workflowName: workflow.name,
       domain,
@@ -713,7 +718,7 @@ export async function answerReview(runId: string, output: string, deps: Automati
   const applier = await deps.applierFor(run.domain, run.service)
 
   try {
-    const { applied } = await runActions(result.actions, run.item, applier, await actionContextFor(deps, run.domain, run.service, { workflow: workflow.name, now: deps.now }))
+    const { applied } = await runActions(result.actions, run.item, applier, await actionContextFor(deps, run.domain, run.service, { workflow: workflow.name, now: deps.now, runId }))
     const updated = await deps.store.update(runId, {
       outcome: 'applied',
       path: result.path,
@@ -742,7 +747,7 @@ export async function answerReview(runId: string, output: string, deps: Automati
 
 /** Applies the actions of a suggestion and returns what a reversal needs */
 export async function applyRunActions(run: AutomationRun, applier: AutomationApplier, context: ActionRunContext = {}) {
-  return await runActions(run.actions, run.item, applier, { ...context, workflow: run.workflowName })
+  return await runActions(run.actions, run.item, applier, { ...context, workflow: run.workflowName, runId: run.id })
 }
 
 /**

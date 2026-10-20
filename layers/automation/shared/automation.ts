@@ -17,7 +17,7 @@ import type {
 // --- Actions --------------------------------------------------------------
 
 /** The action types the runner handles itself rather than a domain applier */
-export const GENERIC_ACTION_TYPES = ['extract', 'notify', 'save-to-drive'] as const
+export const GENERIC_ACTION_TYPES = ['extract', 'notify', 'save-to-drive', 'request-payment', 'confirm-paypal-payment'] as const
 
 /**
  * Every action type, as a runtime list the schemas and tests can walk.
@@ -35,7 +35,9 @@ export const ACTION_TYPES = {
   'set-type': true,
   'extract': true,
   'notify': true,
-  'save-to-drive': true
+  'save-to-drive': true,
+  'request-payment': true,
+  'confirm-paypal-payment': true
 } as const satisfies Record<AutomationAction['type'], true>
 
 /** Whether an action is handled by the runner itself rather than a domain applier */
@@ -190,21 +192,38 @@ export function planUndo(applied: AppliedAction[]): UndoOperation[] {
           operations.push({ op: 'drive-trash', service: action.service, paths: action.paths })
         }
         break
+      case 'request-payment':
+        // The mails may already be out; cancelling the open requests is all a
+        // reversal can do, so an undo reports the cancellation rather than a recall.
+        if (action.requestIds.length) {
+          operations.push({ op: 'payment-cancel', requests: action.requestIds })
+        }
+        break
+      case 'confirm-paypal-payment':
+        // Only a payment this run recorded is reversed, and only while the
+        // request still carries the amount the run left on it
+        if (action.outcome === 'paid' && action.requestId && action.paidCents !== undefined) {
+          operations.push({ op: 'payment-unpay', requestId: action.requestId, paidCents: action.paidCents })
+        }
+        break
     }
   }
 
   return operations
 }
 
-/** One step of a reversal: a batch for the domain applier, or the runner's own drive trash */
+/** One step of a reversal: a batch for the domain applier, or the runner's own drive/payment step */
 export type UndoBatch
   = | { kind: 'domain', operations: UndoOperation[] }
     | { kind: 'drive', service: string, paths: string[] }
+    | { kind: 'payment-cancel', requests: string[] }
+    | { kind: 'payment-unpay', requestId: string, paidCents: number }
 
 /**
  * Groups a plan into the work its owner performs, in order: consecutive domain
- * operations stay one applier call, and a drive-trash runs where it stands. The
- * domain appliers do not know drive steps, so the runtime splits them out.
+ * operations stay one applier call, and a drive-trash or payment step runs where
+ * it stands. The domain appliers do not know those steps, so the runtime splits
+ * them out.
  */
 export function undoBatches(operations: UndoOperation[]): UndoBatch[] {
   const batches: UndoBatch[] = []
@@ -212,6 +231,14 @@ export function undoBatches(operations: UndoOperation[]): UndoBatch[] {
   for (const operation of operations) {
     if (operation.op === 'drive-trash') {
       batches.push({ kind: 'drive', service: operation.service, paths: operation.paths })
+      continue
+    }
+    if (operation.op === 'payment-cancel') {
+      batches.push({ kind: 'payment-cancel', requests: operation.requests })
+      continue
+    }
+    if (operation.op === 'payment-unpay') {
+      batches.push({ kind: 'payment-unpay', requestId: operation.requestId, paidCents: operation.paidCents })
       continue
     }
 

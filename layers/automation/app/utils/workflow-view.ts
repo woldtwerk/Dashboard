@@ -78,6 +78,10 @@ export function actionSummary(action: AutomationAction): string {
       return 'Send notification'
     case 'save-to-drive':
       return `Save ${attachmentLabel(action.accept)} to ${driveFolderLabel(action.folder)}${action.checkDuplicates === false ? ', no duplicate check' : ''}`
+    case 'request-payment':
+      return `Request ${action.shares} share${action.shares === 1 ? '' : 's'} from ${action.payers.length} payer${action.payers.length === 1 ? '' : 's'}`
+    case 'confirm-paypal-payment':
+      return 'Confirm a PayPal payment'
     case 'add-tag':
       return `Add tag #${action.tag}`
     case 'set-correspondent':
@@ -131,6 +135,10 @@ export function actionIcon(action: AutomationAction): string {
       return 'i-lucide-bell'
     case 'save-to-drive':
       return 'i-lucide-hard-drive-upload'
+    case 'request-payment':
+      return 'i-lucide-hand-coins'
+    case 'confirm-paypal-payment':
+      return 'i-lucide-badge-euro'
     case 'add-tag':
       return 'i-lucide-tag'
     case 'set-correspondent':
@@ -177,6 +185,14 @@ export function nodeSubtitle(node: WorkflowNode): string {
         return action.folder
           ? `${attachmentLabel(action.accept)} → ${action.folder}`
           : 'Choose a drive folder'
+      }
+      if (action.type === 'request-payment') {
+        return action.payers.length
+          ? `${action.payers.length} payer${action.payers.length === 1 ? '' : 's'} → ${action.shares} shares`
+          : 'Add payers'
+      }
+      if (action.type === 'confirm-paypal-payment') {
+        return action.payee ? 'PayPal mail → paid request' : 'Choose a payments service'
       }
       return action.type
     }

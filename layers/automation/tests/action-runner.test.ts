@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { extractValue, runActions } from '../server/utils/action-runner'
-import type { ActionRunContext } from '../server/utils/action-runner'
+import type { ActionRunContext, PaymentActionPort } from '../server/utils/action-runner'
 import type { DriveFileHistory, DriveSavePort } from '../../drive/server/utils/drive-save'
 import { sha256Hex } from '../../drive/shared/drive-upload'
 import type { AutomationApplier } from '../server/utils/engine'
 import type { MailAttachment } from '../../mail/shared/types/mail'
 import type { AppliedAction, AutomationItem, PlannedAction, UndoOperation } from '../shared/types/automation'
+import { formatMoney } from '../../payments/shared/money'
 
 function mailItem(overrides: Partial<AutomationItem> = {}): AutomationItem {
   return {
@@ -273,5 +274,252 @@ describe('runActions: save-to-drive', () => {
       .rejects.toThrow('Drive is full')
 
     expect(applier.calls).toEqual([])
+  })
+})
+
+// --- Payments -------------------------------------------------------------
+
+interface FakeRequest {
+  id: string
+  reference: string
+  status: 'open' | 'paid' | 'cancelled'
+  amountCents: number
+  paidCents: number
+  payerName: string
+}
+
+function fakePayments(initial: FakeRequest[] = []) {
+  const requests = new Map(initial.map(request => [request.id, { ...request }]))
+  const created: Array<{ title: string, amountCents: number, payerName: string, payerEmail?: string }> = []
+  const sent: string[] = []
+  const failedSends = new Set<string>()
+  const paidSources = new Set<string>()
+  let next = 1
+
+  const port: PaymentActionPort = {
+    async createRequests(_service, input) {
+      created.push(...input)
+      return input.map((entry) => {
+        const id = `req-${next++}`
+        requests.set(id, {
+          id,
+          reference: `AM-REF${next}`,
+          status: 'open',
+          amountCents: entry.amountCents,
+          paidCents: 0,
+          payerName: entry.payerName
+        })
+        return { id, reference: `AM-REF${next}`, amountCents: entry.amountCents }
+      })
+    },
+    async sendRequest(id) {
+      if (failedSends.has(id)) {
+        throw new Error('Mail refused')
+      }
+      sent.push(id)
+    },
+    async openRequests() {
+      return [...requests.values()]
+        .filter(request => request.status === 'open')
+        .map(request => ({
+          id: request.id,
+          reference: request.reference,
+          amountCents: request.amountCents,
+          payerName: request.payerName
+        }))
+    },
+    async markPaid(id, input) {
+      if (paidSources.has(input.source)) {
+        return false
+      }
+      const request = requests.get(id)
+      if (!request || request.status !== 'open') {
+        return false
+      }
+      paidSources.add(input.source)
+      request.paidCents += input.cents
+      if (request.paidCents >= request.amountCents) {
+        request.status = 'paid'
+      }
+      return true
+    },
+    async getRequest(id) {
+      const request = requests.get(id)
+      return request ? { status: request.status, paidCents: request.paidCents } : undefined
+    },
+    async paidRequestForSource(_service, source) {
+      if (!paidSources.has(source)) {
+        return undefined
+      }
+      const request = [...requests.values()].find(entry => entry.status === 'paid')
+      return request ? { requestId: request.id, reference: request.reference } : undefined
+    }
+  }
+
+  return { port, requests, created, sent, failedSends }
+}
+
+describe('runActions: request-payment', () => {
+  it('creates one request per payer with its split amount and records the ids', async () => {
+    const payments = fakePayments()
+    const payers = [
+      { name: 'Anna', email: 'anna@example.com' },
+      { name: 'Ben', email: 'ben@example.com' },
+      { name: 'Clara', email: 'clara@example.com' }
+    ]
+
+    const { applied, variables } = await runActions(planned([
+      {
+        type: 'request-payment',
+        payee: 'payee-1',
+        amount: '12,00 €',
+        title: 'Spotify',
+        shares: 4,
+        payers,
+        send: true
+      }
+    ]), mailItem(), fakeApplier(), { payments: payments.port, runId: 'run-1' })
+
+    expect(payments.created).toEqual([
+      { title: 'Spotify', amountCents: 300, payerName: 'Anna', payerEmail: 'anna@example.com', contactService: undefined, contactUid: undefined },
+      { title: 'Spotify', amountCents: 300, payerName: 'Ben', payerEmail: 'ben@example.com', contactService: undefined, contactUid: undefined },
+      { title: 'Spotify', amountCents: 300, payerName: 'Clara', payerEmail: 'clara@example.com', contactService: undefined, contactUid: undefined }
+    ])
+    expect(applied).toEqual([{ type: 'request-payment', requestIds: ['req-1', 'req-2', 'req-3'], sent: ['req-1', 'req-2', 'req-3'] }])
+    expect(variables).toEqual({
+      paymentTotal: formatMoney(1200),
+      paymentShare: formatMoney(300),
+      paymentReferences: 'AM-REF2, AM-REF3, AM-REF4'
+    })
+  })
+
+  it('keeps the requests and records only the mails that went out', async () => {
+    const payments = fakePayments()
+    payments.failedSends.add('req-2')
+
+    const { applied } = await runActions(planned([
+      {
+        type: 'request-payment',
+        payee: 'payee-1',
+        amount: '12,00 €',
+        title: 'Spotify',
+        shares: 4,
+        payers: [
+          { name: 'Anna', email: 'anna@example.com' },
+          { name: 'Ben', email: 'ben@example.com' },
+          { name: 'Clara', email: 'clara@example.com' }
+        ],
+        send: true
+      }
+    ]), mailItem(), fakeApplier(), { payments: payments.port, runId: 'run-1' })
+
+    expect(applied).toEqual([{ type: 'request-payment', requestIds: ['req-1', 'req-2', 'req-3'], sent: ['req-1', 'req-3'] }])
+  })
+
+  it('stops the chain when the rendered amount is not a positive amount', async () => {
+    const applier = fakeApplier()
+    const payments = fakePayments()
+
+    await expect(runActions(planned([
+      {
+        type: 'request-payment',
+        payee: 'payee-1',
+        amount: '{{amount}}',
+        title: 'Spotify',
+        shares: 2,
+        payers: [{ name: 'Anna', email: 'anna@example.com' }],
+        send: true
+      },
+      { type: 'trash' }
+    ]), mailItem({ fields: { text: 'Gesamt: keine Angabe' } }), applier, { payments: payments.port }))
+      .rejects.toThrow('is not a positive amount')
+
+    expect(payments.created).toEqual([])
+    expect(applier.calls).toEqual([])
+  })
+})
+
+describe('runActions: confirm-paypal-payment', () => {
+  const PAYPAL_HEADER = 'mx.protonmail.ch; dkim=pass (2048-bit key) header.d=paypal.de header.s=protonmail'
+
+  function paypalItem(): AutomationItem {
+    return mailItem({
+      messageId: '<paypal-1@paypal.de>',
+      fields: {
+        from: 'service@paypal.de',
+        subject: 'Sie haben Geld erhalten',
+        text: 'Anna Müller hat Ihnen 2,83 € EUR gesendet.\n\nMitteilung\nAM-REF1'
+      }
+    })
+  }
+
+  function openRequest(): FakeRequest {
+    return {
+      id: 'req-1',
+      reference: 'AM-REF1',
+      status: 'open',
+      amountCents: 283,
+      paidCents: 0,
+      payerName: 'Anna Müller'
+    }
+  }
+
+  function context(payments: ReturnType<typeof fakePayments>, headers: string[]): ActionRunContext {
+    return {
+      payments: payments.port,
+      trustedAuthservIds: ['mx.protonmail.ch'],
+      mailAuthenticationResults: async () => headers
+    }
+  }
+
+  it('marks the matching request paid when DKIM is aligned', async () => {
+    const payments = fakePayments([openRequest()])
+
+    const { applied, variables } = await runActions(planned([
+      { type: 'confirm-paypal-payment', payee: 'payee-1' }
+    ]), paypalItem(), fakeApplier(), context(payments, [PAYPAL_HEADER]))
+
+    expect(applied).toEqual([{
+      type: 'confirm-paypal-payment',
+      outcome: 'paid',
+      requestId: 'req-1',
+      cents: 283,
+      paidCents: 283
+    }])
+    expect(payments.requests.get('req-1')).toMatchObject({ status: 'paid', paidCents: 283 })
+    expect(variables).toEqual({
+      paymentReference: 'AM-REF1',
+      paymentPayer: 'Anna Müller',
+      paymentAmount: formatMoney(283)
+    })
+  })
+
+  it('leaves every request untouched and asks the owner to look when DKIM is not aligned', async () => {
+    const payments = fakePayments([openRequest()])
+    const announced: string[] = []
+    const item = paypalItem()
+
+    const { applied } = await runActions(planned([
+      { type: 'confirm-paypal-payment', payee: 'payee-1' }
+    ]), item, fakeApplier(), {
+      ...context(payments, ['attacker.example; dkim=pass header.d=paypal.de']),
+      announcePaymentReview: (review) => { announced.push(review.title) }
+    })
+
+    expect(applied).toEqual([{ type: 'confirm-paypal-payment', outcome: 'unverified' }])
+    expect(payments.requests.get('req-1')).toMatchObject({ status: 'open', paidCents: 0 })
+    expect(announced).toHaveLength(1)
+  })
+
+  it('does not pay twice when the same mail runs again', async () => {
+    const payments = fakePayments([openRequest()])
+    const actions = planned([{ type: 'confirm-paypal-payment', payee: 'payee-1' }])
+
+    const first = await runActions(actions, paypalItem(), fakeApplier(), context(payments, [PAYPAL_HEADER]))
+    const second = await runActions(actions, paypalItem(), fakeApplier(), context(payments, [PAYPAL_HEADER]))
+
+    expect(first.applied[0]).toMatchObject({ outcome: 'paid' })
+    expect(second.applied[0]).toMatchObject({ outcome: 'already-paid' })
+    expect(payments.requests.get('req-1')).toMatchObject({ status: 'paid', paidCents: 283 })
   })
 })

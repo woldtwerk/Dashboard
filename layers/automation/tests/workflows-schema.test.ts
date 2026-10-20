@@ -29,6 +29,19 @@ const MINIMAL_ACTIONS: Record<AutomationAction['type'], AutomationAction> = {
     folder: '/my-files/Attachments',
     accept: ['video/*'],
     conflict: 'rename'
+  },
+  'request-payment': {
+    type: 'request-payment',
+    payee: 'payee-1',
+    amount: '{{amount}}',
+    title: 'Spotify',
+    shares: 6,
+    payers: [{ name: 'Anna Müller', email: 'anna@example.com' }],
+    send: true
+  },
+  'confirm-paypal-payment': {
+    type: 'confirm-paypal-payment',
+    payee: 'payee-1'
   }
 }
 

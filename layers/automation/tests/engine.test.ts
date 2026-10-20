@@ -153,7 +153,7 @@ function fakeStore(): FakeStore {
       attempts.push({ itemKey, attempts: count, nextAttemptAt: next })
     },
     async record(input) {
-      const run: AutomationRun = { id: `run-${runs.length + 1}`, itemKey: input.item.key, ...input, applied: input.applied ?? [], at: (input.at ?? new Date()).toISOString() } as unknown as AutomationRun
+      const run: AutomationRun = { id: input.id ?? `run-${runs.length + 1}`, itemKey: input.item.key, ...input, applied: input.applied ?? [], at: (input.at ?? new Date()).toISOString() } as unknown as AutomationRun
       runs.push(run)
       return run
     },
@@ -766,7 +766,7 @@ describe('runWorkflowOnItems', () => {
 
     const results = await runWorkflowOnItems(workflow({ mode: 'auto' }), [item()], deps({ store, applierFor: () => applier }))
 
-    expect(results).toEqual([{ ref: 'mail:mail-1:INBOX%2F1', outcome: 'applied', runId: 'run-1', error: undefined }])
+    expect(results).toEqual([{ ref: 'mail:mail-1:INBOX%2F1', outcome: 'applied', runId: store.runs[0]!.id, error: undefined }])
     expect(store.runs[0]!.outcome).toBe('applied')
     expect(applier.applied).toHaveLength(1)
     // A manual run must not hide the item from the trigger path

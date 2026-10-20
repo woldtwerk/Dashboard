@@ -1,5 +1,7 @@
 import type { ItemActionContext } from '#layers/core/app/utils/item-actions'
 import type { AutomationOutcome, AutomationWorkflow, WorkflowRunItemResult } from '#layers/automation/shared/types/automation'
+import { formatMoney, parseMoney } from '#layers/payments/shared/money'
+import { splitAmount } from '#layers/payments/shared/split'
 
 /**
  * The workflows a "Run workflow" menu may offer for the picked items: those of
@@ -55,4 +57,37 @@ export function formatWorkflowRunSummary(results: Pick<WorkflowRunItemResult, 'o
     .filter(outcome => counts.has(outcome))
     .map(outcome => `${counts.get(outcome)} ${summaryLabel(outcome, counts.get(outcome)!)}`)
     .join(' · ')
+}
+
+/** What a live split preview shows, e.g. `Each pays 3,00 € of 17,99 €` */
+export interface PaymentSplitPreview {
+  totalCents: number
+  shareCents: number
+  text: string
+}
+
+/**
+ * The split a request-payment action will produce, from a sample amount. Undefined
+ * while the total or the payer/shares pair cannot form one, so the inspector can
+ * show a hint instead of a misleading number.
+ */
+export function paymentSplitPreview(amount: string, shares: number, payers: number): PaymentSplitPreview | undefined {
+  const totalCents = parseMoney(amount)
+  if (totalCents === undefined || !Number.isInteger(shares) || !Number.isInteger(payers)) {
+    return undefined
+  }
+  if (shares < 1 || payers < 1 || payers > shares) {
+    return undefined
+  }
+
+  try {
+    const [shareCents] = splitAmount(totalCents, shares, payers)
+    return {
+      totalCents,
+      shareCents: shareCents!,
+      text: `${formatMoney(shareCents!)} of ${formatMoney(totalCents)}`
+    }
+  } catch {
+    return undefined
+  }
 }

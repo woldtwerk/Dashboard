@@ -104,6 +104,12 @@ export interface MailProvider {
    * by the one-time stream backfill, which must not refetch every mail.
    */
   getStreamHeaders(mailbox: string, uids: number[]): Promise<MailStreamHeader[]>
+  /**
+   * Every `Authentication-Results` header value of one message, in header order,
+   * topmost first. Fetching headers only keeps the body on the server. A sender can
+   * add such headers, so a caller trusts only the first one.
+   */
+  getAuthenticationResults(mailbox: string, uid: number): Promise<string[]>
 }
 
 /** Creates a provider from the settings of one service instance */

@@ -3,9 +3,11 @@ import type { ItemActionContext } from '../../core/app/utils/item-actions'
 import type { AutomationWorkflow } from '../shared/types/automation'
 import {
   formatWorkflowRunSummary,
+  paymentSplitPreview,
   workflowActionLabel,
   workflowsForContexts
 } from '../app/utils/workflow-actions'
+import { formatMoney } from '../../payments/shared/money'
 
 function context(overrides: Partial<ItemActionContext> = {}): ItemActionContext {
   return { domain: 'mail', service: 'mail-1', ref: 'mail:mail-1:INBOX%2F1', item: {}, ...overrides }
@@ -80,5 +82,40 @@ describe('formatWorkflowRunSummary', () => {
 
   it('says so when there was nothing to do', () => {
     expect(formatWorkflowRunSummary([])).toBe('Nothing to run')
+  })
+})
+
+describe('paymentSplitPreview', () => {
+  it.each([
+    {
+      branch: 'a split with an odd cent',
+      amount: '17,99 €',
+      shares: 6,
+      payers: 2,
+      expected: { totalCents: 1799, shareCents: 300, text: `${formatMoney(300)} of ${formatMoney(1799)}` }
+    },
+    {
+      branch: 'a share beyond the payer count',
+      amount: '17,99 €',
+      shares: 2,
+      payers: 3,
+      expected: undefined
+    },
+    {
+      branch: 'a template that is not a literal amount',
+      amount: '{{amount}}',
+      shares: 6,
+      payers: 2,
+      expected: undefined
+    },
+    {
+      branch: 'no payer yet',
+      amount: '17,99 €',
+      shares: 6,
+      payers: 0,
+      expected: undefined
+    }
+  ])('shows $branch', ({ amount, shares, payers, expected }) => {
+    expect(paymentSplitPreview(amount, shares, payers)).toEqual(expected)
   })
 })

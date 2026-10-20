@@ -22,3 +22,16 @@ export async function publishReviewEvent(run: AutomationRun): Promise<void> {
     resource: REVIEW_EVENT_RESOURCE
   })
 }
+
+/**
+ * The same review event for something that is not a run: a payment action that
+ * could not confirm a mail and left the decision to the owner.
+ */
+export async function publishReviewNeeded(service: string): Promise<void> {
+  await publishDomainEvent({
+    domain: 'automation',
+    service,
+    type: REVIEW_EVENT_TYPE,
+    resource: REVIEW_EVENT_RESOURCE
+  })
+}

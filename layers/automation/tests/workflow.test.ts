@@ -13,7 +13,7 @@ import {
   validateWorkflow
 } from '../shared/workflow'
 import type { WorkflowDecide, WorkflowFallbackDecideBatch } from '../shared/workflow'
-import type { AutomationItem, DecisionAnswer, DecisionAttempt, DecisionFallback, WorkflowGraph } from '../shared/types/automation'
+import type { AutomationAction, AutomationItem, DecisionAnswer, DecisionAttempt, DecisionFallback, WorkflowGraph } from '../shared/types/automation'
 
 function item(fields: Record<string, string> = {}, state = 'state'): AutomationItem {
   return {
@@ -545,6 +545,100 @@ describe('validateWorkflow', () => {
     expect(validateWorkflow(graph, 'mail')).toEqual([
       { nodeId: 'star', message: 'The save-to-drive action needs a folder' }
     ])
+  })
+
+  describe('payment actions', () => {
+    const validRequest = {
+      type: 'request-payment' as const,
+      payee: 'payee-1',
+      amount: '{{amount}}',
+      title: 'Spotify',
+      shares: 6,
+      payers: [{ name: 'Anna', email: 'anna@example.com' }],
+      send: true
+    }
+
+    function paymentGraph(action: AutomationAction, withAmount = true): WorkflowGraph {
+      const graph = choiceGraph()
+      if (withAmount) {
+        graph.nodes.push({
+          id: 'extract-amount',
+          type: 'action',
+          position: { x: 0, y: 350 },
+          data: { action: { type: 'extract', variable: 'amount', extractor: 'regex', pattern: '(\\d+,\\d{2})' } }
+        })
+      }
+      graph.nodes.find(node => node.id === 'star')!.data = { action } as never
+      return graph
+    }
+
+    it.each<{ branch: string, action: AutomationAction, domain: 'mail' | 'documents', expected: string, withAmount?: boolean }>([
+      {
+        branch: 'a missing payments service',
+        action: { ...validRequest, payee: ' ' },
+        domain: 'mail',
+        expected: 'The request-payment action needs a payments service'
+      },
+      {
+        branch: 'fewer than one share',
+        action: { ...validRequest, shares: 0 },
+        domain: 'mail',
+        expected: 'The request-payment action needs at least one share'
+      },
+      {
+        branch: 'no payer',
+        action: { ...validRequest, payers: [] },
+        domain: 'mail',
+        expected: 'The request-payment action needs at least one payer'
+      },
+      {
+        branch: 'more payers than shares',
+        action: {
+          ...validRequest,
+          shares: 1,
+          payers: [{ name: 'Anna', email: 'anna@example.com' }, { name: 'Ben', email: 'ben@example.com' }]
+        },
+        domain: 'mail',
+        expected: 'There cannot be more payers than shares'
+      },
+      {
+        branch: 'a payer without a usable email address',
+        action: { ...validRequest, payers: [{ name: 'Anna', email: 'not-an-email' }] },
+        domain: 'mail',
+        expected: 'Payer 1 needs a valid email address'
+      },
+      {
+        branch: 'an amount variable that no extract defines',
+        action: { ...validRequest, amount: '{{total}}' },
+        domain: 'mail',
+        expected: '{{total}} is never extracted',
+        withAmount: false
+      },
+      {
+        branch: 'a PayPal confirmation in a documents workflow',
+        action: { type: 'confirm-paypal-payment', payee: 'payee-1' },
+        domain: 'documents',
+        expected: 'The confirm-paypal-payment action only works on mail',
+        withAmount: false
+      },
+      {
+        branch: 'a PayPal confirmation without a payments service',
+        action: { type: 'confirm-paypal-payment', payee: '' },
+        domain: 'mail',
+        expected: 'The confirm-paypal-payment action needs a payments service',
+        withAmount: false
+      }
+    ])('reports $branch', ({ action, domain, expected, withAmount = true }) => {
+      const errors = validateWorkflow(paymentGraph(action, withAmount), domain)
+      expect(errors.map(error => error.message)).toContain(expected)
+    })
+
+    it('accepts a complete split and a PayPal confirmation', () => {
+      expect(validateWorkflow(paymentGraph(validRequest), 'mail')).toEqual([])
+      expect(validateWorkflow(paymentGraph({ type: 'confirm-paypal-payment', payee: 'payee-1' }, false), 'mail')).toEqual([])
+      // A split of a document receipt is allowed too
+      expect(validateWorkflow(paymentGraph(validRequest), 'documents')).toEqual([])
+    })
   })
 })
 

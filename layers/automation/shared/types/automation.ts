@@ -138,8 +138,53 @@ export interface SaveToDriveAction {
   checkDuplicates?: boolean
 }
 
+/** One person a payment request is sent to */
+export interface PaymentPayer {
+  name: string
+  email: string
+  contactService?: string
+  contactUid?: string
+}
+
+/**
+ * Splits a receipt total into shares and creates one payment request per payer.
+ * The owner keeps the remaining shares. `amount` and `title` are templates.
+ */
+export interface RequestPaymentAction {
+  type: 'request-payment'
+  /** The payments service (payee) the requests belong to */
+  payee: string
+  /** A template, e.g. `{{amount}}` filled by an extract action */
+  amount: string
+  /** A template, e.g. `Spotify {{month}}` */
+  title: string
+  shares: number
+  payers: PaymentPayer[]
+  send: boolean
+}
+
+/** How a confirmed PayPal mail was handled */
+export type PaypalConfirmOutcome
+  = | 'paid'
+    | 'already-paid'
+    | 'unverified'
+    | 'not-a-payment'
+    | 'ambiguous'
+    | 'none'
+
+/**
+ * Marks the open request a PayPal "money received" mail matches as paid. The
+ * sender is only trusted when the mail carries a DKIM pass aligned with PayPal;
+ * anything else is recorded for the owner to review instead of changing a payment.
+ */
+export interface ConfirmPaypalPaymentAction {
+  type: 'confirm-paypal-payment'
+  /** The payments service whose open requests are matched */
+  payee: string
+}
+
 /** Actions every domain understands; the runner handles them itself */
-export type GenericAction = ExtractAction | NotifyAction | SaveToDriveAction
+export type GenericAction = ExtractAction | NotifyAction | SaveToDriveAction | RequestPaymentAction | ConfirmPaypalPaymentAction
 
 export type AutomationAction = MailAction | DocumentsAction | GenericAction
 
@@ -314,6 +359,12 @@ export type AppliedAction
      * before them omits both.
      */
     | { type: 'save-to-drive', service: string, paths: string[], skipped?: DriveSkippedFile[], matched?: number }
+    | { type: 'request-payment', requestIds: string[], sent: string[] }
+    /**
+     * `paidCents` is the request's amount after this run recorded the payment, so
+     * an undo can tell whether the request still is in the state the run left it.
+     */
+    | { type: 'confirm-paypal-payment', outcome: PaypalConfirmOutcome, requestId?: string, cents?: number, paidCents?: number }
 
 /** A single reversal step; planned from the applied actions */
 export type UndoOperation
@@ -325,6 +376,10 @@ export type UndoOperation
     | { op: 'set-correspondent', document: number, correspondent: number | null }
     | { op: 'set-document-type', document: number, documentType: number | null }
     | { op: 'drive-trash', service: string, paths: string[] }
+    /** Cancels the requests of a split that are still open; sent mails cannot be recalled */
+    | { op: 'payment-cancel', requests: string[] }
+    /** Reopens a request this run marked paid, only while its paid cents are unchanged */
+    | { op: 'payment-unpay', requestId: string, paidCents: number }
 
 export type AutomationOutcome = 'suggested' | 'applied' | 'failed' | 'undone' | 'skipped' | 'review'
 

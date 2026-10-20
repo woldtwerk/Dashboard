@@ -18,6 +18,7 @@ import { isGenericAction, matchesConditions } from './automation'
 import { BUILTIN_VARIABLES, extractActionError, templateVariables } from './extractors'
 import { isMimeGlob } from './mime'
 import { normalizeDriveFolderInput } from '../../drive/shared/drive-path'
+import { normalizeEmail } from '../../core/shared/entities'
 
 /** A decision engine caller; the automation layer injects Laya through this */
 export type WorkflowDecide = (state: string, questions: Record<string, DecisionQuestion>) => Promise<Record<string, DecisionAnswer>>
@@ -286,6 +287,39 @@ export function validateWorkflow(graph: WorkflowGraph, domain?: AutomationDomain
           if (!isMimeGlob(glob)) {
             errors.push({ nodeId: node.id, message: `"${glob}" is not a media type like video/* or application/pdf` })
           }
+        }
+      }
+      if (action.type === 'request-payment') {
+        if (!action.payee.trim()) {
+          errors.push({ nodeId: node.id, message: 'The request-payment action needs a payments service' })
+        }
+        if (!Number.isInteger(action.shares) || action.shares < 1) {
+          errors.push({ nodeId: node.id, message: 'The request-payment action needs at least one share' })
+        }
+        if (!action.payers.length) {
+          errors.push({ nodeId: node.id, message: 'The request-payment action needs at least one payer' })
+        } else if (Number.isInteger(action.shares) && action.payers.length > action.shares) {
+          errors.push({ nodeId: node.id, message: 'There cannot be more payers than shares' })
+        }
+        action.payers.forEach((payer, index) => {
+          if (!normalizeEmail(payer.email)) {
+            errors.push({ nodeId: node.id, message: `Payer ${index + 1} needs a valid email address` })
+          }
+        })
+        // The amount is a template like a notification's text, so it may only read
+        // values the run really has; a typo would otherwise split an empty amount.
+        for (const variable of templateVariables(action.amount)) {
+          if (!(BUILTIN_VARIABLES as readonly string[]).includes(variable) && !extracted.has(variable)) {
+            errors.push({ nodeId: node.id, message: `{{${variable}}} is never extracted` })
+          }
+        }
+      }
+      if (action.type === 'confirm-paypal-payment') {
+        if (domain === 'documents') {
+          errors.push({ nodeId: node.id, message: 'The confirm-paypal-payment action only works on mail' })
+        }
+        if (!action.payee.trim()) {
+          errors.push({ nodeId: node.id, message: 'The confirm-paypal-payment action needs a payments service' })
         }
       }
     }

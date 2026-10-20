@@ -1,10 +1,13 @@
 <script setup lang="ts">
+import { useDebounceFn } from '@vueuse/core'
 import type { MailFolders } from '#layers/mail/shared/types/mail'
+import type { Contact } from '#layers/contacts/shared/types/contacts'
 import type { DocumentsCorrespondent, DocumentsDocumentType, DocumentsTag } from '#layers/documents/shared/types/documents'
-import type { DecisionFallback, ExtractAction, NotifyAction, NotifyModal, SaveToDriveAction, WorkflowEdge, WorkflowNode } from '../../../shared/types/automation'
+import type { DecisionFallback, ExtractAction, NotifyAction, NotifyModal, PaymentPayer, RequestPaymentAction, SaveToDriveAction, WorkflowEdge, WorkflowNode } from '../../../shared/types/automation'
 import type { WorkflowValidationError } from '../../../shared/workflow'
 import type { DecisionFallbackType } from '../../utils/decision-fallbacks'
 import type { MimePresetValue } from '../../utils/drive-save'
+import { paymentSplitPreview } from '../../utils/workflow-actions'
 import DriveFolderPicker from '#layers/drive/app/components/drive/DriveFolderPicker.vue'
 import { normalizeDriveFolderInput } from '#layers/drive/shared/drive-path'
 import { parseMimeGlobs } from '../../../shared/mime'
@@ -209,11 +212,15 @@ const DOCUMENT_ACTION_TYPES = [
 const GENERIC_ACTION_TYPES = [
   { label: 'Extract value', value: 'extract', icon: 'i-lucide-scan-text' },
   { label: 'Send notification', value: 'notify', icon: 'i-lucide-bell' },
-  { label: 'Save attachments to drive', value: 'save-to-drive', icon: 'i-lucide-hard-drive-upload' }
+  { label: 'Save attachments to drive', value: 'save-to-drive', icon: 'i-lucide-hard-drive-upload' },
+  { label: 'Request payment', value: 'request-payment', icon: 'i-lucide-hand-coins' }
+]
+const MAIL_ONLY_ACTION_TYPES = [
+  { label: 'Confirm PayPal payment', value: 'confirm-paypal-payment', icon: 'i-lucide-badge-euro' }
 ]
 
 const actionTypes = computed(() => props.domain === 'mail'
-  ? [...MAIL_ACTION_TYPES, ...GENERIC_ACTION_TYPES]
+  ? [...MAIL_ACTION_TYPES, ...GENERIC_ACTION_TYPES, ...MAIL_ONLY_ACTION_TYPES]
   : [...DOCUMENT_ACTION_TYPES, ...GENERIC_ACTION_TYPES])
 
 const EXTRACT_SOURCES = [
@@ -248,6 +255,21 @@ function setActionType(type: string) {
       accept: [],
       conflict: 'rename',
       checkDuplicates: true
+    }
+  } else if (type === 'request-payment') {
+    node.data.action = {
+      type: 'request-payment',
+      payee: paymentServices.value[0]?.id ?? '',
+      amount: '{{amount}}',
+      title: '{{title}}',
+      shares: 2,
+      payers: [],
+      send: true
+    }
+  } else if (type === 'confirm-paypal-payment') {
+    node.data.action = {
+      type: 'confirm-paypal-payment',
+      payee: paymentServices.value[0]?.id ?? ''
     }
   } else if (type === 'add-tag') {
     node.data.action = { type: 'add-tag', tag: tags.value[0]?.id ?? 0 }
@@ -386,6 +408,95 @@ const driveDuplicatesChecked = computed(() => action.value?.type !== 'save-to-dr
 const driveDuplicateHint = computed(() => driveDuplicatesChecked.value
   ? 'A file already saved here is skipped, by content (even under another name) or by same name and size, so a rerun saves nothing twice.'
   : 'Every attachment is saved again, even the same bytes. A same-name file is renamed or skipped as set above.')
+
+// --- Payments ---
+
+const paymentServices = computed(() => services.value.filter(service => service.domain === 'payments'))
+const paymentServiceItems = computed(() => paymentServices.value.map(service => ({ label: service.name, value: service.id })))
+
+/** A typed patch of the request-payment action the inspector is editing */
+function setPaymentField(patch: Partial<RequestPaymentAction>) {
+  const current = action.value
+  if (current?.type !== 'request-payment') {
+    return
+  }
+  Object.assign(current, patch)
+  commit()
+}
+
+function setPaymentPayee(value: string) {
+  const current = action.value
+  if (current?.type !== 'request-payment' && current?.type !== 'confirm-paypal-payment') {
+    return
+  }
+  current.payee = value
+  commit()
+}
+
+const requestPayment = computed(() => action.value?.type === 'request-payment' ? action.value : null)
+
+const splitSampleAmount = ref('17,99')
+const splitPreview = computed(() => requestPayment.value
+  ? paymentSplitPreview(splitSampleAmount.value, requestPayment.value.shares, requestPayment.value.payers.length)
+  : undefined)
+
+const payerQuery = ref('')
+const payerResults = ref<Contact[]>([])
+const payerName = ref('')
+const payerEmail = ref('')
+
+function setPayers(payers: PaymentPayer[]) {
+  setPaymentField({ payers })
+}
+
+function addPayer(payer: PaymentPayer) {
+  if (!requestPayment.value) {
+    return
+  }
+  setPayers([...requestPayment.value.payers, payer])
+}
+
+function addContactPayer(contact: Contact) {
+  const email = contact.emails[0]?.value
+  if (!email) {
+    return
+  }
+  addPayer({
+    name: contact.name || email,
+    email,
+    contactService: contact.service,
+    contactUid: contact.uid
+  })
+}
+
+function addManualPayer() {
+  const name = payerName.value.trim()
+  const email = payerEmail.value.trim()
+  if (!name || !email) {
+    return
+  }
+  addPayer({ name, email })
+  payerName.value = ''
+  payerEmail.value = ''
+}
+
+function removePayer(index: number) {
+  if (!requestPayment.value) {
+    return
+  }
+  setPayers(requestPayment.value.payers.filter((_payer, position) => position !== index))
+}
+
+const searchPayers = useDebounceFn(async () => {
+  const query = payerQuery.value.trim()
+  if (query.length < 2) {
+    payerResults.value = []
+    return
+  }
+  payerResults.value = await $fetch<Contact[]>('/api/contacts', { query: { q: query } }).catch(() => [])
+}, 250)
+
+watch(payerQuery, searchPayers)
 
 // --- Fallbacks (when the engine is unsure) ---
 
@@ -921,7 +1032,180 @@ function updateFallbackEntry(index: number, entry: DecisionFallback) {
             />
           </template>
 
-          <div v-if="action.type === 'extract' || action.type === 'notify'" class="space-y-1">
+          <template v-if="action.type === 'request-payment'">
+            <UFormField label="Payments service" description="The payee the requests belong to.">
+              <USelect
+                v-if="paymentServices.length"
+                :model-value="action.payee"
+                :items="paymentServiceItems"
+                class="w-full"
+                @update:model-value="value => setPaymentPayee(value as string)"
+              />
+              <UInput
+                v-else
+                :model-value="action.payee"
+                placeholder="No payments service is set up"
+                class="w-full"
+                disabled
+              />
+            </UFormField>
+
+            <UFormField label="Total amount" description="A template, e.g. {{amount}} from an extract action.">
+              <UInput
+                :model-value="action.amount"
+                placeholder="{{amount}}"
+                class="w-full font-mono"
+                @update:model-value="value => setPaymentField({ amount: String(value) })"
+              />
+            </UFormField>
+
+            <UFormField label="Request title" description="What the payers see, e.g. Spotify {{month}}.">
+              <UInput
+                :model-value="action.title"
+                placeholder="Spotify"
+                class="w-full"
+                @update:model-value="value => setPaymentField({ title: String(value) })"
+              />
+            </UFormField>
+
+            <div class="grid grid-cols-2 gap-3">
+              <UFormField label="Shares" description="You keep the rest.">
+                <UInput
+                  :model-value="String(action.shares)"
+                  type="number"
+                  min="1"
+                  class="w-full"
+                  @update:model-value="value => setPaymentField({ shares: Number(value) })"
+                />
+              </UFormField>
+              <UFormField label="Preview amount" description="A sample total for the split.">
+                <UInput
+                  v-model="splitSampleAmount"
+                  class="w-full"
+                />
+              </UFormField>
+            </div>
+
+            <p class="text-sm text-muted">
+              <template v-if="splitPreview">
+                Each pays {{ splitPreview.text }}
+              </template>
+              <template v-else>
+                Enter a sample amount, at least one payer and enough shares to preview the split.
+              </template>
+            </p>
+
+            <div class="space-y-2">
+              <p class="text-sm font-medium text-highlighted">
+                Payers
+              </p>
+              <ul v-if="action.payers.length" class="space-y-1">
+                <li
+                  v-for="(payer, index) in action.payers"
+                  :key="`${payer.email}-${index}`"
+                  class="flex items-center justify-between gap-2 rounded-md border border-default px-2 py-1 text-sm"
+                >
+                  <span class="min-w-0 truncate">
+                    {{ payer.name }} <span class="text-muted">&lt;{{ payer.email }}&gt;</span>
+                  </span>
+                  <UButton
+                    icon="i-lucide-x"
+                    color="neutral"
+                    variant="ghost"
+                    size="xs"
+                    aria-label="Remove payer"
+                    @click="removePayer(index)"
+                  />
+                </li>
+              </ul>
+              <p v-else class="text-xs text-muted">
+                No payer yet; a request needs at least one.
+              </p>
+            </div>
+
+            <UFormField label="Search contacts" description="Only contacts with an email address can be added.">
+              <UInput
+                v-model="payerQuery"
+                icon="i-lucide-search"
+                placeholder="Name or email"
+                class="w-full"
+              />
+            </UFormField>
+            <ul v-if="payerResults.length" class="space-y-1">
+              <li
+                v-for="contact in payerResults.slice(0, 5)"
+                :key="`${contact.service ?? ''}-${contact.uid}`"
+                class="flex items-center justify-between gap-2 rounded-md border border-default px-2 py-1 text-sm"
+              >
+                <span class="min-w-0 truncate">
+                  {{ contact.name }} <span class="text-muted">&lt;{{ contact.emails[0]?.value }}&gt;</span>
+                </span>
+                <UButton
+                  label="Add"
+                  color="neutral"
+                  variant="soft"
+                  size="xs"
+                  :disabled="!contact.emails.length"
+                  @click="addContactPayer(contact)"
+                />
+              </li>
+            </ul>
+
+            <div class="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
+              <UFormField label="Name">
+                <UInput v-model="payerName" placeholder="Anna Müller" class="w-full" />
+              </UFormField>
+              <UFormField label="Email">
+                <UInput v-model="payerEmail" placeholder="anna@example.com" class="w-full" />
+              </UFormField>
+              <UButton
+                label="Add"
+                color="neutral"
+                variant="soft"
+                :disabled="!payerName.trim() || !payerEmail.trim()"
+                @click="addManualPayer"
+              />
+            </div>
+
+            <div class="flex items-center justify-between">
+              <div class="space-y-1">
+                <p class="text-sm font-medium text-highlighted">
+                  Send the request mails
+                </p>
+                <p class="text-xs text-muted">
+                  The requests are created either way; a failed send leaves them open on the payments page.
+                </p>
+              </div>
+              <USwitch
+                :model-value="action.send"
+                @update:model-value="value => setPaymentField({ send: value })"
+              />
+            </div>
+          </template>
+
+          <template v-if="action.type === 'confirm-paypal-payment'">
+            <UFormField label="Payments service" description="The open requests this mail may mark paid.">
+              <USelect
+                v-if="paymentServices.length"
+                :model-value="action.payee"
+                :items="paymentServiceItems"
+                class="w-full"
+                @update:model-value="value => setPaymentPayee(value as string)"
+              />
+              <UInput
+                v-else
+                :model-value="action.payee"
+                placeholder="No payments service is set up"
+                class="w-full"
+                disabled
+              />
+            </UFormField>
+            <p class="text-xs text-muted">
+              Only a PayPal mail whose DKIM signature passes for paypal.de or paypal.com changes a payment. Everything else is recorded for you to review.
+            </p>
+          </template>
+
+          <div v-if="action.type === 'extract' || action.type === 'notify' || action.type === 'request-payment'" class="space-y-1">
             <p class="text-xs font-medium text-muted">
               Available variables
             </p>

@@ -1,9 +1,13 @@
+import { randomUUID } from 'node:crypto'
 import type {
   AppliedAction,
   AutomationItem,
+  ConfirmPaypalPaymentAction,
   ExtractAction,
   NotifyAction,
+  PaymentPayer,
   PlannedAction,
+  RequestPaymentAction,
   SaveToDriveAction
 } from '../../shared/types/automation'
 import type { FileSourceMeta } from '../../../core/shared/types/file-sources'
@@ -11,6 +15,12 @@ import { normalizeDriveFolderInput } from '../../../drive/shared/drive-path'
 import { saveFilesToDrive } from '../../../drive/server/utils/drive-save'
 import type { DriveFileHistory, DriveSavePort } from '../../../drive/server/utils/drive-save'
 import { resolveMimeType } from '../../../core/shared/mime'
+import { formatMoney, parseMoney } from '../../../payments/shared/money'
+import { splitAmount } from '../../../payments/shared/split'
+import { matchPayment } from '../../../payments/shared/match'
+import type { OpenRequest } from '../../../payments/shared/match'
+import { parsePaypalReceivedMail } from '../../../payments/shared/paypal-mail'
+import { isDkimAligned } from '../../../mail/shared/mail-auth'
 import {
   extractLoginCode,
   extractWithRegex,
@@ -19,10 +29,47 @@ import {
 import { matchesMimeGlob } from '../../shared/mime'
 import type { AutomationApplier } from './engine'
 
+/** The domains a PayPal payment mail must be DKIM-signed for */
+export const PAYPAL_SIGNING_DOMAINS = ['paypal.de', 'paypal.com'] as const
+
+/** What one created payment request looks like to the runner */
+export interface CreatedPaymentRequest {
+  id: string
+  reference: string
+  amountCents: number
+}
+
+/**
+ * The payment operations a request-payment or confirm-paypal-payment action
+ * needs. Injected, so the runner can be tested without a database.
+ */
+export interface PaymentActionPort {
+  createRequests(
+    service: string,
+    input: Array<{
+      title: string
+      amountCents: number
+      payerName: string
+      payerEmail?: string
+      contactService?: string
+      contactUid?: string
+    }>,
+    options: { batchId: string, origin: string }
+  ): Promise<CreatedPaymentRequest[]>
+  sendRequest(id: string): Promise<void>
+  openRequests(service: string): Promise<OpenRequest[]>
+  markPaid(id: string, input: { cents: number, via: 'paypal', source: string }): Promise<boolean>
+  getRequest(id: string): Promise<{ status: 'open' | 'paid' | 'cancelled', paidCents: number } | undefined>
+  /** The request a mail source was already recorded on, so a rerun changes nothing */
+  paidRequestForSource(service: string, source: string): Promise<{ requestId: string, reference: string } | undefined>
+}
+
 /** What the runner needs besides the actions and the item */
 export interface ActionRunContext {
   /** The workflow's name, available to templates as `{{workflow}}` */
   workflow?: string
+  /** The run's id; payment requests record where they came from as `workflow:<id>` */
+  runId?: string
   /** The clock a modal's expiry is based on; defaults to the real one */
   now?: () => Date
   /** The item's attachments with their bytes; a domain without any returns an empty list */
@@ -33,6 +80,14 @@ export interface ActionRunContext {
   driveHistory?: DriveFileHistory
   /** Renews a long run's lease before each upload; a lost lease stops the save */
   onBeforeUpload?: () => Promise<void> | void
+  /** The payment requests and matching a payment action uses */
+  payments?: PaymentActionPort
+  /** The `Authentication-Results` headers of an item, topmost first */
+  mailAuthenticationResults?: (service: string, mailbox: string, uid: number) => Promise<string[]>
+  /** The authserv-ids whose `Authentication-Results` header is trusted */
+  trustedAuthservIds?: string[]
+  /** Asks the owner to look at a payment that could not be confirmed automatically */
+  announcePaymentReview?: (input: { service: string, itemKey: string, title: string, body: string }) => Promise<void> | void
 }
 
 export interface ActionRunResult {
@@ -156,13 +211,191 @@ async function saveToDrive(
 }
 
 /**
+ * Renders a payment split and creates one request per payer, optionally sending
+ * them. A failed send leaves the request in place and is visible as an id missing
+ * from `sent`; only a missing or non-positive total stops the chain.
+ */
+async function requestPayment(
+  action: RequestPaymentAction,
+  item: AutomationItem,
+  context: ActionRunContext,
+  variables: Record<string, string>
+): Promise<Extract<AppliedAction, { type: 'request-payment' }>> {
+  const values = templateValues(item, context.workflow, variables)
+  const rendered = renderTemplate(action.amount, values).trim()
+  const total = parseMoney(rendered)
+  if (total === undefined) {
+    throw new Error(`The payment amount "${rendered}" is not a positive amount`)
+  }
+  if (!context.payments) {
+    throw new Error('Payment requests are not available for this item')
+  }
+
+  const amounts = splitAmount(total, action.shares, action.payers.length)
+  const title = renderTemplate(action.title, values).trim() || item.title
+  const created = await context.payments.createRequests(
+    action.payee,
+    action.payers.map((payer: PaymentPayer, index) => ({
+      title,
+      amountCents: amounts[index]!,
+      payerName: payer.name,
+      payerEmail: payer.email,
+      contactService: payer.contactService,
+      contactUid: payer.contactUid
+    })),
+    { batchId: randomUUID(), origin: `workflow:${context.runId ?? 'unknown'}` }
+  )
+
+  const sent: string[] = []
+  if (action.send) {
+    for (const request of created) {
+      try {
+        await context.payments.sendRequest(request.id)
+        sent.push(request.id)
+      } catch {
+        // The request exists either way; the applied record shows which mails went out
+      }
+    }
+  }
+
+  variables.paymentTotal = formatMoney(total)
+  variables.paymentShare = formatMoney(amounts[0]!)
+  variables.paymentReferences = created.map(request => request.reference).join(', ')
+
+  return { type: 'request-payment', requestIds: created.map(request => request.id), sent }
+}
+
+/** Asks the owner to look at a mail the action could not turn into a payment */
+async function announcePaymentReview(
+  context: ActionRunContext,
+  item: AutomationItem,
+  title: string,
+  body: string
+): Promise<void> {
+  try {
+    await context.announcePaymentReview?.({ service: item.service, itemKey: item.key, title, body })
+  } catch {
+    // The notification is a convenience; it must not fail the run
+  }
+}
+
+/**
+ * Confirms a PayPal "money received" mail. Only a mail whose topmost
+ * `Authentication-Results` header is from a trusted server and carries a DKIM pass
+ * for PayPal may change a payment; everything else is recorded for the owner, so a
+ * forged mail can never mark a request paid.
+ */
+async function confirmPaypalPayment(
+  action: ConfirmPaypalPaymentAction,
+  item: AutomationItem,
+  context: ActionRunContext,
+  variables: Record<string, string>
+): Promise<Extract<AppliedAction, { type: 'confirm-paypal-payment' }>> {
+  if (item.domain !== 'mail' || !item.mailbox || item.uid === undefined) {
+    throw new Error('Confirming a PayPal payment needs a mail item')
+  }
+
+  const headers = context.mailAuthenticationResults
+    ? await context.mailAuthenticationResults(item.service, item.mailbox, item.uid)
+    : []
+  const aligned = isDkimAligned(headers, {
+    trustedAuthservIds: context.trustedAuthservIds ?? [],
+    domains: PAYPAL_SIGNING_DOMAINS
+  })
+
+  if (!aligned) {
+    await announcePaymentReview(
+      context,
+      item,
+      'PayPal payment not confirmed',
+      `${item.title} — the mail could not be verified as a PayPal payment. Mark the right request paid by hand.`
+    )
+    return { type: 'confirm-paypal-payment', outcome: 'unverified' }
+  }
+
+  const parsed = parsePaypalReceivedMail({
+    subject: item.fields.subject ?? '',
+    text: item.fields.text || item.state || ''
+  })
+  if (!parsed) {
+    return { type: 'confirm-paypal-payment', outcome: 'not-a-payment' }
+  }
+  if (!context.payments) {
+    throw new Error('Matching payments is not available for this item')
+  }
+
+  const source = `paypal-mail:${item.service}:${item.messageId ?? `${item.mailbox}/${item.uid}`}`
+  // The same mail may be evaluated again after the request is already paid; the
+  // receipt source tells that apart from a genuinely unmatched payment.
+  const alreadyRecorded = await context.payments.paidRequestForSource(item.service, source)
+  if (alreadyRecorded) {
+    variables.paymentReference = alreadyRecorded.reference
+    variables.paymentPayer = parsed.payerName
+    variables.paymentAmount = formatMoney(parsed.amountCents)
+    return {
+      type: 'confirm-paypal-payment',
+      outcome: 'already-paid',
+      requestId: alreadyRecorded.requestId,
+      cents: parsed.amountCents
+    }
+  }
+
+  const open = await context.payments.openRequests(action.payee)
+  const match = matchPayment(open, {
+    amountCents: parsed.amountCents,
+    payerName: parsed.payerName,
+    text: parsed.note
+  })
+
+  if (match.kind === 'ambiguous' || match.kind === 'none') {
+    const reason = match.kind === 'ambiguous'
+      ? `Several open requests match ${parsed.payerName} and ${formatMoney(parsed.amountCents)}.`
+      : `No open request matches ${parsed.payerName} and ${formatMoney(parsed.amountCents)}.`
+    await announcePaymentReview(
+      context,
+      item,
+      'PayPal payment needs a look',
+      `${item.title} — ${reason} Mark the right request paid by hand.`
+    )
+    return { type: 'confirm-paypal-payment', outcome: match.kind }
+  }
+
+  const request = match.request
+  const paid = await context.payments.markPaid(request.id, {
+    cents: parsed.amountCents,
+    via: 'paypal',
+    source
+  })
+  const after = await context.payments.getRequest(request.id)
+
+  variables.paymentReference = request.reference
+  variables.paymentPayer = parsed.payerName
+  variables.paymentAmount = formatMoney(parsed.amountCents)
+
+  // A rerun of the same mail (or a request closed meanwhile) changes nothing and
+  // must not offer an undo that would reopen the original payment
+  if (!paid) {
+    return { type: 'confirm-paypal-payment', outcome: 'already-paid', requestId: request.id, cents: parsed.amountCents }
+  }
+
+  return {
+    type: 'confirm-paypal-payment',
+    outcome: 'paid',
+    requestId: request.id,
+    cents: parsed.amountCents,
+    paidCents: after?.paidCents
+  }
+}
+
+/**
  * Runs a workflow's actions in order. Generic actions (`extract`, `notify`,
- * `save-to-drive`) are handled here; every domain action is handed to the domain
- * applier one at a time, carrying the item it returns forward, so a mail's new
- * uid after a move reaches the next action. An `extract` that finds nothing
- * throws, which stops the run before the following actions — a trash after a
- * failed extract never happens. A save-to-drive that fails likewise stops the
- * chain, so a following trash only runs once the files are on the drive.
+ * `save-to-drive`, `request-payment`, `confirm-paypal-payment`) are handled here;
+ * every domain action is handed to the domain applier one at a time, carrying the
+ * item it returns forward, so a mail's new uid after a move reaches the next
+ * action. An `extract` that finds nothing throws, which stops the run before the
+ * following actions — a trash after a failed extract never happens. A save-to-drive
+ * that fails likewise stops the chain, so a following trash only runs once the
+ * files are on the drive.
  */
 export async function runActions(
   actions: PlannedAction[],
@@ -195,6 +428,16 @@ export async function runActions(
 
     if (action.type === 'save-to-drive') {
       applied.push(await saveToDrive(action, current, context))
+      continue
+    }
+
+    if (action.type === 'request-payment') {
+      applied.push(await requestPayment(action, current, context, variables))
+      continue
+    }
+
+    if (action.type === 'confirm-paypal-payment') {
+      applied.push(await confirmPaypalPayment(action, current, context, variables))
       continue
     }
 

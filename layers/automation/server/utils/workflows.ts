@@ -66,6 +66,24 @@ export const automationActionSchema = z.discriminatedUnion('type', [
       .optional(),
     conflict: z.enum(['rename', 'skip']).optional(),
     checkDuplicates: z.boolean().default(true)
+  }),
+  z.object({
+    type: z.literal('request-payment'),
+    payee: z.string().trim().min(1).max(80),
+    amount: z.string().max(300),
+    title: z.string().max(300),
+    shares: z.number().int().min(1).max(1000),
+    payers: z.array(z.object({
+      name: z.string().trim().min(1).max(200),
+      email: z.string().trim().max(320),
+      contactService: z.string().trim().max(80).optional(),
+      contactUid: z.string().trim().max(200).optional()
+    })).min(1).max(100),
+    send: z.boolean()
+  }),
+  z.object({
+    type: z.literal('confirm-paypal-payment'),
+    payee: z.string().trim().min(1).max(80)
   })
 ])
 

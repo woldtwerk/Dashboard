@@ -165,6 +165,20 @@ describe('planUndo', () => {
       matched: 1
     }])).toEqual([])
   })
+
+  it('cancels the requests of a split', () => {
+    expect(planUndo([{ type: 'request-payment', requestIds: ['req-1', 'req-2'], sent: ['req-1'] }])).toEqual([
+      { op: 'payment-cancel', requests: ['req-1', 'req-2'] }
+    ])
+  })
+
+  it('reopens only a request this run marked paid', () => {
+    expect(planUndo([
+      { type: 'confirm-paypal-payment', outcome: 'paid', requestId: 'req-1', cents: 283, paidCents: 283 },
+      { type: 'confirm-paypal-payment', outcome: 'already-paid', requestId: 'req-2', cents: 283 },
+      { type: 'confirm-paypal-payment', outcome: 'unverified' }
+    ])).toEqual([{ op: 'payment-unpay', requestId: 'req-1', paidCents: 283 }])
+  })
 })
 
 describe('undoBatches', () => {
@@ -182,6 +196,18 @@ describe('undoBatches', () => {
       { kind: 'domain', operations: [move] },
       { kind: 'drive', service: 'drive-1', paths: ['/my-files/Public/a.pdf'] },
       { kind: 'domain', operations: [{ op: 'delete', mailbox: 'Labels/x', uid: 4 }] }
+    ])
+  })
+
+  it('runs payment steps where they stand in the plan', () => {
+    expect(undoBatches([
+      move,
+      { op: 'payment-cancel', requests: ['req-1'] },
+      { op: 'payment-unpay', requestId: 'req-2', paidCents: 283 }
+    ])).toEqual([
+      { kind: 'domain', operations: [move] },
+      { kind: 'payment-cancel', requests: ['req-1'] },
+      { kind: 'payment-unpay', requestId: 'req-2', paidCents: 283 }
     ])
   })
 
