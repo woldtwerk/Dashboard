@@ -1,4 +1,5 @@
-import { createSharedComposable } from '@vueuse/core'
+import { createSharedComposable, useDebounceFn } from '@vueuse/core'
+import { isReviewEvent } from '#layers/automation/shared/events'
 
 /**
  * The number of runs waiting for a human answer, the number the Activity badges
@@ -12,9 +13,13 @@ export const useAutomationReviewCount = createSharedComposable(() => {
     default: () => ({ count: 0 })
   })
 
-  // A run that reaches — or leaves — "review" moves the badge, here or in another tab
-  useDomainEvents({ domains: ['automation'] }, () => {
-    void refresh()
+  // A run that reaches — or leaves — "review" moves the badge, here or in another
+  // tab. Debounced, so a wave of reviews costs one count request.
+  const refreshFromEvents = useDebounceFn(() => refresh(), 300)
+  useDomainEvents({ domains: ['automation'] }, (event) => {
+    if (isReviewEvent(event.type)) {
+      void refreshFromEvents()
+    }
   })
 
   const count = computed(() => data.value?.count ?? 0)

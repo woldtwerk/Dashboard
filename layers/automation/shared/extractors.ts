@@ -296,11 +296,16 @@ export function extractLoginCode(text: string): string | undefined {
 // --- Modal references -----------------------------------------------------
 
 /**
- * A notification modal is addressed by its run and node, in one string the URL and
- * the domain event both carry: `<runId>.<nodeId>`. Keeping the format here means
- * the server, the URL and the live event cannot drift apart.
+ * The event type a run with a notification modal announces. A modal is addressed
+ * by its run and node, in one string the URL and the domain event both carry:
+ * `<runId>.<nodeId>`. Keeping the format here means the server, the URL and the
+ * live event cannot drift apart.
  */
-const MODAL_EVENT_PREFIX = 'modal:'
+export const MODAL_EVENT_TYPE = 'modal'
+
+/** The type and resource prefix an earlier release used; accepted for open tabs */
+const LEGACY_MODAL_EVENT_TYPE = 'changed'
+const LEGACY_MODAL_EVENT_PREFIX = 'modal:'
 
 /** The `?automation-modal=` value and event resource body of one modal */
 export function modalRef(runId: string, nodeId: string): string {
@@ -321,13 +326,20 @@ export function parseModalRef(value: string | undefined): { runId: string, nodeI
 
 /** The domain-event resource a run with a modal announces */
 export function modalEventResource(runId: string, nodeId: string): string {
-  return `${MODAL_EVENT_PREFIX}${modalRef(runId, nodeId)}`
+  return modalRef(runId, nodeId)
 }
 
-/** The modal a domain event points at, or `undefined` for any other event */
-export function modalFromEventResource(resource: string | undefined): { runId: string, nodeId: string } | undefined {
-  if (!resource?.startsWith(MODAL_EVENT_PREFIX)) {
-    return undefined
+/**
+ * The modal a domain event points at, or `undefined` for any other event. A
+ * `modal` event carries the bare reference; the `changed` event with the old
+ * `modal:` resource is still accepted while tabs from the previous release stay open.
+ */
+export function modalFromEvent(type: string, resource: string | undefined): { runId: string, nodeId: string } | undefined {
+  if (type === MODAL_EVENT_TYPE) {
+    return parseModalRef(resource)
   }
-  return parseModalRef(resource.slice(MODAL_EVENT_PREFIX.length))
+  if (type === LEGACY_MODAL_EVENT_TYPE && resource?.startsWith(LEGACY_MODAL_EVENT_PREFIX)) {
+    return parseModalRef(resource.slice(LEGACY_MODAL_EVENT_PREFIX.length))
+  }
+  return undefined
 }

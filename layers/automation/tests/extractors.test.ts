@@ -7,7 +7,7 @@ import {
   extractWithRegex,
   isVariableName,
   modalEventResource,
-  modalFromEventResource,
+  modalFromEvent,
   modalRef,
   parseModalRef,
   renderTemplate,
@@ -182,15 +182,21 @@ describe('modal references', () => {
 
   it('round-trips the domain-event resource', () => {
     const resource = modalEventResource('run-42', 'notify-code')
-    expect(resource).toBe('modal:run-42.notify-code')
-    expect(modalFromEventResource(resource)).toEqual({ runId: 'run-42', nodeId: 'notify-code' })
+    expect(resource).toBe('run-42.notify-code')
+    expect(modalFromEvent('modal', resource)).toEqual({ runId: 'run-42', nodeId: 'notify-code' })
+  })
+
+  it('accepts the legacy changed event with a modal: resource', () => {
+    expect(modalFromEvent('changed', 'modal:run-42.notify-code')).toEqual({ runId: 'run-42', nodeId: 'notify-code' })
   })
 
   it('does not mistake another automation event for a modal', () => {
-    expect(modalFromEventResource('INBOX')).toBeUndefined()
-    expect(modalFromEventResource('modal:')).toBeUndefined()
-    expect(modalFromEventResource('modal:run-42')).toBeUndefined()
-    expect(modalFromEventResource(undefined)).toBeUndefined()
+    expect(modalFromEvent('review', 'runs:review')).toBeUndefined()
+    expect(modalFromEvent('changed', 'INBOX')).toBeUndefined()
+    expect(modalFromEvent('modal', 'INBOX')).toBeUndefined()
+    expect(modalFromEvent('modal', 'modal:')).toBeUndefined()
+    expect(modalFromEvent('changed', 'modal:run-42')).toBeUndefined()
+    expect(modalFromEvent('modal', undefined)).toBeUndefined()
   })
 
   it('rejects a malformed reference', () => {

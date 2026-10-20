@@ -581,10 +581,16 @@ describe('reviews', () => {
   it('records a paused run with outcome review, notifies it and keeps its action out of first-wins', async () => {
     const store = fakeStore()
     const notify = vi.fn()
+    const onReviewChange = vi.fn()
     const review = workflow({ id: 'review', position: 0, graph: reviewGraph() })
     const action = workflow({ id: 'action', position: 1, graph: actionGraph({ type: 'star' }) })
 
-    const runs = await runService('mail', 'mail-1', [review, action], deps({ store, notify, decide: decideWith({ yes: 0.5, confidence: 0.5 }) }))
+    const runs = await runService('mail', 'mail-1', [review, action], deps({
+      store,
+      notify,
+      onReviewChange,
+      decide: decideWith({ yes: 0.5, confidence: 0.5 })
+    }))
     const byWorkflow = new Map(runs.map(run => [run.workflow, run]))
 
     expect(byWorkflow.get('review')!.outcome).toBe('review')
@@ -594,6 +600,9 @@ describe('reviews', () => {
     expect(byWorkflow.get('action')!.outcome).toBe('suggested')
     expect(byWorkflow.get('action')!.actions).toEqual([{ nodeId: 'do', action: { type: 'star' } }])
     expect(notify).toHaveBeenCalledTimes(2)
+    // Only the run that waits for a human moves the review badge
+    expect(onReviewChange).toHaveBeenCalledOnce()
+    expect(onReviewChange.mock.calls[0]![0].id).toBe(byWorkflow.get('review')!.id)
   })
 })
 
@@ -605,6 +614,7 @@ describe('answerReview', () => {
     decideBatch?: WorkflowDecideBatch
     notify?: (run: AutomationRun) => Promise<void>
     announceNotifications?: (run: AutomationRun) => Promise<void>
+    onReviewChange?: (run: AutomationRun) => Promise<void>
     workflowMissing?: boolean
   } = {}) {
     const applier = overrides.applier ?? fakeApplier()
@@ -619,7 +629,8 @@ describe('answerReview', () => {
         fallbackDecideBatch: undefined,
         applierFor: () => applier,
         notify: overrides.notify,
-        announceNotifications: overrides.announceNotifications
+        announceNotifications: overrides.announceNotifications,
+        onReviewChange: overrides.onReviewChange
       }
     }
   }
@@ -658,6 +669,20 @@ describe('answerReview', () => {
     expect(updated.applied.map(action => action.type)).toEqual(['extract', 'notify'])
     expect(announceNotifications).toHaveBeenCalledOnce()
     expect(announceNotifications.mock.calls[0]![0].id).toBe(updated.id)
+  })
+
+  it('announces that the run no longer waits for a review', async () => {
+    const store = fakeStore()
+    const onReviewChange = vi.fn()
+    const { reviewDeps: context } = reviewDeps(store, { mode: 'auto', onReviewChange })
+    const run = await pausedRun(store)
+
+    const updated = await answerReview(run.id, 'yes', context)
+
+    expect(updated.outcome).toBe('applied')
+    expect(onReviewChange).toHaveBeenCalledOnce()
+    expect(onReviewChange.mock.calls[0]![0].id).toBe(updated.id)
+    expect(onReviewChange.mock.calls[0]![0].outcome).toBe('applied')
   })
 
   it('suggests in suggest mode and notifies', async () => {

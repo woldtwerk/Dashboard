@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { matchesFilter } from '../../shared/domain-events'
+import { DOMAIN_EVENT_TYPE_RE, matchesFilter } from '../../shared/domain-events'
 import type { DomainEvent } from '../../shared/types/domain-events'
 
 export type { DomainEventFilter } from '../../shared/domain-events'
@@ -26,7 +26,7 @@ export interface DomainEventBus {
 const eventSchema = z.object({
   domain: z.string().min(1),
   service: z.string().min(1),
-  type: z.enum(['changed', 'synced', 'sync-failed']),
+  type: z.string().regex(DOMAIN_EVENT_TYPE_RE),
   resource: z.string().min(1).optional(),
   at: z.iso.datetime()
 })

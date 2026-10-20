@@ -105,6 +105,8 @@ export interface AutomationDeps {
   announceNotifications?: (run: AutomationRun) => Promise<void>
   /** Announces that an item was given up after repeated transient failures */
   notifyFailed?: (domain: AutomationDomain, service: string, item: AutomationItem, error: unknown) => Promise<void>
+  /** Announces that a run started or stopped waiting for a human answer; a failure never fails the run */
+  onReviewChange?: (run: AutomationRun) => Promise<void>
   logger?: AutomationLogger
   now?: () => Date
 }
@@ -495,6 +497,7 @@ async function recordWorkflow(
       deps.logger?.warn?.('Could not send the automation review request', { error: errorMessage(error) })
     }
 
+    await announceReviewChange(run, deps)
     return run
   }
 
@@ -584,6 +587,7 @@ export interface AutomationReviewDeps {
   applierFor: AutomationDeps['applierFor']
   notify?: AutomationDeps['notify']
   announceNotifications?: AutomationDeps['announceNotifications']
+  onReviewChange?: AutomationDeps['onReviewChange']
   logger?: AutomationLogger
   now?: () => Date
 }
@@ -656,17 +660,20 @@ export async function answerReview(runId: string, output: string, deps: Automati
     } catch (error) {
       deps.logger?.warn?.('Could not send the automation review request', { error: errorMessage(error) })
     }
+    await announceReviewChange(updated, deps)
     return updated
   }
 
   if (!result.actions.length) {
-    return await deps.store.update(runId, {
+    const updated = await deps.store.update(runId, {
       outcome: 'skipped',
       path: result.path,
       answers: result.answers,
       actions: [],
       feedback: 'answered'
     })
+    await announceReviewChange(updated, deps)
+    return updated
   }
 
   if (workflow.mode === 'suggest') {
@@ -682,6 +689,7 @@ export async function answerReview(runId: string, output: string, deps: Automati
     } catch (error) {
       deps.logger?.warn?.('Could not send the automation suggestion', { error: errorMessage(error) })
     }
+    await announceReviewChange(updated, deps)
     return updated
   }
 
@@ -698,10 +706,11 @@ export async function answerReview(runId: string, output: string, deps: Automati
       feedback: 'answered'
     })
     await announceRunNotifications(updated, deps)
+    await announceReviewChange(updated, deps)
     return updated
   } catch (error) {
     deps.logger?.warn?.('Automation action failed', { workflow: workflow.name, error: errorMessage(error) })
-    return await deps.store.update(runId, {
+    const updated = await deps.store.update(runId, {
       outcome: 'failed',
       path: result.path,
       answers: result.answers,
@@ -709,12 +718,30 @@ export async function answerReview(runId: string, output: string, deps: Automati
       error: errorMessage(error),
       feedback: 'answered'
     })
+    await announceReviewChange(updated, deps)
+    return updated
   }
 }
 
 /** Applies the actions of a suggestion and returns what a reversal needs */
 export async function applyRunActions(run: AutomationRun, applier: AutomationApplier, now?: () => Date) {
   return await runActions(run.actions, run.item, applier, { workflow: run.workflowName, now })
+}
+
+/**
+ * Announces a run that entered or left the review state, so the Activity badges
+ * in every open tab refresh. Best-effort: a badge that does not update must not
+ * fail the run that changed it.
+ */
+async function announceReviewChange(
+  run: AutomationRun,
+  deps: { onReviewChange?: AutomationDeps['onReviewChange'], logger?: AutomationLogger }
+): Promise<void> {
+  try {
+    await deps.onReviewChange?.(run)
+  } catch (error) {
+    deps.logger?.warn?.('Could not announce the automation review change', { error: errorMessage(error) })
+  }
 }
 
 /**

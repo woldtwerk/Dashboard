@@ -12,10 +12,11 @@ import type {
   WorkflowRunResult
 } from '../../shared/types/automation'
 import { FallbackUnavailableError, runDecisionNodesBatch, runWorkflowBatch, validateWorkflow } from '../../shared/workflow'
-import { modalEventResource, modalRef } from '../../shared/extractors'
+import { modalRef } from '../../shared/extractors'
 import type { WorkflowBatchResult, WorkflowDecide, WorkflowDecideBatch, WorkflowFallbackDecideBatch } from '../../shared/workflow'
 import { parseEntityKey } from '../../../core/shared/entities'
 import { createDocumentsApplier, createMailApplier, toMailActionProvider } from './appliers'
+import { publishModalEvent, publishReviewEvent } from './automation-events'
 import type { AutomationApplier, AutomationDeps, AutomationLogger } from './engine'
 import { announceRunNotifications, answerReview, applyRunActions, errorMessage, evaluateCandidates, runService, runWorkflowOnItems, undoPlan } from './engine'
 import { MANUAL_RUN_LOCK_TTL_MS, runManualGroups } from './manual-run'
@@ -172,10 +173,10 @@ async function announceWorkflowNotifications(run: AutomationRun): Promise<void> 
     })
 
     // The shared broker fans this out to every worker; open tabs subscribe with
-    // `useDomainEvents`. `changed` is the type core's event schema knows, and the
-    // `modal:` resource prefix marks it as a notification modal.
+    // `useDomainEvents`. The `modal` type marks it as a notification pop-up, and
+    // the resource is the same `<runId>.<nodeId>` the URL carries.
     if (ref) {
-      await publishDomainEvent({ domain: 'automation', service: run.service, type: 'changed', resource: modalEventResource(run.id, action.nodeId) })
+      await publishModalEvent(run, action.nodeId)
     }
   }
 }
@@ -192,6 +193,7 @@ function automationDeps(service: string): AutomationDeps {
     notify: notifySuggestion,
     notifyFailed,
     announceNotifications: announceWorkflowNotifications,
+    onReviewChange: publishReviewEvent,
     logger: automationLogger(service)
   }
 }
@@ -412,7 +414,12 @@ export async function rejectSuggestion(id: string): Promise<AutomationRun> {
   if (run.outcome !== 'suggested' && run.outcome !== 'review') {
     throw createError({ status: 409, statusText: 'Only a suggestion or a review can be rejected' })
   }
-  return await updateRun(id, { outcome: 'skipped', feedback: 'rejected' })
+  const wasReview = run.outcome === 'review'
+  const updated = await updateRun(id, { outcome: 'skipped', feedback: 'rejected' })
+  if (wasReview) {
+    await publishReviewEvent(updated)
+  }
+  return updated
 }
 
 /**
@@ -436,6 +443,7 @@ export async function answerAutomationReview(id: string, output: string): Promis
       applierFor,
       notify: notifySuggestion,
       announceNotifications: announceWorkflowNotifications,
+      onReviewChange: publishReviewEvent,
       logger: automationLogger(run.service),
       now: () => new Date()
     })

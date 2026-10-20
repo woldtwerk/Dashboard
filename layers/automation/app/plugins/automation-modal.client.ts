@@ -1,5 +1,5 @@
 import { effectScope } from 'vue'
-import { modalFromEventResource, modalRef, parseModalRef } from '#layers/automation/shared/extractors'
+import { modalFromEvent, modalRef, parseModalRef } from '#layers/automation/shared/extractors'
 import AutomationNotifyModal from '../components/automation/AutomationNotifyModal.vue'
 
 /**
@@ -54,7 +54,7 @@ export default defineNuxtPlugin(() => {
     }, { immediate: true })
 
     useDomainEvents({ domains: ['automation'] }, (event) => {
-      const parsed = modalFromEventResource(event.resource)
+      const parsed = modalFromEvent(event.type, event.resource)
       if (parsed) {
         void modalQuery(modalRef(parsed.runId, parsed.nodeId))
       }

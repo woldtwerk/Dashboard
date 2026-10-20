@@ -45,6 +45,16 @@ describe('in-process domain event bus', () => {
     expect(received[0]!.type).toBe('changed')
   })
 
+  it('round-trips a layer-defined event type', async () => {
+    const bus = createInProcessBus()
+    const received: DomainEvent[] = []
+    bus.subscribe(item => received.push(item))
+
+    await bus.publish(event({ type: 'review', resource: 'runs:review' }))
+
+    expect(received).toEqual([event({ type: 'review', resource: 'runs:review' })])
+  })
+
   it('keeps another channel separate from domain events', async () => {
     const bus = createInProcessBus()
     const events: DomainEvent[] = []
@@ -102,8 +112,13 @@ describe('parseDomainEvent', () => {
     expect(parseDomainEvent('{not json')).toBeUndefined()
   })
 
-  it('drops an unknown type', () => {
-    expect(parseDomainEvent(JSON.stringify({ ...event(), type: 'deleted' }))).toBeUndefined()
+  it('accepts a type a layer defines itself', () => {
+    expect(parseDomainEvent(JSON.stringify(event({ type: 'review', resource: 'runs:review' }))))
+      .toEqual(event({ type: 'review', resource: 'runs:review' }))
+  })
+
+  it.each(['Changed', '1changed', 'changed_now', 'a'.repeat(33), ''])('drops the invalid type %j', (type) => {
+    expect(parseDomainEvent(JSON.stringify({ ...event(), type }))).toBeUndefined()
   })
 
   it('drops a missing timestamp', () => {

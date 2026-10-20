@@ -4,8 +4,12 @@ export interface DomainEvent {
   domain: string
   /** Service id the change belongs to */
   service: string
-  /** changed = data changed; synced = a sync run finished; sync-failed = it failed */
-  type: 'changed' | 'synced' | 'sync-failed'
+  /**
+   * What changed. `changed` = data changed, `synced` = a sync run finished,
+   * `sync-failed` = it failed; a layer may publish its own lower-case type,
+   * e.g. `modal` or `review` (see `DOMAIN_EVENT_TYPE_RE`).
+   */
+  type: string
   /** What changed inside the service, e.g. a calendar URL or a mailbox path */
   resource?: string
   /** ISO timestamp, set by publishDomainEvent */
