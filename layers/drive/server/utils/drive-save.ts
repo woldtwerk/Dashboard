@@ -93,11 +93,12 @@ export function createDriveSavePort(): DriveSavePort {
     async upload(service, folder, file) {
       const provider = await useDriveProvider(service)
       const path = joinPath(folder, file.name)
-      const body = uploadBody(file.name, file.contentType, file.content)
+      const body = await uploadBody(file.name, file.contentType, file.content)
 
       await provider.upload(path, {
-        stream: body.body,
-        contentType: body.headers.get('content-type') ?? file.contentType
+        stream: bytesStream(body.body),
+        contentType: body.contentType,
+        contentLength: body.contentLength
       })
 
       await invalidateDriveListings(service, affectedPaths('upload', { path: folder }))
@@ -106,12 +107,40 @@ export function createDriveSavePort(): DriveSavePort {
   }
 }
 
-/** The multipart body the provider streams into the drive */
-function uploadBody(name: string, contentType: string, content: Uint8Array): Response {
+/** The multipart body of an upload, buffered so its exact length is known */
+export interface DriveSaveUploadBody {
+  body: Uint8Array
+  contentType: string
+  contentLength: string
+}
+
+/**
+ * The multipart body the provider streams into the drive. A stream sent without
+ * a length goes chunked, which the drive rejects, so the body is buffered and
+ * measured; the file's content is already in memory, so this costs no extra.
+ */
+export async function uploadBody(name: string, contentType: string, content: Uint8Array): Promise<DriveSaveUploadBody> {
   const form = new FormData()
   // Copy into a fresh view, so the Blob sees an ArrayBuffer rather than ArrayBufferLike
   form.append('file', new Blob([new Uint8Array(content)], { type: contentType }), name)
-  return new Response(form)
+  const response = new Response(form)
+  const body = new Uint8Array(await response.arrayBuffer())
+
+  return {
+    body,
+    contentType: response.headers.get('content-type') ?? contentType,
+    contentLength: String(body.byteLength)
+  }
+}
+
+/** Delivers buffered bytes to the provider as the one-chunk stream it expects */
+function bytesStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes)
+      controller.close()
+    }
+  })
 }
 
 /** Reads a web stream into memory; an upload needs the bytes for its multipart body. */

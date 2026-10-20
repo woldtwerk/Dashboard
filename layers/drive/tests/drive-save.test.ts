@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { DriveFileHistory, DriveSavePort } from '../server/utils/drive-save'
-import { saveFilesToDrive } from '../server/utils/drive-save'
+import { saveFilesToDrive, uploadBody } from '../server/utils/drive-save'
 import { sha256Hex } from '../shared/drive-upload'
 
 const encoder = new TextEncoder()
@@ -51,6 +51,18 @@ function fakeHistory(preloaded: Array<{ service: string, folder: string, sha256:
 
   return { history, recorded }
 }
+
+describe('uploadBody', () => {
+  it('measures the multipart body it returns', async () => {
+    const { body, contentType, contentLength } = await uploadBody('clip.mp4', 'video/mp4', encoder.encode('video'))
+    const boundary = contentType.match(/boundary=(.+)$/)?.[1]
+
+    // A body sent without its length goes chunked, which the drive rejects
+    expect(contentLength).toBe(String(body.byteLength))
+    expect(boundary).toBeTruthy()
+    expect(new TextDecoder().decode(body)).toContain(`--${boundary}`)
+  })
+})
 
 describe('saveFilesToDrive', () => {
   it('uploads an accepted file and records its content', async () => {
