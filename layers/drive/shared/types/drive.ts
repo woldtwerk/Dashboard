@@ -68,9 +68,16 @@ export type DriveSort = 'name' | 'modified' | 'size'
 export type DriveOrder = 'asc' | 'desc'
 export type DriveView = 'grid' | 'list'
 
+/** A file a drive save skipped, and why */
+export interface DriveSkippedFile {
+  name: string
+  /** `duplicate`: the same bytes were saved before; `exists`: the name is taken */
+  reason: 'duplicate' | 'exists'
+}
+
 /** What the import endpoint saved and skipped; a failing part does not discard the rest */
 export interface DriveImportResult {
   saved: string[]
-  skipped: Array<{ name: string, reason: 'duplicate' | 'exists' }>
+  skipped: DriveSkippedFile[]
   failed: Array<{ part: string, reason: string }>
 }

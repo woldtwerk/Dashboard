@@ -105,14 +105,15 @@ function renderNotify(action: NotifyAction, nodeId: string, values: Record<strin
  * catches files put there by hand. With it off, both skips are gone: the same bytes
  * are stored again and a same-name file is renamed or skipped as the action asks.
  * The content record is written either way, so turning the check back on later
- * knows the file. No matching file is not an error: there is simply nothing to
- * record.
+ * knows the file. No matching file is not an error: the run still records that
+ * nothing matched, so the activity list can tell it from a save that skipped
+ * every file.
  */
 async function saveToDrive(
   action: SaveToDriveAction,
   item: AutomationItem,
   context: ActionRunContext
-): Promise<Extract<AppliedAction, { type: 'save-to-drive' }> | undefined> {
+): Promise<Extract<AppliedAction, { type: 'save-to-drive' }>> {
   if (!context.itemFiles) {
     throw new Error('Saving attachments is not available for this item')
   }
@@ -124,7 +125,7 @@ async function saveToDrive(
     })
     .filter(file => matchesMimeGlob(file.contentType, action.accept, file.filename))
   if (!files.length) {
-    return undefined
+    return { type: 'save-to-drive', service: action.service, paths: [], skipped: [], matched: 0 }
   }
 
   if (!context.drive) {
@@ -145,7 +146,13 @@ async function saveToDrive(
     history: context.driveHistory
   })
 
-  return result.saved.length ? { type: 'save-to-drive', service: action.service, paths: result.saved } : undefined
+  return {
+    type: 'save-to-drive',
+    service: action.service,
+    paths: result.saved,
+    skipped: result.skipped,
+    matched: files.length
+  }
 }
 
 /**
@@ -187,10 +194,7 @@ export async function runActions(
     }
 
     if (action.type === 'save-to-drive') {
-      const saved = await saveToDrive(action, current, context)
-      if (saved) {
-        applied.push(saved)
-      }
+      applied.push(await saveToDrive(action, current, context))
       continue
     }
 

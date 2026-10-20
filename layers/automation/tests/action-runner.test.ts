@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { extractValue, runActions } from '../server/utils/action-runner'
 import type { ActionRunContext } from '../server/utils/action-runner'
 import type { DriveFileHistory, DriveSavePort } from '../../drive/server/utils/drive-save'
+import { sha256Hex } from '../../drive/shared/drive-upload'
 import type { AutomationApplier } from '../server/utils/engine'
 import type { MailAttachment } from '../../mail/shared/types/mail'
 import type { AppliedAction, AutomationItem, PlannedAction, UndoOperation } from '../shared/types/automation'
@@ -185,34 +186,58 @@ function saveContext(
 }
 
 describe('runActions: save-to-drive', () => {
-  it('saves the matching attachments, creating the folder and recording the paths', async () => {
-    const { drive, ensured, uploaded } = fakeDrive()
-    const files = [
-      attachment('clip.mp4', 'video/mp4', 'video'),
-      attachment('invoice.pdf', 'application/pdf', 'pdf'),
-      attachment('photo.jpg', 'image/jpeg', 'image')
-    ]
-
-    const { applied } = await runActions(planned([
-      { type: 'save-to-drive', service: 'drive-1', folder: '/my-files/Public/salsa', accept: ['video/*'] }
-    ]), mailItem(), fakeApplier(), saveContext(files, drive))
-
-    expect(ensured).toEqual(['/my-files/Public/salsa'])
-    expect(uploaded).toEqual([{ folder: '/my-files/Public/salsa', name: 'clip.mp4', contentType: 'video/mp4' }])
-    expect(applied).toEqual([{ type: 'save-to-drive', service: 'drive-1', paths: ['/my-files/Public/salsa/clip.mp4'] }])
-  })
-
-  it('succeeds without touching the drive when no attachment matches', async () => {
-    const { drive, ensured, listed, uploaded } = fakeDrive()
+  it.each([
+    {
+      branch: 'no matching attachment, without touching the drive',
+      files: [attachment('invoice.pdf', 'application/pdf', 'pdf')],
+      preloaded: false,
+      ensured: [],
+      listed: [],
+      uploaded: [],
+      applied: { paths: [], skipped: [], matched: 0 }
+    },
+    {
+      branch: 'a file whose bytes were already saved',
+      files: [attachment('clip.mp4', 'video/mp4', 'video')],
+      preloaded: true,
+      ensured: ['/my-files/Public'],
+      listed: ['/my-files/Public'],
+      uploaded: [],
+      applied: { paths: [], skipped: [{ name: 'clip.mp4', reason: 'duplicate' }], matched: 1 }
+    },
+    {
+      branch: 'the matching attachment among others',
+      files: [
+        attachment('clip.mp4', 'video/mp4', 'video'),
+        attachment('invoice.pdf', 'application/pdf', 'pdf')
+      ],
+      preloaded: false,
+      ensured: ['/my-files/Public'],
+      listed: ['/my-files/Public'],
+      uploaded: ['clip.mp4'],
+      applied: { paths: ['/my-files/Public/clip.mp4'], skipped: [], matched: 1 }
+    }
+  ])('records $branch', async ({ files, preloaded, ensured, listed, uploaded: uploadedNames, applied: expected }) => {
+    const fake = fakeDrive()
+    const content = files[0]!.content
+    const history = preloaded
+      ? fakeHistory([{
+        service: 'drive-1',
+        folder: '/my-files/Public',
+        sha256: await sha256Hex(content),
+        path: '/my-files/Public/old.mp4',
+        size: content.byteLength
+      }]).history
+      : fakeHistory().history
 
     const { applied } = await runActions(planned([
       { type: 'save-to-drive', service: 'drive-1', folder: '/my-files/Public', accept: ['video/*'] }
-    ]), mailItem(), fakeApplier(), saveContext([attachment('invoice.pdf', 'application/pdf', 'pdf')], drive))
+    ]), mailItem(), fakeApplier(), saveContext(files, fake.drive, history))
 
-    expect(ensured).toEqual([])
-    expect(listed).toEqual([])
-    expect(uploaded).toEqual([])
-    expect(applied).toEqual([])
+    expect(applied).toEqual([{ type: 'save-to-drive', service: 'drive-1', ...expected }])
+    expect(fake.ensured).toEqual(ensured)
+    expect(fake.listed).toEqual(listed)
+    expect(fake.uploaded.map(entry => entry.name)).toEqual(uploadedNames)
   })
 
   it('saves into the normalised path of a hand-written folder', async () => {
@@ -224,7 +249,13 @@ describe('runActions: save-to-drive', () => {
 
     expect(ensured).toEqual(['/my-files/Public/salsa'])
     expect(uploaded).toEqual([{ folder: '/my-files/Public/salsa', name: 'clip.mp4', contentType: 'video/mp4' }])
-    expect(applied).toEqual([{ type: 'save-to-drive', service: 'drive-1', paths: ['/my-files/Public/salsa/clip.mp4'] }])
+    expect(applied).toEqual([{
+      type: 'save-to-drive',
+      service: 'drive-1',
+      paths: ['/my-files/Public/salsa/clip.mp4'],
+      skipped: [],
+      matched: 1
+    }])
   })
 
   it('stops before a following trash when an upload fails', async () => {

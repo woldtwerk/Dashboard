@@ -5,6 +5,8 @@
  * preview, activity).
  */
 
+import type { DriveSkippedFile } from '../../../drive/shared/types/drive'
+
 export type AutomationDomain = 'mail' | 'documents'
 
 /** `suggest` only records what a workflow would do; `auto` applies it */
@@ -305,7 +307,13 @@ export type AppliedAction
     | { type: 'add-tag', document: number, tag: number, previousTags: number[] }
     | { type: 'set-correspondent', document: number, correspondent: number, previous: number | null }
     | { type: 'set-type', document: number, documentType: number, previous: number | null }
-    | { type: 'save-to-drive', service: string, paths: string[] }
+    /**
+     * `paths` holds what was uploaded, so undo trashes only those. `skipped` and
+     * `matched` were added later because empty paths alone cannot tell a run that
+     * found no matching attachment from one that skipped every file; a run stored
+     * before them omits both.
+     */
+    | { type: 'save-to-drive', service: string, paths: string[], skipped?: DriveSkippedFile[], matched?: number }
 
 /** A single reversal step; planned from the applied actions */
 export type UndoOperation

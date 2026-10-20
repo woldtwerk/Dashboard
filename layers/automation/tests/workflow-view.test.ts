@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { actionIcon, actionSummary, attachmentLabel, availableVariables, decisionChainLabel, decisionSourceLabel, nodeSubtitle, nodeTitle, outputLabel } from '../app/utils/workflow-view'
-import type { AutomationAction, WorkflowGraph, WorkflowNode, WorkflowPathStep } from '../shared/types/automation'
+import { actionIcon, actionSummary, attachmentLabel, availableVariables, decisionChainLabel, decisionSourceLabel, driveSaveSummary, nodeSubtitle, nodeTitle, outputLabel } from '../app/utils/workflow-view'
+import type { AppliedAction, AutomationAction, WorkflowGraph, WorkflowNode, WorkflowPathStep } from '../shared/types/automation'
 
 function decisionNode(): WorkflowNode {
   return {
@@ -69,6 +69,34 @@ describe('workflow-view labels', () => {
   it('shows a yes/no output with its threshold', () => {
     expect(outputLabel(decisionNode(), 'yes')).toBe('yes ≥ 0.85')
     expect(outputLabel(decisionNode(), 'unsure')).toBe('unsure')
+  })
+})
+
+describe('driveSaveSummary', () => {
+  it.each<{ branch: string, applied: AppliedAction[], expected: ReturnType<typeof driveSaveSummary> }>([
+    {
+      branch: 'a record with saved and skipped files',
+      applied: [{
+        type: 'save-to-drive',
+        service: 'drive-1',
+        paths: ['/my-files/Public/a.pdf'],
+        skipped: [{ name: 'b.pdf', reason: 'duplicate' }, { name: 'c.pdf', reason: 'exists' }],
+        matched: 3
+      }],
+      expected: [{ saved: 1, duplicate: 1, exists: 1, matched: 3 }]
+    },
+    {
+      branch: 'a record that matched nothing',
+      applied: [{ type: 'save-to-drive', service: 'drive-1', paths: [], skipped: [], matched: 0 }],
+      expected: [{ saved: 0, duplicate: 0, exists: 0, matched: 0 }]
+    },
+    {
+      branch: 'a record stored before skipped and matched existed',
+      applied: [{ type: 'save-to-drive', service: 'drive-1', paths: ['/my-files/Public/a.pdf'] }],
+      expected: [{ saved: 1, duplicate: 0, exists: 0, matched: undefined }]
+    }
+  ])('summarises $branch', ({ applied, expected }) => {
+    expect(driveSaveSummary(applied)).toEqual(expected)
   })
 })
 

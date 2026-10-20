@@ -156,8 +156,14 @@ describe('planUndo', () => {
     ])
   })
 
-  it('plans nothing for a save-to-drive that skipped every file', () => {
-    expect(planUndo([{ type: 'save-to-drive', service: 'drive-1', paths: [] }])).toEqual([])
+  it('plans nothing for a save-to-drive that saved no file', () => {
+    expect(planUndo([{
+      type: 'save-to-drive',
+      service: 'drive-1',
+      paths: [],
+      skipped: [{ name: 'a.pdf', reason: 'duplicate' }],
+      matched: 1
+    }])).toEqual([])
   })
 })
 

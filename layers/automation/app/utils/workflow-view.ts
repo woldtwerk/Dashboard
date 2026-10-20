@@ -1,4 +1,5 @@
 import type {
+  AppliedAction,
   AutomationAction,
   DecisionAttempt,
   DecisionNodeData,
@@ -276,4 +277,39 @@ export function outputLabels(node: WorkflowNode): string[] {
       : ['yes', 'no', 'unsure']
   }
   return []
+}
+
+// --- Applied saves --------------------------------------------------------
+
+/** What one save-to-drive record of a run did, as counts the activity list can read */
+export interface DriveSaveSummary {
+  saved: number
+  /** The same bytes were saved into the folder before, or a same-name file of the same size is already there */
+  duplicate: number
+  /** The name is taken and the file was not saved: the conflict rule said skip, or a same-name file of another size sits there */
+  exists: number
+  /**
+   * The attachments the action accepted; `undefined` on a record stored before
+   * the runner kept it, so the UI cannot tell "nothing matched" from "unknown"
+   */
+  matched: number | undefined
+}
+
+/**
+ * One summary per save-to-drive record of a run, in order. The counts are what
+ * tells a run that found no matching attachment from one that skipped every file
+ * — the applied paths alone are empty for both.
+ */
+export function driveSaveSummary(applied: AppliedAction[]): DriveSaveSummary[] {
+  return applied
+    .filter((action): action is Extract<AppliedAction, { type: 'save-to-drive' }> => action.type === 'save-to-drive')
+    .map((action) => {
+      const duplicate = (action.skipped ?? []).filter(file => file.reason === 'duplicate').length
+      return {
+        saved: action.paths.length,
+        duplicate,
+        exists: (action.skipped?.length ?? 0) - duplicate,
+        matched: action.matched
+      }
+    })
 }

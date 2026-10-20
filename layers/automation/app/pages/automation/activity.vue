@@ -2,7 +2,8 @@
 import type { AutomationRun } from '#layers/automation/shared/types/automation'
 import type { AutomationExport, AutomationExportSummary } from '#layers/automation/app/utils/automation-exports'
 import { runConfidence } from '#layers/automation/shared/automation'
-import { decisionChainLabel } from '#layers/automation/app/utils/workflow-view'
+import { decisionChainLabel, driveSaveSummary } from '#layers/automation/app/utils/workflow-view'
+import type { DriveSaveSummary } from '#layers/automation/app/utils/workflow-view'
 import { automationExports, formatAutomationExportSummary } from '#layers/automation/app/utils/automation-exports'
 import { useAutomationRuns } from '#layers/automation/app/composables/useAutomationRuns'
 import { formatZoned } from '#layers/core/shared/date-format'
@@ -66,6 +67,37 @@ function reviewStep(run: AutomationRun) {
 function decisionChain(run: AutomationRun): string | undefined {
   const step = run.path.find(candidate => candidate.source || candidate.attempts?.length)
   return step ? decisionChainLabel(step) : undefined
+}
+
+function count(value: number, singular: string): string {
+  return `${value} ${singular}${value === 1 ? '' : 's'}`
+}
+
+/**
+ * How one applied save-to-drive record reads, e.g. `Saved 2 files` or
+ * `1 already in folder · 1 skipped – name taken`. The counts come from the run;
+ * this only turns them into a line.
+ */
+function driveSaveText(summary: DriveSaveSummary): string {
+  const parts: string[] = []
+  if (summary.saved) {
+    parts.push(`Saved ${count(summary.saved, 'file')}`)
+  }
+  if (summary.duplicate) {
+    parts.push(`${summary.duplicate} already in folder`)
+  }
+  if (summary.exists) {
+    parts.push(`${summary.exists} skipped – name taken`)
+  }
+  if (parts.length) {
+    return parts.join(' · ')
+  }
+  // A stored record from before `matched` existed cannot tell the two apart
+  return summary.matched === 0 ? 'No matching attachment' : 'No files saved'
+}
+
+function driveSaveSummaries(run: AutomationRun): DriveSaveSummary[] {
+  return driveSaveSummary(run.applied)
 }
 
 // --- Run actions ----------------------------------------------------------
@@ -211,6 +243,9 @@ onMounted(() => {
             </p>
             <p v-if="run.actions.length" class="mt-1 text-xs text-muted">
               {{ run.actions.map(action => action.action.type).join(', ') }}
+            </p>
+            <p v-for="(summary, index) in driveSaveSummaries(run)" :key="index" class="mt-1 text-xs text-muted">
+              {{ driveSaveText(summary) }}
             </p>
             <p v-if="run.error" class="mt-1 text-xs text-error">
               {{ run.error }}

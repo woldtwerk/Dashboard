@@ -1,4 +1,4 @@
-import type { DriveEntry } from '../../shared/types/drive'
+import type { DriveEntry, DriveSkippedFile } from '../../shared/types/drive'
 import type { DriveNameConflict } from '../../shared/drive-upload'
 import { folderSteps, sanitizeDriveFileName, sha256Hex, uniqueDriveName } from '../../shared/drive-upload'
 import { joinPath } from '../../shared/drive-path'
@@ -47,11 +47,6 @@ export interface DriveSaveInput {
   size?: number
   content?: Uint8Array
   stream?: ReadableStream<Uint8Array>
-}
-
-export interface DriveSkippedFile {
-  name: string
-  reason: 'duplicate' | 'exists'
 }
 
 export interface DriveSaveResult {
