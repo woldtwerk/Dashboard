@@ -16,6 +16,24 @@ export function dependenciesReady(
   })
 }
 
+const warnedFieldComponents = new Set<string>()
+
+/**
+ * Report a connector's field component that is not registered, once per name.
+ *
+ * The setup renderer falls back to the default input, so a typo leaves a usable
+ * form; the warning is what makes the typo visible instead of silently dropping
+ * the widget.
+ */
+export function warnMissingFieldComponent(name: string) {
+  if (warnedFieldComponents.has(name)) {
+    return
+  }
+
+  warnedFieldComponents.add(name)
+  console.warn(`[setup] Unknown field component "${name}"; using the default input instead.`)
+}
+
 /** Prepend the current value when the fetched options do not contain it, so it stays selectable. */
 export function withCurrentOption(options: SetupOption[], value: SetupValue | undefined): SetupOption[] {
   const current = value === undefined || value === '' ? undefined : String(value)

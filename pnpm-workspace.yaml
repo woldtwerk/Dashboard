@@ -46,11 +46,11 @@ catalog:
   nodemailer: 7.0.13
   nuxt: ^4.6.1
   nuxt-auth-utils: 0.5.32
+  qr: 0.7.0
   tailwindcss: ^4.3.3
   tsdav: ^2.5.0
   typescript: ^6.0.3
   unstorage: ^1.17.5
-  uqr: 0.1.2
   vitest: 4.1.11
   vue-tsc: ^3.3.13
   web-push: 3.6.7

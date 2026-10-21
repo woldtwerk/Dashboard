@@ -1,7 +1,8 @@
 import { formatIban } from './iban'
 import { formatMoney } from './money'
-import { paypalMeLink } from './paypal'
+import { paypalPaymentUrl, parsePaypalTarget } from './paypal'
 import type { PayeeDetails } from './types/payments'
+import { weroPaymentUrl } from './wero'
 
 export interface PaymentMailRequest {
   title: string
@@ -26,27 +27,32 @@ export function paymentRequestMail(request: PaymentMailRequest, payee: PayeeDeta
     ''
   ]
 
-  if (payee.paypalMe) {
+  if (payee.paypal) {
     lines.push(
       'Per PayPal:',
-      paypalMeLink(payee.paypalMe, request.amountCents),
-      `Bitte gib die Referenz ${request.reference} in der PayPal-Notiz an.`,
-      ''
+      paypalPaymentUrl(payee.paypal, request.amountCents)
     )
+    if (parsePaypalTarget(payee.paypal).kind === 'code') {
+      // A personal code has no amount form, so the payer enters it in PayPal
+      lines.push(`Betrag bitte selbst eintragen: ${formatMoney(request.amountCents)}`)
+    }
+    lines.push(`Bitte gib die Referenz ${request.reference} in der PayPal-Notiz an.`, '')
   }
 
-  lines.push(
-    'Per Überweisung:',
-    `Empfänger: ${payee.holder}`,
-    `IBAN: ${formatIban(payee.iban)}`
-  )
-  if (payee.bic) {
-    lines.push(`BIC: ${payee.bic}`)
+  if (payee.iban) {
+    lines.push(
+      'Per Überweisung:',
+      `Empfänger: ${payee.holder}`,
+      `IBAN: ${formatIban(payee.iban)}`
+    )
+    if (payee.bic) {
+      lines.push(`BIC: ${payee.bic}`)
+    }
+    lines.push(`Verwendungszweck: ${request.reference}`, '')
   }
-  lines.push(`Verwendungszweck: ${request.reference}`, '')
 
   if (payee.wero) {
-    lines.push(`Per Wero: ${payee.wero}`, '')
+    lines.push(`Per Wero: ${weroPaymentUrl(payee.wero, request.amountCents)}`, '')
   }
 
   lines.push('Vielen Dank!', payee.holder)

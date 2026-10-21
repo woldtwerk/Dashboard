@@ -35,21 +35,26 @@ export interface PaymentRequest {
 /** The normalized payee settings from the `payee` connector. */
 export interface PayeeDetails {
   holder: string
-  /** Normalized, unformatted */
-  iban: string
+  /** Normalized, unformatted; absent when the payee takes no bank transfers */
+  iban?: string
+  /** Only meaningful together with an IBAN */
   bic?: string
-  /** PayPal.me username */
-  paypalMe?: string
-  /** Phone number or email registered with Wero */
+  /** A PayPal.Me name or the id of a personal PayPal code */
+  paypal?: string
+  /** The share token out of the payee's Wero QR */
   wero?: string
   /** Mail service id the request is sent from */
   mailService: string
 }
 
-/** What the QR endpoint returns; the client renders the SVG with uqr. */
+/**
+ * What the QR endpoint returns; the client renders each entry as an SVG.
+ * A method is only present when the payee configured it.
+ */
 export interface PaymentQrPayload {
-  epc: string
+  epc?: string
   paypal?: string
+  wero?: string
 }
 
 /** A request that was created but whose mail could not be sent. */

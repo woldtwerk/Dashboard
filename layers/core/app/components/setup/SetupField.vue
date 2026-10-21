@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { resolveComponent } from 'vue'
 import type { SetupField, SetupOption, SetupValue, SetupValues } from '#layers/core/shared/types/setup'
+import { warnMissingFieldComponent } from '../../utils/setup'
 
 const props = defineProps<{
   field: SetupField
@@ -18,6 +20,30 @@ const props = defineProps<{
 const value = defineModel<SetupValue | undefined>()
 
 const reveal = ref(false)
+
+/**
+ * The domain component for this field, when the connector names one.
+ *
+ * `resolveComponent` only sees globally registered components and returns the
+ * name as a string when it finds none. A missing component falls back to the
+ * default input rather than leaving the field blank; a typo in the connector
+ * is still reported once, so it does not go unnoticed.
+ */
+function customComponent(name: string) {
+  const component = resolveComponent(name)
+  if (typeof component !== 'string') {
+    return component
+  }
+
+  warnMissingFieldComponent(name)
+
+  return undefined
+}
+
+const fieldComponent = computed(() => {
+  const field = props.field
+  return field.component && !field.secret ? customComponent(field.component) : undefined
+})
 
 const text = computed({
   get: () => value.value === undefined ? '' : String(value.value),
@@ -135,8 +161,15 @@ async function onFile(event: Event) {
     :required="field.required && !keepsSecret"
     :error="loadError || undefined"
   >
+    <component
+      :is="fieldComponent"
+      v-if="fieldComponent"
+      v-model="text"
+      :field="field"
+    />
+
     <USelectMenu
-      v-if="field.type === 'select' && !loadError"
+      v-else-if="field.type === 'select' && !loadError"
       v-model="text"
       :items="items"
       value-key="value"

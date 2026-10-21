@@ -18,6 +18,7 @@
     "h3": "catalog:",
     "hookable": "catalog:",
     "nuxt-auth-utils": "catalog:",
+    "qr": "catalog:",
     "tailwindcss": "catalog:",
     "web-push": "catalog:",
     "zod": "catalog:"

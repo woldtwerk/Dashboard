@@ -11,7 +11,7 @@
     "@nuxt/ui": "catalog:",
     "@vueuse/core": "catalog:",
     "drizzle-orm": "catalog:",
-    "uqr": "catalog:",
+    "qr": "catalog:",
     "zod": "catalog:"
   },
   "peerDependencies": {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useDebounceFn } from '@vueuse/core'
 import type { TableColumn } from '@nuxt/ui'
-import { renderSVG } from 'uqr'
+import { encodeQR } from 'qr'
 import type { PaymentCreateResponse, PaymentQrPayload, PaymentRequest } from '#layers/payments/shared/types/payments'
 import { formatMoney } from '#layers/payments/shared/money'
 import { formatZoned } from '#layers/core/shared/date-format'
@@ -99,14 +99,15 @@ function moment(value: string | null): string {
   return value ? formatZoned(value, zone.value, 'dd MMM yyyy') : '—'
 }
 
-// --- QR payloads (prefetched on hover, rendered with uqr) -----------------
+// --- QR payloads (prefetched on hover, rendered with qr) ------------------
 
 const qrCache = new Map<string, PaymentQrPayload>()
 const qrOpen = ref(false)
 const qrLoading = ref(false)
 const qrRequest = ref<PaymentRequest | null>(null)
 const qrPayload = ref<PaymentQrPayload | null>(null)
-const qrTab = ref<'epc' | 'paypal'>('epc')
+type QrTab = 'epc' | 'paypal' | 'wero'
+const qrTab = ref<QrTab>('epc')
 
 async function fetchQr(id: string): Promise<PaymentQrPayload | undefined> {
   const cached = qrCache.get(id)
@@ -142,33 +143,38 @@ async function openQr(request: PaymentRequest) {
   }
 
   qrPayload.value = payload
-  if (!payload.paypal) {
-    qrTab.value = 'epc'
-  }
+  qrTab.value = payload.epc ? 'epc' : payload.paypal ? 'paypal' : 'wero'
 }
 
 const qrTabs = computed(() => [
-  { label: 'GiroCode', value: 'epc' },
-  ...(qrPayload.value?.paypal ? [{ label: 'PayPal', value: 'paypal' }] : [])
+  ...(qrPayload.value?.epc ? [{ label: 'GiroCode', value: 'epc' }] : []),
+  ...(qrPayload.value?.paypal ? [{ label: 'PayPal', value: 'paypal' }] : []),
+  ...(qrPayload.value?.wero ? [{ label: 'Wero', value: 'wero' }] : [])
 ])
 
 const qrSvg = computed(() => {
-  const data = qrTab.value === 'paypal' ? qrPayload.value?.paypal : qrPayload.value?.epc
-  return data ? renderSVG(data, { pixelSize: 5, border: 2 }) : ''
+  const data = qrPayload.value?.[qrTab.value]
+  return data ? encodeQR(data, 'svg', { scale: 5 }) : ''
 })
 
 const qrSrc = computed(() => qrSvg.value ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(qrSvg.value)}` : '')
 
-async function copyPaypal(request: PaymentRequest) {
+/** The link behind the active tab, shown so it can be copied by hand. */
+const qrLink = computed(() => qrTab.value === 'epc' ? undefined : qrPayload.value?.[qrTab.value])
+
+const methodLabel = { paypal: 'PayPal', wero: 'Wero' } as const
+
+async function copyLink(request: PaymentRequest, method: keyof typeof methodLabel) {
   const payload = await fetchQr(request.id)
-  if (!payload?.paypal) {
-    toast.add({ title: 'No PayPal.me username is configured', color: 'warning', icon: 'i-lucide-circle-alert' })
+  const link = payload?.[method]
+  if (!link) {
+    toast.add({ title: `No ${methodLabel[method]} link is configured`, color: 'warning', icon: 'i-lucide-circle-alert' })
     return
   }
 
   try {
-    await navigator.clipboard.writeText(payload.paypal)
-    toast.add({ title: 'PayPal link copied', color: 'success', icon: 'i-lucide-copy' })
+    await navigator.clipboard.writeText(link)
+    toast.add({ title: `${methodLabel[method]} link copied`, color: 'success', icon: 'i-lucide-copy' })
   } catch {
     toast.add({ title: 'Could not copy the link', color: 'error', icon: 'i-lucide-circle-alert' })
   }
@@ -237,7 +243,8 @@ function cancel(request: PaymentRequest) {
 function rowItems(request: PaymentRequest) {
   return [
     { label: 'Show QR code', icon: 'i-lucide-qr-code', onSelect: () => openQr(request) },
-    { label: 'Copy PayPal link', icon: 'i-lucide-copy', onSelect: () => copyPaypal(request) },
+    { label: 'Copy PayPal link', icon: 'i-lucide-copy', onSelect: () => copyLink(request, 'paypal') },
+    { label: 'Copy Wero link', icon: 'i-lucide-copy', onSelect: () => copyLink(request, 'wero') },
     { type: 'separator' as const },
     ...(request.status === 'open'
       ? [
@@ -383,7 +390,7 @@ async function onCreated(response: PaymentCreateResponse) {
           <UEmpty
             icon="i-lucide-hand-coins"
             title="No payment requests"
-            description="Create one to send a reference, a GiroCode and a PayPal link."
+            description="Create one to send a reference and every way to pay you configured."
             variant="naked"
             class="py-12"
           />
@@ -410,7 +417,7 @@ async function onCreated(response: PaymentCreateResponse) {
           :items="qrTabs"
           :content="false"
           size="sm"
-          @update:model-value="value => qrTab = value as 'epc' | 'paypal'"
+          @update:model-value="value => qrTab = value as QrTab"
         />
 
         <div v-if="qrLoading" class="flex justify-center py-12">
@@ -424,8 +431,8 @@ async function onCreated(response: PaymentCreateResponse) {
         </p>
 
         <UInput
-          v-if="qrTab === 'paypal' && qrPayload?.paypal"
-          :model-value="qrPayload.paypal"
+          v-if="qrLink"
+          :model-value="qrLink"
           readonly
           class="w-full font-mono text-xs"
         />
@@ -433,21 +440,32 @@ async function onCreated(response: PaymentCreateResponse) {
         <p v-if="qrTab === 'epc'" class="text-xs text-muted">
           Scan this with a banking app to fill the transfer and its reference.
         </p>
-        <p v-else class="text-xs text-muted">
+        <p v-else-if="qrTab === 'paypal'" class="text-xs text-muted">
           The reference goes into the PayPal note.
+        </p>
+        <p v-else class="text-xs text-muted">
+          The amount and reference travel with the Wero link.
         </p>
       </div>
     </template>
 
     <template #footer>
-      <div class="flex w-full justify-end">
+      <div class="flex w-full justify-end gap-2">
         <UButton
           v-if="qrPayload?.paypal && qrRequest"
           label="Copy PayPal link"
           icon="i-lucide-copy"
           color="neutral"
           variant="soft"
-          @click="copyPaypal(qrRequest)"
+          @click="copyLink(qrRequest, 'paypal')"
+        />
+        <UButton
+          v-if="qrPayload?.wero && qrRequest"
+          label="Copy Wero link"
+          icon="i-lucide-copy"
+          color="neutral"
+          variant="soft"
+          @click="copyLink(qrRequest, 'wero')"
         />
       </div>
     </template>

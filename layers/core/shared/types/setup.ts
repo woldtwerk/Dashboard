@@ -14,6 +14,12 @@ interface SetupFieldBase {
   required?: boolean
   /** Never sent to the client. Left empty, the stored value is kept. */
   secret?: boolean
+  /**
+   * Global component a domain layer provides to render this one field instead
+   * of the default input, e.g. a QR scanner. Gets `modelValue` and `field`,
+   * emits `update:modelValue`. The field's `type` still describes the value.
+   */
+  component?: string
 }
 
 export interface SetupOption {

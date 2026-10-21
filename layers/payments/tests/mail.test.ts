@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { paymentRequestMail } from '../shared/mail'
-import { paypalMeLink } from '../shared/paypal'
+import { formatMoney } from '../shared/money'
+import { paypalPaymentUrl } from '../shared/paypal'
 import type { PayeeDetails } from '../shared/types/payments'
+import { weroPaymentUrl } from '../shared/wero'
 
 const payee: PayeeDetails = {
   holder: 'Max Mustermann',
-  iban: 'DE89370400440532013000',
-  bic: 'COBADEFFXXX',
   mailService: 'mail-1'
 }
 
@@ -18,33 +18,49 @@ const request = {
 }
 
 describe('paymentRequestMail', () => {
-  it('leaves out PayPal when the payee has no username', () => {
-    const { text } = paymentRequestMail(request, payee)
+  it('sends only the PayPal link when that is the only method', () => {
+    const { text } = paymentRequestMail(request, { ...payee, paypal: 'jane-doe' })
 
-    expect(text).not.toContain('paypal.me')
-    expect(text).toContain('Verwendungszweck: AM-7K3Q9X')
+    expect(text).toContain(paypalPaymentUrl('jane-doe', request.amountCents))
+    expect(text).not.toContain('IBAN:')
+    expect(text).not.toContain('Per Wero:')
   })
 
-  it('adds the PayPal link and the reference hint when configured', () => {
-    const { text } = paymentRequestMail(request, { ...payee, paypalMe: 'maxmustermann' })
+  it('sends the amount separately for a personal PayPal code', () => {
+    const { text } = paymentRequestMail(request, { ...payee, paypal: '3ZAD8FWS67RUJ' })
 
-    expect(text).toContain(paypalMeLink('maxmustermann', request.amountCents))
-    expect(text).toContain('AM-7K3Q9X')
+    expect(text).toContain(paypalPaymentUrl('3ZAD8FWS67RUJ', request.amountCents))
+    expect(text).toContain(`Betrag bitte selbst eintragen: ${formatMoney(request.amountCents)}`)
   })
 
-  it('leaves out Wero when the payee has no alias', () => {
-    expect(paymentRequestMail(request, payee).text).not.toContain('Wero')
+  it('sends only the Wero link when that is the only method', () => {
+    const { text } = paymentRequestMail(request, { ...payee, wero: 'd6xY21Hybs' })
+
+    expect(text).toContain(weroPaymentUrl('d6xY21Hybs', request.amountCents))
+    expect(text).not.toContain('IBAN:')
+    expect(text).not.toContain('Per PayPal:')
   })
 
-  it('shows both PayPal and Wero when both are configured', () => {
+  it('sends only the bank block when there is just an IBAN', () => {
+    const { text } = paymentRequestMail(request, { ...payee, iban: 'DE89370400440532013000', bic: 'COBADEFFXXX' })
+
+    expect(text).toContain('IBAN: DE89 3704 0044 0532 0130 00')
+    expect(text).toContain('BIC: COBADEFFXXX')
+    expect(text).not.toContain('Per PayPal:')
+    expect(text).not.toContain('Per Wero:')
+  })
+
+  it('sends every configured method together', () => {
     const { text } = paymentRequestMail(request, {
       ...payee,
-      paypalMe: 'maxmustermann',
-      wero: '+49 170 1234567'
+      iban: 'DE89370400440532013000',
+      paypal: 'jane-doe',
+      wero: 'd6xY21Hybs'
     })
 
-    expect(text).toContain(paypalMeLink('maxmustermann', request.amountCents))
-    expect(text).toContain('+49 170 1234567')
+    expect(text).toContain(paypalPaymentUrl('jane-doe', request.amountCents))
+    expect(text).toContain(weroPaymentUrl('d6xY21Hybs', request.amountCents))
+    expect(text).toContain('IBAN: DE89 3704 0044 0532 0130 00')
   })
 
   it('keeps a line break in a title out of the subject', () => {
