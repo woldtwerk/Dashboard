@@ -8,6 +8,7 @@
  * migration of the encrypted service values.
  */
 
+import { z } from 'zod'
 import { normalizeIban } from './iban'
 import { isValidPaypalTarget, normalizePaypalHandle } from './paypal'
 import type { PayeeDetails } from './types/payments'
@@ -20,6 +21,22 @@ function text(value: unknown): string {
 /** A value that ends up on a single line of a mail or a QR. */
 function line(value: string): string {
   return value.replace(/[\r\n]+/g, ' ').trim()
+}
+
+/** Whether a string is an address mail can be addressed to */
+export function isEmailAddress(value: string): boolean {
+  return z.email().safeParse(value).success
+}
+
+/**
+ * The PayPal account's addresses out of their comma-separated form, lower-cased
+ * so they compare equal to a mail's `To` address whatever was typed.
+ */
+export function paypalEmailsFrom(value: unknown): string[] {
+  return text(value)
+    .split(/[,;\s]+/)
+    .map(email => email.toLowerCase())
+    .filter(Boolean)
 }
 
 /**
@@ -37,6 +54,7 @@ export function payeeFromValues(values: Record<string, unknown>): PayeeDetails {
   const iban = normalizeIban(text(values.iban))
   const bic = text(values.bic).toUpperCase()
   const paypal = normalizePaypalHandle(text(values.paypal) || text(values.paypalMe))
+  const paypalEmails = paypalEmailsFrom(values.paypalEmails).filter(isEmailAddress)
   const wero = text(values.wero)
 
   return {
@@ -44,6 +62,7 @@ export function payeeFromValues(values: Record<string, unknown>): PayeeDetails {
     ...(iban ? { iban } : {}),
     ...(iban && bic ? { bic } : {}),
     ...(paypal && isValidPaypalTarget(paypal) ? { paypal } : {}),
+    ...(paypalEmails.length ? { paypalEmails } : {}),
     ...(wero && isValidWeroToken(wero) ? { wero } : {}),
     mailService: text(values.mailService)
   }

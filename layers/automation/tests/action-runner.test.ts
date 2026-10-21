@@ -288,7 +288,7 @@ interface FakeRequest {
   payerName: string
 }
 
-function fakePayments(initial: FakeRequest[] = []) {
+function fakePayments(initial: FakeRequest[] = [], paypalEmails: string[] = ['max@example.com']) {
   const requests = new Map(initial.map(request => [request.id, { ...request }]))
   const created: Array<{ title: string, amountCents: number, payerName: string, payerEmail?: string }> = []
   const sent: string[] = []
@@ -346,6 +346,9 @@ function fakePayments(initial: FakeRequest[] = []) {
     async getRequest(id) {
       const request = requests.get(id)
       return request ? { status: request.status, paidCents: request.paidCents } : undefined
+    },
+    async payeePaypalEmails() {
+      return paypalEmails
     },
     async paidRequestForSource(_service, source) {
       if (!paidSources.has(source)) {
@@ -440,16 +443,30 @@ describe('runActions: request-payment', () => {
 })
 
 describe('runActions: confirm-paypal-payment', () => {
-  const PAYPAL_HEADER = 'mx.protonmail.ch; dkim=pass (2048-bit key) header.d=paypal.de header.s=protonmail'
+  /** The HTML body of a PayPal.de payment mail, as the provider returns it */
+  const PAYPAL_HTML = [
+    '<p style="font-size:42px"><span>Anna Müller hat Ihnen 2,83 € EUR gesendet</span></p>',
+    '<table><tbody><tr><td><strong>Transaktionscode</strong></td><td>9ZZ87654YX321098W</td></tr></tbody></table>',
+    '<table><tbody><tr><td><strong>Erhaltener Betrag</strong></td><td>2,83 € EUR</td></tr></tbody></table>',
+    '<table><tbody><tr><td><strong>Mitteilung von Anna Müller</strong></td><td>AM-REF1</td></tr></tbody></table>'
+  ].join('\n')
 
-  function paypalItem(): AutomationItem {
+  /** The same mail, with the row that names PayPal's payment removed */
+  const PAYPAL_HTML_WITHOUT_ID = PAYPAL_HTML
+    .split('\n')
+    .filter(line => !line.includes('Transaktionscode'))
+    .join('\n')
+
+  /** The plain text of the mail: PayPal sends it HTML only, so this is no help */
+  function paypalItem(overrides: Partial<AutomationItem> = {}): AutomationItem {
     return mailItem({
       messageId: '<paypal-1@paypal.de>',
       fields: {
         from: 'service@paypal.de',
         subject: 'Sie haben Geld erhalten',
-        text: 'Anna Müller hat Ihnen 2,83 € EUR gesendet.\n\nMitteilung\nAM-REF1'
-      }
+        text: ''
+      },
+      ...overrides
     })
   }
 
@@ -464,20 +481,26 @@ describe('runActions: confirm-paypal-payment', () => {
     }
   }
 
-  function context(payments: ReturnType<typeof fakePayments>, headers: string[]): ActionRunContext {
+  function context(
+    payments: ReturnType<typeof fakePayments>,
+    options: { verified?: boolean, html?: string } = {}
+  ): ActionRunContext {
+    const { verified = true, html = PAYPAL_HTML } = options
+
     return {
       payments: payments.port,
-      trustedAuthservIds: ['mx.protonmail.ch'],
-      mailAuthenticationResults: async () => headers
+      verifyMailSender: async () => verified
+        ? { ok: true, html }
+        : { ok: false, reason: 'dkim=fail' }
     }
   }
 
-  it('marks the matching request paid when DKIM is aligned', async () => {
+  it('marks the matching request paid when the sender signature verifies', async () => {
     const payments = fakePayments([openRequest()])
 
     const { applied, variables } = await runActions(planned([
       { type: 'confirm-paypal-payment', payee: 'payee-1' }
-    ]), paypalItem(), fakeApplier(), context(payments, [PAYPAL_HEADER]))
+    ]), paypalItem(), fakeApplier(), context(payments))
 
     expect(applied).toEqual([{
       type: 'confirm-paypal-payment',
@@ -494,7 +517,7 @@ describe('runActions: confirm-paypal-payment', () => {
     })
   })
 
-  it('leaves every request untouched and asks the owner to look when DKIM is not aligned', async () => {
+  it('leaves every request untouched and asks the owner to look when the sender signature does not verify', async () => {
     const payments = fakePayments([openRequest()])
     const announced: string[] = []
     const item = paypalItem()
@@ -502,7 +525,7 @@ describe('runActions: confirm-paypal-payment', () => {
     const { applied } = await runActions(planned([
       { type: 'confirm-paypal-payment', payee: 'payee-1' }
     ]), item, fakeApplier(), {
-      ...context(payments, ['attacker.example; dkim=pass header.d=paypal.de']),
+      ...context(payments, { verified: false }),
       announcePaymentReview: (review) => { announced.push(review.title) }
     })
 
@@ -511,15 +534,86 @@ describe('runActions: confirm-paypal-payment', () => {
     expect(announced).toHaveLength(1)
   })
 
-  it('does not pay twice when the same mail runs again', async () => {
+  it('confirms nothing while the payee names no PayPal address to check the recipient against', async () => {
+    const payments = fakePayments([openRequest()], [])
+    const announced: string[] = []
+
+    const { applied } = await runActions(planned([
+      { type: 'confirm-paypal-payment', payee: 'payee-1' }
+    ]), paypalItem(), fakeApplier(), {
+      payments: payments.port,
+      // A verified signature is not enough: the mail must also be addressed to
+      // the payee's own account, which is unknown without its addresses
+      verifyMailSender: async () => { throw new Error('The sender must not be checked without a recipient') },
+      announcePaymentReview: (review) => { announced.push(review.title) }
+    })
+
+    expect(applied).toEqual([{ type: 'confirm-paypal-payment', outcome: 'unverified' }])
+    expect(payments.requests.get('req-1')).toMatchObject({ status: 'open', paidCents: 0 })
+    expect(announced).toHaveLength(1)
+  })
+
+  it('parses the subject of the verified source, not the one the item was indexed with', async () => {
+    const payments = fakePayments([openRequest()])
+
+    const { applied } = await runActions(planned([
+      { type: 'confirm-paypal-payment', payee: 'payee-1' }
+    ]), paypalItem(), fakeApplier(), {
+      payments: payments.port,
+      // The stored subject still says money arrived; the source the signature
+      // was checked against is a sent-money mail
+      verifyMailSender: async () => ({ ok: true, subject: 'You sent a payment', html: PAYPAL_HTML })
+    })
+
+    expect(applied[0]).toMatchObject({ outcome: 'not-a-payment' })
+    expect(payments.requests.get('req-1')).toMatchObject({ status: 'open', paidCents: 0 })
+  })
+
+  it.each([
+    { branch: 'with PayPal\'s transaction id', html: PAYPAL_HTML },
+    { branch: 'without a transaction id', html: PAYPAL_HTML_WITHOUT_ID }
+  ])('does not pay twice when the same mail runs again $branch', async ({ html }) => {
     const payments = fakePayments([openRequest()])
     const actions = planned([{ type: 'confirm-paypal-payment', payee: 'payee-1' }])
 
-    const first = await runActions(actions, paypalItem(), fakeApplier(), context(payments, [PAYPAL_HEADER]))
-    const second = await runActions(actions, paypalItem(), fakeApplier(), context(payments, [PAYPAL_HEADER]))
+    const first = await runActions(actions, paypalItem(), fakeApplier(), context(payments, { html }))
+    const second = await runActions(actions, paypalItem(), fakeApplier(), context(payments, { html }))
 
     expect(first.applied[0]).toMatchObject({ outcome: 'paid' })
     expect(second.applied[0]).toMatchObject({ outcome: 'already-paid' })
+    expect(payments.requests.get('req-1')).toMatchObject({ status: 'paid', paidCents: 283 })
+  })
+
+  it('does not pay twice when the same payment arrives in a second mail', async () => {
+    const payments = fakePayments([openRequest()])
+    const actions = planned([{ type: 'confirm-paypal-payment', payee: 'payee-1' }])
+
+    const first = await runActions(actions, paypalItem(), fakeApplier(), context(payments))
+    const second = await runActions(
+      actions,
+      paypalItem({ messageId: '<paypal-2@paypal.de>', key: 'INBOX|2|m2', uid: 2 }),
+      fakeApplier(),
+      context(payments)
+    )
+
+    expect(first.applied[0]).toMatchObject({ outcome: 'paid' })
+    expect(second.applied[0]).toMatchObject({ outcome: 'already-paid' })
+    expect(payments.requests.get('req-1')).toMatchObject({ status: 'paid', paidCents: 283 })
+  })
+
+  it('finds a request recorded under the mail source before the mail named a transaction id', async () => {
+    const payments = fakePayments([openRequest()])
+    await payments.port.markPaid('req-1', {
+      cents: 283,
+      via: 'paypal',
+      source: 'paypal-mail:mail-1:<paypal-1@paypal.de>'
+    })
+
+    const { applied } = await runActions(planned([
+      { type: 'confirm-paypal-payment', payee: 'payee-1' }
+    ]), paypalItem(), fakeApplier(), context(payments))
+
+    expect(applied).toEqual([{ type: 'confirm-paypal-payment', outcome: 'already-paid', requestId: 'req-1', cents: 283 }])
     expect(payments.requests.get('req-1')).toMatchObject({ status: 'paid', paidCents: 283 })
   })
 })

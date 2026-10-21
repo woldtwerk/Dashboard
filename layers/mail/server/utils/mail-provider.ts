@@ -105,11 +105,12 @@ export interface MailProvider {
    */
   getStreamHeaders(mailbox: string, uids: number[]): Promise<MailStreamHeader[]>
   /**
-   * Every `Authentication-Results` header value of one message, in header order,
-   * topmost first. Fetching headers only keeps the body on the server. A sender can
-   * add such headers, so a caller trusts only the first one.
+   * The full RFC822 source of one message, so a caller can verify its DKIM
+   * signature itself instead of trusting a header a relay wrote. Capped at
+   * 2 MB: a larger message answers `undefined` rather than a truncated source,
+   * whose signature would not verify anyway.
    */
-  getAuthenticationResults(mailbox: string, uid: number): Promise<string[]>
+  getRawMessage(mailbox: string, uid: number): Promise<Buffer | undefined>
 }
 
 /** Creates a provider from the settings of one service instance */

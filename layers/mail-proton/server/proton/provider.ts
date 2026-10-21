@@ -7,7 +7,6 @@ import type { Mailbox, MailMessage, MailMessageState, MailSearch, MailStreamHead
 import { attachmentsFromStructure, contentIdsFromHtml, normalizeContentId, type MailPartStructure } from '../../../mail/shared/mail-attachments'
 import { baseMimeType } from '../../../core/shared/mime'
 import { mailStreamFlags, parseRawStreamHeaders } from '../../../mail/shared/mail-thread'
-import { authenticationResultsFromRaw } from '../../../mail/shared/mail-auth'
 import { labelMailbox } from '../../../mail/shared/mail-labels'
 import { sequenceRange, uidPage } from './sequence'
 import { isProtonLabel, protonSpecialUse } from './special-use'
@@ -16,10 +15,10 @@ import { sendProtonMail } from './mailer'
 
 const MESSAGE_QUERY = { uid: true, flags: true, envelope: true, internalDate: true } as const
 const INDEX_SOURCE_BYTES = 256 * 1024
+/** The largest source a sender check reads; larger mails answer `undefined` */
+const RAW_MESSAGE_BYTES = 2 * 1024 * 1024
 /** The only headers the stream backfill needs; the body is never fetched */
 const STREAM_HEADERS = ['list-id', 'list-unsubscribe', 'precedence', 'auto-submitted']
-/** The header a sender check reads; repeated values keep their order */
-const AUTHENTICATION_HEADERS = ['authentication-results']
 
 /** The first text/html body part, whose `cid:` references decide what is inline. */
 function htmlPart(node: MailPartStructure): string | undefined {
@@ -491,16 +490,16 @@ export function createProtonMailProvider(values: SetupValues): MailProvider {
       })
     },
 
-    getAuthenticationResults(mailbox, uid) {
+    getRawMessage(mailbox, uid) {
       return withProtonMailbox(settings, mailbox, async (client) => {
-        const results: string[] = []
-
-        // Headers only: a body is neither needed for the check nor fetched
-        for await (const message of client.fetch(String(uid), { uid: true, headers: AUTHENTICATION_HEADERS }, { uid: true })) {
-          results.push(...authenticationResultsFromRaw(message.headers?.toString('utf8') ?? ''))
+        // One connection, and one byte over the cap so a truncated source is
+        // recognisable as too large rather than mistaken for a complete one
+        const message = await client.fetchOne(String(uid), { uid: true, source: { maxLength: RAW_MESSAGE_BYTES + 1 } }, { uid: true })
+        if (!message || !message.source) {
+          return undefined
         }
 
-        return results
+        return message.source.length <= RAW_MESSAGE_BYTES ? message.source : undefined
       })
     },
 

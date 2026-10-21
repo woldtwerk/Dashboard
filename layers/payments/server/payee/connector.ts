@@ -1,6 +1,7 @@
 import type { Connector } from '../../../core/server/utils/services'
 import type { SetupValues } from '../../../core/shared/types/setup'
 import { isValidIban, normalizeIban } from '../../shared/iban'
+import { isEmailAddress, paypalEmailsFrom } from '../../shared/payee'
 import { isValidPaypalTarget, normalizePaypalHandle } from '../../shared/paypal'
 import { isValidWeroToken } from '../../shared/wero'
 
@@ -63,6 +64,13 @@ export function createPayeeConnector(): Connector {
             description: 'Scan a PayPal code, or type your paypal.me name'
           },
           {
+            name: 'paypalEmails',
+            label: 'PayPal account emails',
+            type: 'text',
+            placeholder: 'max@example.com',
+            description: 'PayPal account email address(es), comma-separated — required for automatic confirmation of a PayPal payment mail'
+          },
+          {
             name: 'wero',
             label: 'Wero',
             type: 'text',
@@ -86,6 +94,7 @@ export function createPayeeConnector(): Connector {
       const iban = normalizeIban(text(values.iban))
       const bic = text(values.bic).toUpperCase()
       const paypal = normalizePaypalHandle(text(values.paypal))
+      const paypalEmails = paypalEmailsFrom(values.paypalEmails)
       const wero = text(values.wero)
 
       return {
@@ -93,6 +102,7 @@ export function createPayeeConnector(): Connector {
         iban: iban || undefined,
         bic: iban ? bic || undefined : undefined,
         paypal: paypal || undefined,
+        paypalEmails: paypalEmails.join(', ') || undefined,
         wero: wero || undefined,
         mailService: text(values.mailService)
       }
@@ -108,6 +118,7 @@ export function createPayeeConnector(): Connector {
 
       const iban = text(values.iban)
       const paypal = text(values.paypal)
+      const paypalEmails = paypalEmailsFrom(values.paypalEmails)
       const wero = text(values.wero)
 
       if (!iban && !paypal && !wero) {
@@ -118,6 +129,9 @@ export function createPayeeConnector(): Connector {
       }
       if (paypal && !isValidPaypalTarget(paypal)) {
         return 'The PayPal name or code is invalid'
+      }
+      if (paypalEmails.some(email => !isEmailAddress(email))) {
+        return 'Enter only email addresses for the PayPal account'
       }
       if (wero && !isValidWeroToken(wero)) {
         return 'The Wero code is invalid'

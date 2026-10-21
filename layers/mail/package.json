@@ -11,7 +11,12 @@
     "@vueuse/core": "catalog:",
     "date-fns": "catalog:",
     "drizzle-orm": "catalog:",
+    "mailauth": "catalog:",
+    "mailparser": "catalog:",
     "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/mailparser": "catalog:"
   },
   "peerDependencies": {
     "nuxt": "catalog:"

@@ -22,6 +22,21 @@ describe('payeeFromValues', () => {
     expect(withIban.bic).toBe('COBADEFFXXX')
     expect(payeeFromValues({ holder, mailService: service, bic: 'COBADEFFXXX' }).bic).toBeUndefined()
   })
+
+  it.each([
+    {
+      branch: 'lower-cases a comma-separated list',
+      paypalEmails: 'Max@Example.com, max.mustermann@example.org',
+      expected: ['max@example.com', 'max.mustermann@example.org']
+    },
+    {
+      branch: 'drops a value that is not an email address',
+      paypalEmails: 'max@example.com, nicht-ich',
+      expected: ['max@example.com']
+    }
+  ])('$branch', ({ paypalEmails, expected }) => {
+    expect(payeeFromValues({ holder, mailService: service, paypalEmails }).paypalEmails).toEqual(expected)
+  })
 })
 
 describe('payee connector validation', () => {
@@ -55,6 +70,10 @@ describe('payee connector validation', () => {
   it('rejects a Wero value that is not a share token', () => {
     expect(validate({ iban: 'DE89370400440532013000', wero: '+49 170 1234567' })).toBeTruthy()
   })
+
+  it('rejects a PayPal address that is not an email address', () => {
+    expect(validate({ paypal: 'maxmustermann', paypalEmails: 'max@example' })).toBeTruthy()
+  })
 })
 
 describe('payee connector completion', () => {
@@ -71,5 +90,16 @@ describe('payee connector completion', () => {
     expect(values?.paypal).toBe('Max-Mustermann')
     expect(values?.bic).toBeUndefined()
     expect(values?.iban).toBeUndefined()
+  })
+
+  it('stores the PayPal addresses lower-cased and comma-separated', async () => {
+    const values = await connector.complete?.({
+      holder,
+      mailService: service,
+      paypal: 'maxmustermann',
+      paypalEmails: 'Max@Example.com,  max.mustermann@example.org'
+    })
+
+    expect(values?.paypalEmails).toBe('max@example.com, max.mustermann@example.org')
   })
 })

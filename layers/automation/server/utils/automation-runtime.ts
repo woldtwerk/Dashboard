@@ -46,7 +46,9 @@ import {
   requestForPaymentSource
 } from '../../../payments/server/utils/payment-requests'
 import { sendPaymentRequest } from '../../../payments/server/utils/payment-send'
-import { trustedAuthservIds } from '../../../payments/server/utils/trusted-authserv-ids'
+import { usePayee } from '../../../payments/server/utils/payee'
+import { verifySenderDkim } from '../../../mail/server/utils/mail-dkim'
+import { htmlBodyFromRaw } from '../../../mail/server/utils/mail-source'
 
 const LOCK_TTL_MS = 5 * 60_000
 // A preview with AI fallbacks asks a language model once per unsure item, so a
@@ -197,6 +199,9 @@ function actionContextFor(keepAlive?: () => Promise<boolean>): ActionRunContext 
         await sendPaymentRequest(id)
       },
       openRequests: service => openRequestsForMatching(service),
+      async payeePaypalEmails(service) {
+        return (await usePayee(service)).paypalEmails ?? []
+      },
       markPaid: (id, input) => markPaymentPaid(id, input),
       async getRequest(id) {
         const request = await getPaymentRequest(id)
@@ -207,11 +212,18 @@ function actionContextFor(keepAlive?: () => Promise<boolean>): ActionRunContext 
         return request ? { requestId: request.id, reference: request.reference } : undefined
       }
     },
-    mailAuthenticationResults: async (service, mailbox, uid) => {
+    verifyMailSender: async (service, mailbox, uid, check) => {
       const provider = await useMailProvider(service)
-      return await provider.getAuthenticationResults(mailbox, uid)
+      const raw = await provider.getRawMessage(mailbox, uid)
+      if (!raw) {
+        return { ok: false, reason: 'the mail source is not available' }
+      }
+
+      const verdict = await verifySenderDkim(raw, check)
+      // The fetch that proved the signature carries the body the parser needs,
+      // so a verified mail costs one connection
+      return verdict.ok ? { ...verdict, html: await htmlBodyFromRaw(raw) } : verdict
     },
-    trustedAuthservIds: trustedAuthservIds(),
     announcePaymentReview
   }
 }

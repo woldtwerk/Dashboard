@@ -20,7 +20,6 @@ import { splitAmount } from '../../../payments/shared/split'
 import { matchPayment } from '../../../payments/shared/match'
 import type { OpenRequest } from '../../../payments/shared/match'
 import { parsePaypalReceivedMail } from '../../../payments/shared/paypal-mail'
-import { isDkimAligned } from '../../../mail/shared/mail-auth'
 import {
   extractLoginCode,
   extractWithRegex,
@@ -58,6 +57,8 @@ export interface PaymentActionPort {
   ): Promise<CreatedPaymentRequest[]>
   sendRequest(id: string): Promise<void>
   openRequests(service: string): Promise<OpenRequest[]>
+  /** The PayPal addresses the payee receives on, lower-cased; empty when none is set */
+  payeePaypalEmails(service: string): Promise<string[]>
   markPaid(id: string, input: { cents: number, via: 'paypal', source: string }): Promise<boolean>
   getRequest(id: string): Promise<{ status: 'open' | 'paid' | 'cancelled', paidCents: number } | undefined>
   /** The request a mail source was already recorded on, so a rerun changes nothing */
@@ -82,12 +83,33 @@ export interface ActionRunContext {
   onBeforeUpload?: () => Promise<void> | void
   /** The payment requests and matching a payment action uses */
   payments?: PaymentActionPort
-  /** The `Authentication-Results` headers of an item, topmost first */
-  mailAuthenticationResults?: (service: string, mailbox: string, uid: number) => Promise<string[]>
-  /** The authserv-ids whose `Authentication-Results` header is trusted */
-  trustedAuthservIds?: string[]
+  /**
+   * Verifies that the mail's sender really signed it for one of `check.domains`
+   * and that it was addressed to one of `check.recipients`, and reads its HTML
+   * body from the same fetch — PayPal's payment mails are often HTML only, so
+   * the plain text an item carries is not enough.
+   */
+  verifyMailSender?: (service: string, mailbox: string, uid: number, check: MailSenderCheck) => Promise<VerifiedMail>
   /** Asks the owner to look at a payment that could not be confirmed automatically */
   announcePaymentReview?: (input: { service: string, itemKey: string, title: string, body: string }) => Promise<void> | void
+}
+
+/** What a sender check is measured against */
+export interface MailSenderCheck {
+  /** The domains the signature must be for */
+  domains: readonly string[]
+  /** The mailboxes the mail must be addressed to, so a forwarded mail does not count */
+  recipients: readonly string[]
+}
+
+/** What a sender check answers, beside the body the same fetch already read */
+export interface VerifiedMail {
+  ok: boolean
+  reason?: string
+  /** The Subject of the verified source, which the signature covers */
+  subject?: string
+  /** The HTML body, present only for a verified mail */
+  html?: string
 }
 
 export interface ActionRunResult {
@@ -280,10 +302,12 @@ async function announcePaymentReview(
 }
 
 /**
- * Confirms a PayPal "money received" mail. Only a mail whose topmost
- * `Authentication-Results` header is from a trusted server and carries a DKIM pass
- * for PayPal may change a payment; everything else is recorded for the owner, so a
- * forged mail can never mark a request paid.
+ * Confirms a PayPal "money received" mail. Only a mail whose sender signature
+ * verifies for PayPal's own domain, and which was addressed to one of the
+ * payee's own PayPal addresses, may change a payment — a genuine mail to another
+ * account keeps its signature when it is forwarded, so the recipient is part of
+ * the check. Everything else is recorded for the owner, so a forged or
+ * redirected mail can never mark a request paid.
  */
 async function confirmPaypalPayment(
   action: ConfirmPaypalPaymentAction,
@@ -294,48 +318,67 @@ async function confirmPaypalPayment(
   if (item.domain !== 'mail' || !item.mailbox || item.uid === undefined) {
     throw new Error('Confirming a PayPal payment needs a mail item')
   }
+  if (!context.payments) {
+    throw new Error('Matching payments is not available for this item')
+  }
 
-  const headers = context.mailAuthenticationResults
-    ? await context.mailAuthenticationResults(item.service, item.mailbox, item.uid)
-    : []
-  const aligned = isDkimAligned(headers, {
-    trustedAuthservIds: context.trustedAuthservIds ?? [],
-    domains: PAYPAL_SIGNING_DOMAINS
-  })
-
-  if (!aligned) {
+  // Without the payee's own PayPal addresses the recipient of the mail cannot be
+  // checked, and a mail sent to someone else's account would pass
+  const recipients = await context.payments.payeePaypalEmails(action.payee)
+  if (!recipients.length) {
     await announcePaymentReview(
       context,
       item,
       'PayPal payment not confirmed',
-      `${item.title} — the mail could not be verified as a PayPal payment. Mark the right request paid by hand.`
+      `${item.title} — add the PayPal account email in the payee settings, so a payment mail can be checked against the account it was sent to. Mark the right request paid by hand.`
+    )
+    return { type: 'confirm-paypal-payment', outcome: 'unverified' }
+  }
+
+  const verified: VerifiedMail = context.verifyMailSender
+    ? await context.verifyMailSender(item.service, item.mailbox, item.uid, { domains: PAYPAL_SIGNING_DOMAINS, recipients })
+    : { ok: false, reason: 'sender verification is not available' }
+
+  if (!verified.ok) {
+    await announcePaymentReview(
+      context,
+      item,
+      'PayPal payment not confirmed',
+      `${item.title} — the mail could not be verified as a PayPal payment (${verified.reason ?? 'no valid signature'}). Mark the right request paid by hand.`
     )
     return { type: 'confirm-paypal-payment', outcome: 'unverified' }
   }
 
   const parsed = parsePaypalReceivedMail({
-    subject: item.fields.subject ?? '',
-    text: item.fields.text || item.state || ''
+    // The subject of the source that was verified, not the one the item was
+    // indexed with: only the verified headers are the ones the signature covers
+    subject: verified.subject ?? item.fields.subject ?? '',
+    text: item.fields.text || item.state || '',
+    html: verified.html
   })
   if (!parsed) {
     return { type: 'confirm-paypal-payment', outcome: 'not-a-payment' }
   }
-  if (!context.payments) {
-    throw new Error('Matching payments is not available for this item')
-  }
 
-  const source = `paypal-mail:${item.service}:${item.messageId ?? `${item.mailbox}/${item.uid}`}`
-  // The same mail may be evaluated again after the request is already paid; the
-  // receipt source tells that apart from a genuinely unmatched payment.
-  const alreadyRecorded = await context.payments.paidRequestForSource(item.service, source)
-  if (alreadyRecorded) {
-    variables.paymentReference = alreadyRecorded.reference
+  // The same payment can arrive in two mails or be judged again later, so
+  // PayPal's own id names the receipt whenever the mail carries one. Without it
+  // the mail itself is the receipt.
+  const mailSource = `paypal-mail:${item.service}:${item.messageId ?? `${item.mailbox}/${item.uid}`}`
+  const source = parsed.transactionId ? `paypal:${parsed.transactionId}` : mailSource
+  // A request paid from this very mail before the id was read keeps its old
+  // source, so both are looked up: what was recorded decides, not the key.
+  const recorded = await context.payments.paidRequestForSource(item.service, source)
+    ?? (source === mailSource
+      ? undefined
+      : await context.payments.paidRequestForSource(item.service, mailSource))
+  if (recorded) {
+    variables.paymentReference = recorded.reference
     variables.paymentPayer = parsed.payerName
     variables.paymentAmount = formatMoney(parsed.amountCents)
     return {
       type: 'confirm-paypal-payment',
       outcome: 'already-paid',
-      requestId: alreadyRecorded.requestId,
+      requestId: recorded.requestId,
       cents: parsed.amountCents
     }
   }
