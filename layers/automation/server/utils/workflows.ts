@@ -19,7 +19,7 @@ const positionSchema = z.object({ x: z.number().finite(), y: z.number().finite()
 export const automationConditionSchema = z.object({
   field: z.enum(['from', 'listId', 'subject', 'text', 'correspondent', 'title']),
   op: z.enum(['contains', 'equals', 'matches']),
-  value: z.string().trim().min(1).max(500)
+  value: z.string().trim().max(500)
 })
 
 export const automationConditionsSchema = z.object({

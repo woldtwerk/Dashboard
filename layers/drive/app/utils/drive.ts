@@ -179,6 +179,19 @@ export function filterEntries(entries: DriveEntry[], query: string): DriveEntry[
   return entries.filter(entry => entry.name.toLowerCase().includes(needle))
 }
 
+/**
+ * The name a rename commit should send, or undefined when there is nothing to
+ * do. It only applies while the entry is still the one being edited, which
+ * makes a second commit after Enter (the input's blur) a no-op.
+ */
+export function renameCommit(entry: DriveEntry, draft: string, editingPath: string | undefined): string | undefined {
+  const name = draft.trim()
+  if (editingPath !== entry.path || !name || name === entry.name) {
+    return undefined
+  }
+  return name
+}
+
 export type SelectionMode = 'replace' | 'toggle' | 'range'
 
 export interface DriveSelection {

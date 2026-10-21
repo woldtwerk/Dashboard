@@ -3,7 +3,7 @@ import type { DropdownMenuItem } from '@nuxt/ui'
 import type { ComponentPublicInstance } from 'vue'
 import type { DriveEntry, DriveView } from '#layers/drive/shared/types/drive'
 import type { SelectionMode } from '../../utils/drive'
-import { formatDate, formatSize, THUMBNAIL_ICON_WIDTH, THUMBNAIL_TILE_WIDTH } from '../../utils/drive'
+import { formatDate, formatSize, renameCommit, THUMBNAIL_ICON_WIDTH, THUMBNAIL_TILE_WIDTH } from '../../utils/drive'
 
 const props = defineProps<{
   entries: DriveEntry[]
@@ -45,11 +45,19 @@ watch(renamePath, (value) => {
 })
 
 function commitRename(entry: DriveEntry) {
-  const name = renameDraft.value.trim()
-  if (name && name !== entry.name) {
+  const name = renameCommit(entry, renameDraft.value, renamePath.value)
+  renamePath.value = undefined
+  if (name) {
     emit('rename', entry, name)
   }
-  renamePath.value = undefined
+}
+
+function onMenuCloseAutoFocus(event: Event) {
+  if (renamePath.value) {
+    event.preventDefault()
+    renameInput.value?.focus()
+    renameInput.value?.select()
+  }
 }
 
 const isSelected = (entry: DriveEntry) => props.selected.includes(entry.path)
@@ -105,6 +113,7 @@ function onRootDrop(event: DragEvent) {
         v-for="entry in entries"
         :key="entry.path"
         :items="menuItems(entry)"
+        :content="{ onCloseAutoFocus: onMenuCloseAutoFocus }"
       >
         <div
           class="group relative flex cursor-default flex-col items-center gap-2 rounded-lg border p-3 text-center transition select-none"
@@ -169,6 +178,7 @@ function onRootDrop(event: DragEvent) {
         v-for="entry in entries"
         :key="entry.path"
         :items="menuItems(entry)"
+        :content="{ onCloseAutoFocus: onMenuCloseAutoFocus }"
       >
         <div
           class="grid cursor-default grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3 border-b border-default px-3 py-2 text-sm last:border-b-0 select-none"
