@@ -157,6 +157,31 @@ describe('workflowGraphSchema', () => {
 
     expect(workflowGraphSchema.safeParse(graph).success).toBe(true)
   })
+
+  it('parses a condition node with a half-typed row whose value is empty', () => {
+    const graph: WorkflowGraph = {
+      version: 1,
+      nodes: [
+        { id: 'trigger', type: 'trigger', position: { x: 0, y: 0 }, data: { kind: 'new-item', mailbox: 'INBOX' } },
+        {
+          id: 'filter',
+          type: 'condition',
+          position: { x: 0, y: 50 },
+          data: { conditions: { combine: 'all', conditions: [
+            { field: 'subject', op: 'contains', value: 'invoice' },
+            { field: 'from', op: 'contains', value: '' }
+          ] } }
+        },
+        { id: 'end', type: 'end', position: { x: 0, y: 100 }, data: {} }
+      ],
+      edges: [
+        { id: 'e1', source: 'trigger', sourceHandle: 'next', target: 'filter' },
+        { id: 'e2', source: 'filter', sourceHandle: 'true', target: 'end' }
+      ]
+    }
+
+    expect(workflowGraphSchema.safeParse(graph).success).toBe(true)
+  })
 })
 
 describe('workflow templates parse at the API boundary', () => {
