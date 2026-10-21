@@ -323,7 +323,7 @@ function automationDeps(service: string, keepAlive?: () => Promise<boolean>): Au
     decide: workflowDecide(),
     decideBatch: workflowDecideBatch(),
     fallbackDecideBatch: workflowFallbackDecideBatch(),
-    loadItems: (domain, id, limit) => loadItems(domain, id, limit),
+    loadItems: (domain, id, limit, isDue) => loadItems(domain, id, limit, isDue),
     applierFor,
     actionContext: () => actionContextFor(keepAlive),
     notify: notifySuggestion,

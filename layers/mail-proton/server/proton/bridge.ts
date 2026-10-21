@@ -94,12 +94,24 @@ function describeConnectError(error: unknown, { host, port }: ProtonSettings): s
   return 'Could not connect to Proton Bridge'
 }
 
+/**
+ * The underlying reason of a failed connect, for the log: the user-facing text is
+ * deliberately coarse, but a refusal or a dropped handshake must stay traceable.
+ * Only the error's own fields are logged, never the settings (which hold the password).
+ */
+function connectErrorMeta(error: unknown, { host, port }: ProtonSettings) {
+  const { code, message, responseText } = (error ?? {}) as { code?: string, message?: string, responseText?: string }
+  return { host, port, code, message, responseText }
+}
+
 async function connect(settings: ProtonSettings): Promise<ImapFlow> {
   const client = createClient(settings)
 
   try {
     await client.connect()
   } catch (error) {
+    // Logged once, where the status text is chosen; `cause` keeps the original for callers
+    console.warn('[proton-bridge] connect failed', connectErrorMeta(error, settings))
     throw createError({ status: 502, statusText: describeConnectError(error, settings), cause: error })
   }
 
@@ -193,12 +205,13 @@ export function isMailboxExistsError(error: unknown): boolean {
 export function toMailSummary(mailbox: string, message: {
   uid: number
   flags?: Set<string>
-  envelope?: { subject?: string, from?: MessageAddressObject[], date?: Date | string }
+  envelope?: { subject?: string, from?: MessageAddressObject[], date?: Date | string, messageId?: string }
   internalDate?: Date | string
 }): MailSummary {
   return {
     uid: message.uid,
     mailbox,
+    messageId: message.envelope?.messageId || undefined,
     subject: message.envelope?.subject ?? '',
     from: toMailAddresses(message.envelope?.from),
     date: new Date(message.envelope?.date ?? message.internalDate ?? Date.now()).toISOString(),

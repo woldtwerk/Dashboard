@@ -95,8 +95,8 @@ export interface AutomationDeps {
   decideBatch?: WorkflowDecideBatch
   /** Answers a decision node's AI fallbacks when the engine is unsure */
   fallbackDecideBatch?: WorkflowFallbackDecideBatch
-  /** Candidate items of one service, newest first */
-  loadItems: (domain: AutomationDomain, service: string, limit: number) => Promise<AutomationItem[]>
+  /** Candidate items of one service, newest first; only the keys `isDue` admits may be loaded */
+  loadItems: (domain: AutomationDomain, service: string, limit: number, isDue: (keys: string[]) => Promise<Set<string>>) => Promise<AutomationItem[]>
   /** The applier of one service; the runtime builds it from the domain provider */
   applierFor: (domain: AutomationDomain, service: string) => AutomationApplier | Promise<AutomationApplier>
   /**
@@ -142,7 +142,12 @@ export async function runService(
   workflows: AutomationWorkflow[],
   deps: AutomationDeps
 ): Promise<AutomationRun[]> {
-  const candidates = await deps.loadItems(domain, service, 500)
+  // The loader asks before it fetches a body: an item that was already evaluated
+  // or is still waiting for its retry must cost nothing but a listing.
+  const now = deps.now?.() ?? new Date()
+  const candidates = await deps.loadItems(domain, service, 500, async keys =>
+    new Set((await deps.store.due(domain, service, keys, now)).map(state => state.itemKey))
+  )
   return await evaluateCandidates(domain, service, candidates, workflows, deps)
 }
 

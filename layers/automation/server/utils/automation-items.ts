@@ -1,6 +1,6 @@
 import { createError } from 'nuxt/server'
 import { entityKey, parseEntityKey } from '../../../core/shared/entities'
-import type { MailAddress, MailMessage } from '../../../mail/shared/types/mail'
+import type { MailAddress, MailMessage, MailSummary } from '../../../mail/shared/types/mail'
 import { EMPTY_DOCUMENTS_FILTERS } from '../../../documents/shared/types/documents'
 import type { DocumentsDocument } from '../../../documents/shared/types/documents'
 import type { AutomationDomain, AutomationItem } from '../../shared/types/automation'
@@ -9,6 +9,15 @@ import type { DraftItemContext } from '../../shared/workflow-draft'
 
 /** The mailbox automation watches for new mail */
 export const AUTOMATION_INBOX = 'INBOX'
+
+/**
+ * Narrows a batch of candidate keys to the items still to evaluate, so the caller
+ * fetches the bodies of those only. The engine passes the seen/retry store in.
+ */
+export type DueKeys = (keys: string[]) => Promise<Set<string>>
+
+/** Without a store asking (previews, sweeps), every listed item is a candidate */
+const allDue: DueKeys = async keys => new Set(keys)
 
 /** `Name <address>` lines, the form a decision reads */
 export function formatAddresses(addresses: MailAddress[]): string {
@@ -30,13 +39,22 @@ export function addressLine(addresses: MailAddress[]): string {
     .join(', ')
 }
 
+/**
+ * The key a mail is evaluated under. The body fetch builds its items from the
+ * message, the due prefilter from the summary: both go through here, so a
+ * Message-ID missing on one side cannot make them disagree.
+ */
+export function mailItemKey(mailbox: string, uid: number, messageId?: string): string {
+  return `${mailbox}|${uid}|${messageId ?? ''}`
+}
+
 function mailItem(service: string, mailbox: string, message: MailMessage): AutomationItem {
   const from = formatAddresses(message.from)
 
   return {
     domain: 'mail',
     service,
-    key: `${mailbox}|${message.uid}|${message.messageId ?? ''}`,
+    key: mailItemKey(mailbox, message.uid, message.messageId),
     mailbox,
     uid: message.uid,
     messageId: message.messageId,
@@ -72,27 +90,51 @@ export function itemRef(item: AutomationItem): string {
   return entityKey({ type: 'document', service: item.service, id: item.key })
 }
 
-/**
- * New mail to evaluate: the newest messages of a mailbox, with their bodies. Each
- * item carries the fields the conditions test and the text the engine reads.
- */
-export async function loadMailItems(service: string, limit: number, mailbox = AUTOMATION_INBOX): Promise<AutomationItem[]> {
-  const provider = await useMailProvider(service)
-  const summaries = await provider.listMessages(mailbox, { limit })
-  const items: AutomationItem[] = []
-
-  for (const summary of summaries) {
-    const message = await provider.getMessage(mailbox, summary.uid)
-    if (message) {
-      items.push(mailItem(service, mailbox, message))
-    }
+/** Drops the items the engine would filter out anyway, before any body is fetched */
+async function onlyDue(items: AutomationItem[], isDue: DueKeys): Promise<AutomationItem[]> {
+  if (!items.length) {
+    return []
   }
-
-  return items
+  const due = await isDue(items.map(item => item.key))
+  return items.filter(item => due.has(item.key))
 }
 
-/** Documents sitting in the archive's inbox, newest first */
-export async function loadDocumentItems(service: string, limit: number): Promise<AutomationItem[]> {
+/** The newest summaries of a mailbox: the search index when mounted, else the provider */
+async function listMailSummaries(service: string, limit: number, mailbox: string): Promise<MailSummary[]> {
+  const index = useMailSearchIndex()
+  if (index && mailbox === AUTOMATION_INBOX) {
+    return await index.search({ services: [service], mailbox, search: {}, limit })
+  }
+
+  return await (await useMailProvider(service)).listMessages(mailbox, { limit })
+}
+
+/**
+ * New mail to evaluate: the newest messages of a mailbox that are due, with their
+ * bodies. `isDue` runs on the summaries first, so a mailbox where nothing is new
+ * costs one listing and no body; the due ones come back in one `getMessages` call,
+ * i.e. one Bridge connection, never one per message.
+ */
+export async function loadMailItems(
+  service: string,
+  limit: number,
+  isDue: DueKeys = allDue,
+  mailbox = AUTOMATION_INBOX
+): Promise<AutomationItem[]> {
+  const summaries = await listMailSummaries(service, limit, mailbox)
+  const keyOf = (summary: MailSummary) => mailItemKey(mailbox, summary.uid, summary.messageId)
+  const due = await isDue(summaries.map(keyOf))
+  const uids = summaries.filter(summary => due.has(keyOf(summary))).map(summary => summary.uid)
+  if (!uids.length) {
+    return []
+  }
+
+  const messages = await (await useMailProvider(service)).getMessages(mailbox, uids)
+  return messages.map(message => mailItem(service, mailbox, message))
+}
+
+/** Documents sitting in the archive's inbox, newest first, that are due */
+export async function loadDocumentItems(service: string, limit: number, isDue: DueKeys = allDue): Promise<AutomationItem[]> {
   const provider = await useDocumentsProvider(service)
   const page = await provider.list({
     page: 1,
@@ -103,22 +145,23 @@ export async function loadDocumentItems(service: string, limit: number): Promise
   })
 
   const correspondents = new Map((await provider.listCorrespondents()).map(entry => [entry.id, entry.name]))
-  return page.results.map(document => documentItem(
+  return await onlyDue(page.results.map(document => documentItem(
     service,
     document,
     document.correspondent !== null ? correspondents.get(document.correspondent) : undefined
-  ))
+  )), isDue)
 }
 
 /** The item loader the engine uses: the trigger's default source */
-export function loadItems(domain: AutomationDomain, service: string, limit: number): Promise<AutomationItem[]> {
-  return domain === 'mail' ? loadMailItems(service, limit) : loadDocumentItems(service, limit)
+export function loadItems(domain: AutomationDomain, service: string, limit: number, isDue: DueKeys = allDue): Promise<AutomationItem[]> {
+  return domain === 'mail' ? loadMailItems(service, limit, isDue) : loadDocumentItems(service, limit, isDue)
 }
 
 /**
  * The items a preview's "Last 50" shows: for mail the newest of the inbox, served
  * by the search index when one is mounted so it stays cheap; for documents the
- * newest of the archive.
+ * newest of the archive. Nothing is filtered: a preview shows the newest items,
+ * not only the ones a run would still evaluate.
  */
 export async function loadRecentItems(domain: AutomationDomain, service: string, limit: number): Promise<AutomationItem[]> {
   if (domain === 'documents') {
@@ -138,20 +181,7 @@ export async function loadRecentItems(domain: AutomationDomain, service: string,
     ))
   }
 
-  const index = useMailSearchIndex()
-  if (!index) {
-    return await loadMailItems(service, limit)
-  }
-
-  const provider = await useMailProvider(service)
-  const summaries = await index.search({ services: [service], mailbox: AUTOMATION_INBOX, search: {}, limit })
-  const uids = summaries.filter(summary => summary.service === service).map(summary => summary.uid)
-  if (!uids.length) {
-    return []
-  }
-
-  const messages = await provider.getMessages(AUTOMATION_INBOX, uids)
-  return messages.map(message => mailItem(service, AUTOMATION_INBOX, message))
+  return await loadMailItems(service, limit)
 }
 
 /** One item addressed by an entity key, for the preview's "Pick an item" */export async function loadItemByRef(ref: string): Promise<AutomationItem> {
@@ -298,14 +328,7 @@ export async function loadDocumentsSince(service: string, since: string | null, 
 
 /** Inbox mail newer than the cursor, for the sweep */
 export async function loadMailSince(service: string, since: string | null, limit: number): Promise<SweepItems> {
-  const provider = await useMailProvider(service)
-  const index = useMailSearchIndex()
-
-  // The index answers from its own newest-first listing when one is mounted; the
-  // provider listing is the fallback, so the sweep still runs without an index.
-  const summaries = index
-    ? await index.search({ services: [service], mailbox: AUTOMATION_INBOX, search: {}, limit })
-    : await provider.listMessages(AUTOMATION_INBOX, { limit })
+  const summaries = await listMailSummaries(service, limit, AUTOMATION_INBOX)
 
   const sinceMs = since ? Date.parse(since) : Number.NaN
   const uids: number[] = []
@@ -316,7 +339,7 @@ export async function loadMailSince(service: string, since: string | null, limit
     }
   }
 
-  const messages = uids.length ? await provider.getMessages(AUTOMATION_INBOX, uids) : []
+  const messages = uids.length ? await (await useMailProvider(service)).getMessages(AUTOMATION_INBOX, uids) : []
   return {
     items: messages.map(message => mailItem(service, AUTOMATION_INBOX, message)),
     cursor: maxTimestamp(summaries.map(summary => summary.date)) ?? since

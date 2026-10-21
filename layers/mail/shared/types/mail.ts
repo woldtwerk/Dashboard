@@ -22,6 +22,11 @@ export interface MailSummary {
   /** Set on results that can span accounts, e.g. from the search index */
   service?: string
   mailbox: string
+  /**
+   * RFC 5322 Message-ID, when the listing saw it: from the IMAP envelope, or
+   * from an indexed document. Identifies the same mail in several folders/labels.
+   */
+  messageId?: string
   subject: string
   /** Subject with Meilisearch match markers, from the search index */
   subjectHighlight?: string
@@ -60,8 +65,6 @@ export interface MailSummary {
 export type MailAttachment = FileSourceMeta
 
 export interface MailMessage extends MailSummary {
-  /** RFC 5322 Message-ID; identifies the same mail in several folders/labels */
-  messageId?: string
   /** Message-ID this mail answers; the root of a short thread */
   inReplyTo?: string
   /** Message-ID chain this mail belongs to, oldest first */

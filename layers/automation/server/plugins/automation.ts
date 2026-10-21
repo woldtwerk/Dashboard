@@ -1,6 +1,14 @@
 import { AUTOMATION_INBOX } from '../utils/automation-items'
 import type { AutomationDomain } from '../../shared/types/automation'
 
+/** The message of an error or of the error it wraps; the objects themselves never reach the log */
+function errorText(error: unknown): string | undefined {
+  if (error === undefined || error === null) {
+    return undefined
+  }
+  return error instanceof Error ? error.message : String(error)
+}
+
 /**
  * Automation listens to the domain event stream: new mail arriving in the inbox and
  * new documents in the archive's inbox are evaluated by the rules. The work runs
@@ -40,7 +48,9 @@ export default defineNitroPlugin(() => {
 
     runAutomation(event.domain as AutomationDomain, event.service).catch((error) => {
       useServiceLogger('automation', event.service).error('Automation run failed', {
-        error: error instanceof Error ? error.message : String(error)
+        error: errorText(error),
+        // A provider wraps the actual reason (IMAP code, TLS refusal) as `cause`
+        cause: errorText((error as { cause?: unknown } | undefined)?.cause)
       })
     })
   })

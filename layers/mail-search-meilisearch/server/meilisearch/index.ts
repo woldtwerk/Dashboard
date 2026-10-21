@@ -130,7 +130,7 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
         rankingScoreThreshold: text ? rankingScoreThresholdFor(semantic, options.semanticRatio, options.rankingScoreThreshold) : undefined,
         // The palette decides keyword vs semantic from the markers and needs the score
         showRankingScore: globalSearch ? true : undefined,
-        attributesToRetrieve: ['service', 'mailbox', 'uid', 'subject', 'fromList', 'toList', 'ccList', 'date', 'unread', 'flagged', 'hasAttachment', 'labels', 'conversationKeys', 'listId', 'listName'],
+        attributesToRetrieve: ['service', 'mailbox', 'uid', 'messageId', 'subject', 'fromList', 'toList', 'ccList', 'date', 'unread', 'flagged', 'hasAttachment', 'labels', 'conversationKeys', 'listId', 'listName'],
         attributesToCrop: text ? ['text'] : undefined,
         cropLength: globalSearch ? 20 : 24,
         // Highlighted matches come back as marker-tagged strings the client escapes before rendering
@@ -143,6 +143,7 @@ export function createMeilisearchMailIndex(options: MeilisearchMailIndexOptions)
         uid: hit.uid,
         service: hit.service,
         mailbox: hit.mailbox,
+        messageId: hit.messageId,
         subject: hit.subject,
         subjectHighlight: hit._formatted?.subject,
         fromHighlight: hit._formatted?.fromText,

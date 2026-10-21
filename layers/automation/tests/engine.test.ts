@@ -7,6 +7,7 @@ import type { SeenState } from '../server/utils/runs'
 import type { WorkflowDecide, WorkflowDecideBatch } from '../shared/workflow'
 import type {
   AppliedAction,
+  AutomationDomain,
   AutomationItem,
   AutomationRun,
   AutomationWorkflow,
@@ -375,6 +376,27 @@ describe('runService', () => {
     const store = fakeStore()
     const runs = await runService('mail', 'mail-1', [workflow({ service: 'mail-2' })], deps({ store }))
     expect(runs).toHaveLength(0)
+  })
+
+  it('answers the loader’s due check from the store, so nothing due is never loaded', async () => {
+    const store = fakeStore()
+    const at = new Date('2026-10-18T10:00:00.000Z')
+    await store.markEvaluated('mail', 'mail-1', 'a', at)
+    await store.markEvaluated('mail', 'mail-1', 'b', at)
+
+    let dueKeys: string[] | undefined
+    const loadItems = vi.fn(async (_domain: AutomationDomain, _service: string, _limit: number, isDue: (keys: string[]) => Promise<Set<string>>) => {
+      const due = await isDue(['a', 'b'])
+      dueKeys = [...due]
+      // The real loader only fetches the bodies of these; an empty set means no provider call
+      return [item('a'), item('b')].filter(candidate => due.has(candidate.key))
+    })
+
+    const runs = await runService('mail', 'mail-1', [workflow()], deps({ store, loadItems }))
+
+    expect(dueKeys).toEqual([])
+    expect(runs).toHaveLength(0)
+    expect(store.evaluated).toEqual(['a', 'b'])
   })
 })
 
