@@ -85,9 +85,9 @@ export interface ActionRunContext {
   payments?: PaymentActionPort
   /**
    * Verifies that the mail's sender really signed it for one of `check.domains`
-   * and that it was addressed to one of `check.recipients`, and reads its HTML
-   * body from the same fetch — PayPal's payment mails are often HTML only, so
-   * the plain text an item carries is not enough.
+   * and, when `check.recipients` names any, that it was addressed to one of
+   * them, and reads its HTML body from the same fetch — PayPal's payment mails
+   * are often HTML only, so the plain text an item carries is not enough.
    */
   verifyMailSender?: (service: string, mailbox: string, uid: number, check: MailSenderCheck) => Promise<VerifiedMail>
   /** Asks the owner to look at a payment that could not be confirmed automatically */
@@ -98,8 +98,12 @@ export interface ActionRunContext {
 export interface MailSenderCheck {
   /** The domains the signature must be for */
   domains: readonly string[]
-  /** The mailboxes the mail must be addressed to, so a forwarded mail does not count */
-  recipients: readonly string[]
+  /**
+   * The mailboxes the mail must be addressed to, so a forwarded mail does not
+   * count. Absent when the payee names none, which leaves the recipient
+   * unchecked.
+   */
+  recipients?: readonly string[]
 }
 
 /** What a sender check answers, beside the body the same fetch already read */
@@ -303,11 +307,12 @@ async function announcePaymentReview(
 
 /**
  * Confirms a PayPal "money received" mail. Only a mail whose sender signature
- * verifies for PayPal's own domain, and which was addressed to one of the
- * payee's own PayPal addresses, may change a payment — a genuine mail to another
- * account keeps its signature when it is forwarded, so the recipient is part of
- * the check. Everything else is recorded for the owner, so a forged or
- * redirected mail can never mark a request paid.
+ * verifies for PayPal's own domain may change a payment. When the payee names
+ * its own PayPal addresses, the mail must also be addressed to one of them — a
+ * genuine mail to another account keeps its signature when it is forwarded, so
+ * the recipient is part of the check wherever it is known. Everything else is
+ * recorded for the owner, so a forged or redirected mail can never mark a
+ * request paid.
  */
 async function confirmPaypalPayment(
   action: ConfirmPaypalPaymentAction,
@@ -322,21 +327,16 @@ async function confirmPaypalPayment(
     throw new Error('Matching payments is not available for this item')
   }
 
-  // Without the payee's own PayPal addresses the recipient of the mail cannot be
-  // checked, and a mail sent to someone else's account would pass
+  // Without the payee's own PayPal addresses the recipient cannot be checked;
+  // the signature check stays, and no recipients are handed over rather than an
+  // empty list, which would match nothing
   const recipients = await context.payments.payeePaypalEmails(action.payee)
-  if (!recipients.length) {
-    await announcePaymentReview(
-      context,
-      item,
-      'PayPal payment not confirmed',
-      `${item.title} — add the PayPal account email in the payee settings, so a payment mail can be checked against the account it was sent to. Mark the right request paid by hand.`
-    )
-    return { type: 'confirm-paypal-payment', outcome: 'unverified' }
-  }
 
   const verified: VerifiedMail = context.verifyMailSender
-    ? await context.verifyMailSender(item.service, item.mailbox, item.uid, { domains: PAYPAL_SIGNING_DOMAINS, recipients })
+    ? await context.verifyMailSender(item.service, item.mailbox, item.uid, {
+        domains: PAYPAL_SIGNING_DOMAINS,
+        ...(recipients.length ? { recipients } : {})
+      })
     : { ok: false, reason: 'sender verification is not available' }
 
   if (!verified.ok) {

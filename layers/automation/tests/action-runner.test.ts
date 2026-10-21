@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { extractValue, runActions } from '../server/utils/action-runner'
-import type { ActionRunContext, PaymentActionPort } from '../server/utils/action-runner'
+import type { ActionRunContext, MailSenderCheck, PaymentActionPort } from '../server/utils/action-runner'
 import type { DriveFileHistory, DriveSavePort } from '../../drive/server/utils/drive-save'
 import { sha256Hex } from '../../drive/shared/drive-upload'
 import type { AutomationApplier } from '../server/utils/engine'
@@ -483,15 +483,18 @@ describe('runActions: confirm-paypal-payment', () => {
 
   function context(
     payments: ReturnType<typeof fakePayments>,
-    options: { verified?: boolean, html?: string } = {}
+    options: { verified?: boolean, html?: string, checks?: MailSenderCheck[] } = {}
   ): ActionRunContext {
-    const { verified = true, html = PAYPAL_HTML } = options
+    const { verified = true, html = PAYPAL_HTML, checks } = options
 
     return {
       payments: payments.port,
-      verifyMailSender: async () => verified
-        ? { ok: true, html }
-        : { ok: false, reason: 'dkim=fail' }
+      verifyMailSender: async (_service, _mailbox, _uid, check) => {
+        checks?.push(check)
+        return verified
+          ? { ok: true, html }
+          : { ok: false, reason: 'dkim=fail' }
+      }
     }
   }
 
@@ -534,23 +537,35 @@ describe('runActions: confirm-paypal-payment', () => {
     expect(announced).toHaveLength(1)
   })
 
-  it('confirms nothing while the payee names no PayPal address to check the recipient against', async () => {
+  it('marks the request paid for a payee without PayPal addresses and checks no recipient', async () => {
     const payments = fakePayments([openRequest()], [])
-    const announced: string[] = []
+    const checks: MailSenderCheck[] = []
 
     const { applied } = await runActions(planned([
       { type: 'confirm-paypal-payment', payee: 'payee-1' }
-    ]), paypalItem(), fakeApplier(), {
-      payments: payments.port,
-      // A verified signature is not enough: the mail must also be addressed to
-      // the payee's own account, which is unknown without its addresses
-      verifyMailSender: async () => { throw new Error('The sender must not be checked without a recipient') },
-      announcePaymentReview: (review) => { announced.push(review.title) }
-    })
+    ]), paypalItem(), fakeApplier(), context(payments, { checks }))
 
-    expect(applied).toEqual([{ type: 'confirm-paypal-payment', outcome: 'unverified' }])
-    expect(payments.requests.get('req-1')).toMatchObject({ status: 'open', paidCents: 0 })
-    expect(announced).toHaveLength(1)
+    expect(applied).toEqual([{
+      type: 'confirm-paypal-payment',
+      outcome: 'paid',
+      requestId: 'req-1',
+      cents: 283,
+      paidCents: 283
+    }])
+    // No empty array either: that would read as a check against no address
+    expect(checks).toHaveLength(1)
+    expect(checks[0]?.recipients).toBeUndefined()
+  })
+
+  it('checks the recipient against the payee\'s PayPal addresses when it names some', async () => {
+    const payments = fakePayments([openRequest()], ['max@example.com'])
+    const checks: MailSenderCheck[] = []
+
+    await runActions(planned([
+      { type: 'confirm-paypal-payment', payee: 'payee-1' }
+    ]), paypalItem(), fakeApplier(), context(payments, { checks }))
+
+    expect(checks[0]?.recipients).toEqual(['max@example.com'])
   })
 
   it('parses the subject of the verified source, not the one the item was indexed with', async () => {

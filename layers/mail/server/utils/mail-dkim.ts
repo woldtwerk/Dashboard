@@ -17,9 +17,11 @@ export interface SenderVerificationOptions {
   /** The domains a signature may be for; a subdomain of one counts */
   domains: readonly string[]
   /**
-   * The addresses the mail must be addressed to. A signature stays valid when a
-   * genuine mail is forwarded or bounced, so without this check a mail PayPal
-   * sent to someone else's account would count for this one.
+   * The addresses the mail must be addressed to; an empty list counts as none.
+   * A signature stays valid when a genuine mail is forwarded or bounced, so
+   * without this check a mail PayPal sent to someone else's account would count
+   * for this one. Given, the mail must be addressed to one of them and the
+   * signature must cover `To`.
    */
   recipients?: readonly string[]
   /** DNS resolver; without one mailauth asks the system resolver. Injectable for tests */
@@ -118,9 +120,10 @@ async function headerFields(
  * - it is aligned with the RFC5322.From domain (relaxed alignment: the same
  *   organizational domain, which for PayPal's domains is an exact or subdomain
  *   match),
- * - it covers `From` and `Subject`, plus `To` when `recipients` are given, and
- *   the mail is addressed to one of those recipients — a forwarded genuine mail
- *   keeps its signature but names the account it was sent to,
+ * - it covers `From` and `Subject`, plus `To` when `recipients` names at least
+ *   one address, and the mail is addressed to one of those recipients — a
+ *   forwarded genuine mail keeps its signature but names the account it was
+ *   sent to,
  * - it carries no `l=` body length tag, which would leave the rest of the body
  *   unsigned,
  * - the message carries exactly one `From`, one `To` and one `Subject` header,
@@ -168,6 +171,8 @@ export async function verifySenderDkim(
 
   const { to, subject } = await headerFields(verified.headers?.original, raw)
   const domains = options.domains.map(normalizeDomain).filter(Boolean) as string[]
+  // An empty list names no recipient, so it counts as no list at all: requiring
+  // a To match against nothing would reject every mail
   const wanted = (options.recipients ?? []).map(recipient => recipient.trim().toLowerCase())
   let reason = 'The message carries no passing DKIM signature'
 
@@ -204,7 +209,7 @@ export async function verifySenderDkim(
 
     // The recipient cannot be taken from an unsigned To header: a mail to
     // another account could be sent on with the To line rewritten
-    if (options.recipients) {
+    if (wanted.length) {
       if (!signed.includes('to')) {
         reason = 'The signature does not cover the To header'
         continue

@@ -68,7 +68,7 @@ export function createPayeeConnector(): Connector {
             label: 'PayPal account emails',
             type: 'text',
             placeholder: 'max@example.com',
-            description: 'PayPal account email address(es), comma-separated — required for automatic confirmation of a PayPal payment mail'
+            description: 'Optional. When set, only PayPal mails addressed to one of these accounts confirm a payment — protects against someone forwarding a genuine PayPal mail sent to their own account.'
           },
           {
             name: 'wero',

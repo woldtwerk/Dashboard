@@ -42,9 +42,9 @@ export interface PayeeDetails {
   /** A PayPal.Me name or the id of a personal PayPal code */
   paypal?: string
   /**
-   * The PayPal account's own email addresses, lower-cased. A "money received"
-   * mail is only confirmed for a request when it was addressed to one of them,
-   * so a genuine mail to someone else's account cannot be redirected in.
+   * The PayPal account's own email addresses, lower-cased. When set, a "money
+   * received" mail is only confirmed for a request when it was addressed to one
+   * of them, so a genuine mail to someone else's account cannot be redirected in.
    */
   paypalEmails?: string[]
   /** The share token out of the payee's Wero QR */

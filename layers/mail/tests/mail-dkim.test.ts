@@ -87,6 +87,12 @@ describe('verifySenderDkim', () => {
       message: () => signed()
     },
     {
+      branch: 'a mail addressed to another account, with no recipient to check',
+      expected: true,
+      recipients: [],
+      message: () => signed()
+    },
+    {
       branch: 'a signature that does not cover the To header',
       expected: false,
       recipients: ['max@example.com'],
