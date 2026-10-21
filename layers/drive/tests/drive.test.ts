@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { DriveEntry } from '../shared/types/drive'
 import { baseName, breadcrumbs, escapeSegment, isWithinPath, joinPath, normalizeDriveFolderInput, parentPath, splitPath, unescapeSegment } from '../shared/drive-path'
-import { applySelection, downloadUrl, entryIcon, entryKindLabel, entryVersion, filterEntries, formatDate, formatSize, previewKind, sectionOf, sortEntries, thumbnailAllowed } from '../app/utils/drive'
+import { applySelection, downloadUrl, entryIcon, entryKindLabel, entryVersion, filterEntries, formatDate, formatSize, previewKind, renameCommit, sectionOf, sortEntries, thumbnailAllowed } from '../app/utils/drive'
 
 const file = (name: string, overrides: Partial<DriveEntry> = {}): DriveEntry => ({
   uid: name,
@@ -186,6 +186,19 @@ describe('applySelection', () => {
 
   it('falls back to a single selection without a usable anchor', () => {
     expect(applySelection({ selected: [] }, visible, '/c', 'range')).toEqual({ selected: ['/c'], anchor: '/c' })
+  })
+})
+
+describe('renameCommit', () => {
+  const entry = file('Report.pdf')
+
+  it.each([
+    ['a stale commit after the input closed', 'New.pdf', undefined, undefined],
+    ['a blank draft', '   ', entry.path, undefined],
+    ['an unchanged name', 'Report.pdf', entry.path, undefined],
+    ['a changed name', '  New.pdf  ', entry.path, 'New.pdf']
+  ])('resolves %s', (_name, draft, editingPath, expected) => {
+    expect(renameCommit(entry, draft, editingPath)).toBe(expected)
   })
 })
 
