@@ -45,7 +45,10 @@ async function leaveIfSignedOut() {
     const session = await $fetch('/api/_auth/session', { headers: { accept: 'application/json' } })
     if (!session?.user) {
       closeSource()
-      window.location.assign('/login')
+      // Reloading the page we are already on would loop, so only leave elsewhere
+      if (window.location.pathname !== '/login') {
+        window.location.assign('/login')
+      }
     }
   } catch {
     // Offline or a network blip: allow the next error to check again
@@ -125,11 +128,34 @@ export function useDomainEvents(
     return
   }
 
+  const { loggedIn } = useUserSession()
   const subscription: Subscription = { filter, handler, onReconnect: options?.onReconnect }
-  subscriptions.add(subscription)
-  lifecycle.subscribe()
+  let subscribed = false
+
+  // The stream needs a session: without one `/api/events` answers 401 and the
+  // error handler would send `/login` back to itself.
+  function sync() {
+    if (loggedIn.value === subscribed) {
+      return
+    }
+    subscribed = loggedIn.value
+
+    if (subscribed) {
+      subscriptions.add(subscription)
+      lifecycle.subscribe()
+    } else {
+      subscriptions.delete(subscription)
+      lifecycle.unsubscribe()
+    }
+  }
+
+  watch(loggedIn, sync, { immediate: true })
 
   onScopeDispose(() => {
+    if (!subscribed) {
+      return
+    }
+    subscribed = false
     subscriptions.delete(subscription)
     lifecycle.unsubscribe()
   })
