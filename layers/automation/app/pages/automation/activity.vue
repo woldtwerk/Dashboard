@@ -63,7 +63,7 @@ function reviewStep(run: AutomationRun) {
   return run.path.find(step => step.output === 'review')
 }
 
-/** The attempt chain of a decision step, e.g. `Laya 0.42 → AI 0.55 → you` */
+/** The attempt chain of a decision step, e.g. `System One 0.42 → AI 0.55 → you` */
 function decisionChain(run: AutomationRun): string | undefined {
   const step = run.path.find(candidate => candidate.source || candidate.attempts?.length)
   return step ? decisionChainLabel(step) : undefined

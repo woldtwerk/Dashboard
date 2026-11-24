@@ -13,7 +13,7 @@ function decisionNode(): WorkflowNode {
 
 describe('decisionSourceLabel', () => {
   it('names the three sources', () => {
-    expect(decisionSourceLabel('engine')).toBe('Laya')
+    expect(decisionSourceLabel('engine')).toBe('System One')
     expect(decisionSourceLabel('ai')).toBe('AI')
     expect(decisionSourceLabel('human')).toBe('you')
   })
@@ -30,7 +30,7 @@ describe('decisionChainLabel', () => {
         { source: 'ai', output: 'unsure', answer: { yes: 0.6, confidence: 0.55 } }
       ]
     }
-    expect(decisionChainLabel(step)).toBe('Laya 0.42 → AI 0.55 → you')
+    expect(decisionChainLabel(step)).toBe('System One 0.42 → AI 0.55 → you')
   })
 
   it('names a paused review as a question for the user', () => {
@@ -39,7 +39,7 @@ describe('decisionChainLabel', () => {
       output: 'review',
       attempts: [{ source: 'engine', output: 'unsure', answer: { yes: 0.5, confidence: 0.42 } }]
     }
-    expect(decisionChainLabel(step)).toBe('Laya 0.42 → you')
+    expect(decisionChainLabel(step)).toBe('System One 0.42 → you')
   })
 
   it('marks a fallback that could not run', () => {
@@ -51,7 +51,7 @@ describe('decisionChainLabel', () => {
         { source: 'ai', output: 'unsure', error: 'No AI service is set up' }
       ]
     }
-    expect(decisionChainLabel(step)).toBe('Laya 0.42 → AI unavailable → you')
+    expect(decisionChainLabel(step)).toBe('System One 0.42 → AI unavailable → you')
   })
 
   it('is empty when there is nothing to tell', () => {

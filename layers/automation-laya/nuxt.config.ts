@@ -1,7 +1,7 @@
-// Local Laya decision engine for the automation layer.
-// The `laya-serve` container (see .ddev/laya) answers the typed decisions a rule
-// asks; nothing leaves the machine. Without `laya.url`, no engine is registered
-// and AI rules never match.
+// System One decision engine for the automation layer, with a local Laya or an
+// OpenCode provider. The `laya-serve` container (see .ddev/laya) answers the
+// typed decisions a rule asks; nothing leaves the machine. Settings → Automation
+// picks the provider, and neither configured means AI rules never match.
 export default defineNuxtConfig({
   runtimeConfig: {
     laya: {

@@ -243,11 +243,11 @@ export function formatThreshold(value: number): string {
 
 // --- Decision chain -------------------------------------------------------
 
-/** How one answer source reads in the chain, e.g. `Laya 0.42 → AI 0.55 → you` */
+/** How one answer source reads in the chain, e.g. `System One 0.42 → AI 0.55 → you` */
 export function decisionSourceLabel(source: DecisionSource): string {
   switch (source) {
     case 'engine':
-      return 'Laya'
+      return 'System One'
     case 'ai':
       return 'AI'
     case 'human':
@@ -268,7 +268,7 @@ function attemptLabel(attempt: DecisionAttempt): string {
 
 /**
  * The answers a decision step went through, in order, ending with who gave the one
- * it took: `Laya 0.42 → AI 0.55 → you`. Empty when there is nothing to tell.
+ * it took: `System One 0.42 → AI 0.55 → you`. Empty when there is nothing to tell.
  */
 export function decisionChainLabel(step: Pick<WorkflowPathStep, 'output' | 'source' | 'answer' | 'attempts'>): string {
   const parts = (step.attempts ?? []).map(attemptLabel)

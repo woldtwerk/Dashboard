@@ -99,6 +99,19 @@ async function onlyDue(items: AutomationItem[], isDue: DueKeys): Promise<Automat
   return items.filter(item => due.has(item.key))
 }
 
+/**
+ * Whether mail is new enough to evaluate. A date that does not parse counts as
+ * old: automation never acts on mail it cannot place in time.
+ */
+export function isMailAfter(date: string, since: string | null): boolean {
+  if (!since) {
+    return true
+  }
+  const at = Date.parse(date)
+  const from = Date.parse(since)
+  return Number.isFinite(at) && Number.isFinite(from) && at > from
+}
+
 /** The newest summaries of a mailbox: the search index when mounted, else the provider */
 async function listMailSummaries(service: string, limit: number, mailbox: string): Promise<MailSummary[]> {
   const index = useMailSearchIndex()
@@ -111,17 +124,20 @@ async function listMailSummaries(service: string, limit: number, mailbox: string
 
 /**
  * New mail to evaluate: the newest messages of a mailbox that are due, with their
- * bodies. `isDue` runs on the summaries first, so a mailbox where nothing is new
- * costs one listing and no body; the due ones come back in one `getMessages` call,
- * i.e. one Bridge connection, never one per message.
+ * bodies. Mail at or before `since` is dropped on the summaries, so the inbox a
+ * service already had costs nothing; `isDue` runs next on what is left, so a
+ * mailbox where nothing is new costs one listing and no body; the due ones come
+ * back in one `getMessages` call, i.e. one Bridge connection, never one per message.
  */
 export async function loadMailItems(
   service: string,
   limit: number,
   isDue: DueKeys = allDue,
-  mailbox = AUTOMATION_INBOX
+  mailbox = AUTOMATION_INBOX,
+  since: string | null = null
 ): Promise<AutomationItem[]> {
-  const summaries = await listMailSummaries(service, limit, mailbox)
+  const listed = await listMailSummaries(service, limit, mailbox)
+  const summaries = listed.filter(summary => isMailAfter(summary.date, since))
   const keyOf = (summary: MailSummary) => mailItemKey(mailbox, summary.uid, summary.messageId)
   const due = await isDue(summaries.map(keyOf))
   const uids = summaries.filter(summary => due.has(keyOf(summary))).map(summary => summary.uid)
@@ -153,8 +169,15 @@ export async function loadDocumentItems(service: string, limit: number, isDue: D
 }
 
 /** The item loader the engine uses: the trigger's default source */
-export function loadItems(domain: AutomationDomain, service: string, limit: number, isDue: DueKeys = allDue): Promise<AutomationItem[]> {
-  return domain === 'mail' ? loadMailItems(service, limit, isDue) : loadDocumentItems(service, limit, isDue)
+export function loadItems(
+  domain: AutomationDomain,
+  service: string,
+  limit: number,
+  isDue: DueKeys = allDue,
+  since: string | null = null
+): Promise<AutomationItem[]> {
+  // Documents have no arrival instant to compare, so they ignore the watermark
+  return domain === 'mail' ? loadMailItems(service, limit, isDue, AUTOMATION_INBOX, since) : loadDocumentItems(service, limit, isDue)
 }
 
 /**
@@ -326,18 +349,14 @@ export async function loadDocumentsSince(service: string, since: string | null, 
   }
 }
 
-/** Inbox mail newer than the cursor, for the sweep */
-export async function loadMailSince(service: string, since: string | null, limit: number): Promise<SweepItems> {
-  const summaries = await listMailSummaries(service, limit, AUTOMATION_INBOX)
-
-  const sinceMs = since ? Date.parse(since) : Number.NaN
-  const uids: number[] = []
-  for (const summary of summaries) {
-    const date = Date.parse(summary.date)
-    if (!Number.isFinite(sinceMs) || date > sinceMs) {
-      uids.push(summary.uid)
-    }
-  }
+/**
+ * Inbox mail newer than `since`, for the sweep. Mail at or before it costs no
+ * body, and the returned cursor never moves before the given `since`.
+ */
+export async function loadMailSince(service: string, since: string, limit: number): Promise<SweepItems> {
+  const listed = await listMailSummaries(service, limit, AUTOMATION_INBOX)
+  const summaries = listed.filter(summary => isMailAfter(summary.date, since))
+  const uids = summaries.map(summary => summary.uid)
 
   const messages = uids.length ? await (await useMailProvider(service)).getMessages(AUTOMATION_INBOX, uids) : []
   return {

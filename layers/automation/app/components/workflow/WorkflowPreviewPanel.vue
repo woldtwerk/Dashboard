@@ -256,7 +256,7 @@ function attemptChain(step: WorkflowPathStep | undefined): string | undefined {
         color="warning"
         variant="soft"
         icon="i-lucide-plug-zap"
-        title="No Laya engine is configured, so decision nodes stop at other/unsure."
+        title="No decision engine is configured, so decision nodes stop at other/unsure. Choose one in Settings → Automation."
         class="mb-3"
       />
 

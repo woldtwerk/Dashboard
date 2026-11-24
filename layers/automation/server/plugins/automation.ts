@@ -15,7 +15,7 @@ function errorText(error: unknown): string | undefined {
  * under a per-service lock, so several cluster workers never evaluate the same item
  * twice; a failure is logged and never fails the sync that produced the event.
  */
-export default defineNitroPlugin(() => {
+export default defineNitroPlugin(async () => {
   registerNotificationCategory({
     id: 'automation',
     domain: 'automation',
@@ -54,4 +54,13 @@ export default defineNitroPlugin(() => {
       })
     })
   })
+
+  // Subscribed above, so a mail arriving during the startup activation is not missed
+  try {
+    await activateEnabledMailWorkflows()
+  } catch (error) {
+    useServiceLogger('automation', 'activation').warn('Could not record the mail activation at startup', {
+      error: errorText(error)
+    })
+  }
 })

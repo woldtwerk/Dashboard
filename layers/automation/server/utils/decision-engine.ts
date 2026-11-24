@@ -4,9 +4,12 @@ import type { DecisionAnswer, DecisionFallback, DecisionQuestion } from '../../s
 /**
  * Port every decision engine implements. The engine answers typed questions about
  * a piece of text and reports its calibrated confidence. `decideBatch` answers the
- * same questions for several states (e.g. Laya collates them into one forward pass).
+ * same questions for several states; it may collate them or ask them one after
+ * another.
  */
 export interface DecisionEngine {
+  /** Whether the engine can answer right now, e.g. its provider is configured */
+  available(): Promise<boolean>
   decide(state: string, questions: Record<string, DecisionQuestion>): Promise<Record<string, DecisionAnswer>>
   decideBatch(states: string[], questions: Record<string, DecisionQuestion>): Promise<Array<Record<string, DecisionAnswer>>>
 }

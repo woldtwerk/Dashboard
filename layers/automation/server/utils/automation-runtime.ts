@@ -19,14 +19,16 @@ import { entityKey, parseEntityKey } from '../../../core/shared/entities'
 import { createDocumentsApplier, createMailApplier, toMailActionProvider } from './appliers'
 import { publishModalEvent, publishReviewEvent, publishReviewNeeded } from './automation-events'
 import type { AutomationApplier, AutomationDeps, AutomationLogger } from './engine'
-import { announceRunNotifications, answerReview, applyRunActions, errorMessage, evaluateCandidates, runService, runWorkflowOnItems, undoPlan } from './engine'
+import { announceRunNotifications, answerReview, applyRunActions, errorMessage, evaluateCandidates, runService, runWorkflowOnItems, undoPlan, workflowsForService } from './engine'
 import { MANUAL_RUN_LOCK_TTL_MS, runManualGroups } from './manual-run'
 import type { ManualRunEntry } from './manual-run'
 import { sweepAll } from './automation-sweep'
 import type { SweepDeps } from './automation-sweep'
+import type { DecisionEngine } from './decision-engine'
 import { fallbackEngine, hasDecisionEngine, useDecisionEngine } from './decision-engine'
-import { itemRef, loadDocumentsSince, loadItemByRef, loadItems, loadMailSince, loadRecentItems } from './automation-items'
+import { itemRef, loadDocumentsSince, loadItemByRef, loadItems, loadMailSince, loadRecentItems, maxTimestamp } from './automation-items'
 import { getWorkflow, listWorkflows } from './workflows'
+import { ensureMailActivation } from './automation-activation'
 import { dueItems, getRun, markEvaluated, readSweepCursor, recordAttempt, recordRun, updateRun, writeSweepCursor } from './runs'
 import { forgetSavedFiles, hasSavedFile, recordSavedFile } from '../../../drive/server/utils/drive-files'
 import { createDriveSavePort } from '../../../drive/server/utils/drive-save'
@@ -69,22 +71,25 @@ function automationLogger(service: string): AutomationLogger {
   }
 }
 
-/** The decision function from the registered engine, or undefined without one */
-function workflowDecide(): WorkflowDecide | undefined {
+/** The registered engine, or undefined while none is configured */
+async function decisionEngine(): Promise<DecisionEngine | undefined> {
   if (!hasDecisionEngine()) {
     return undefined
   }
   const engine = useDecisionEngine()
-  return (state, questions) => engine.decide(state, questions)
+  return (await engine.available()) ? engine : undefined
+}
+
+/** The decision function from the registered engine, or undefined without one */
+async function workflowDecide(): Promise<WorkflowDecide | undefined> {
+  const engine = await decisionEngine()
+  return engine && ((state, questions) => engine.decide(state, questions))
 }
 
 /** The batch decision function from the registered engine, or undefined without one */
-function workflowDecideBatch(): WorkflowDecideBatch | undefined {
-  if (!hasDecisionEngine()) {
-    return undefined
-  }
-  const engine = useDecisionEngine()
-  return (states, questions) => engine.decideBatch(states, questions)
+async function workflowDecideBatch(): Promise<WorkflowDecideBatch | undefined> {
+  const engine = await decisionEngine()
+  return engine && ((states, questions) => engine.decideBatch(states, questions))
 }
 
 /**
@@ -329,13 +334,19 @@ async function announceWorkflowNotifications(run: AutomationRun): Promise<void> 
 }
 
 /** The dependencies the runner uses in the running server */
-function automationDeps(service: string, keepAlive?: () => Promise<boolean>): AutomationDeps {
+async function automationDeps(service: string, keepAlive?: () => Promise<boolean>): Promise<AutomationDeps> {
+  const [decide, decideBatch] = await Promise.all([workflowDecide(), workflowDecideBatch()])
+
   return {
     store: { due: dueItems, markEvaluated, recordAttempt, record: recordRun, update: updateRun, get: getRun },
-    decide: workflowDecide(),
-    decideBatch: workflowDecideBatch(),
+    decide,
+    decideBatch,
     fallbackDecideBatch: workflowFallbackDecideBatch(),
-    loadItems: (domain, id, limit, isDue) => loadItems(domain, id, limit, isDue),
+    loadItems: async (domain, id, limit, isDue) => {
+      // Mail at or before the activation is old; documents are not dated this way
+      const since = domain === 'mail' ? await ensureMailActivation(id) : null
+      return await loadItems(domain, id, limit, isDue, since)
+    },
     applierFor,
     actionContext: () => actionContextFor(keepAlive),
     notify: notifySuggestion,
@@ -352,12 +363,14 @@ function automationDeps(service: string, keepAlive?: () => Promise<boolean>): Au
  */
 export async function runAutomation(domain: AutomationDomain, service: string): Promise<AutomationRun[]> {
   const workflows = await listWorkflows(domain)
-  if (!workflows.some(workflow => workflow.enabled)) {
+  // Per service: a documents-only workflow must not load mail, which would record
+  // an activation for a mail service no workflow watches yet.
+  if (!workflowsForService(workflows, domain, service).some(workflow => workflow.enabled)) {
     return []
   }
 
-  const result = await withLock(`automation:${domain}:${service}`, LOCK_TTL_MS, handle =>
-    runService(domain, service, workflows, automationDeps(service, handle.renew)))
+  const result = await withLock(`automation:${domain}:${service}`, LOCK_TTL_MS, async handle =>
+    runService(domain, service, workflows, await automationDeps(service, handle.renew)))
 
   return result ?? []
 }
@@ -423,10 +436,10 @@ export async function runWorkflowManually(id: string, refs: string[]): Promise<W
     if (loaded.length) {
       const results = await runManualGroups(loaded, {
         renew: handle.renew,
-        runGroup: (group, beforeItem) => runWorkflowOnItems(
+        runGroup: async (group, beforeItem) => runWorkflowOnItems(
           workflow,
           group.entries.map(entry => entry.item),
-          automationDeps(group.service),
+          await automationDeps(group.service),
           { beforeItem }
         )
       })
@@ -460,7 +473,7 @@ export async function previewWorkflow(request: WorkflowPreviewRequest, lockKey: 
     throw createError({ status: 400, statusText: errors[0]!.message })
   }
 
-  const decideBatch = workflowDecideBatch()
+  const decideBatch = await workflowDecideBatch()
   const hasDecision = request.graph.nodes.some(node => node.type === 'decision')
   const emit = progress.onEvent ?? (() => {})
 
@@ -635,7 +648,7 @@ export async function answerAutomationReview(id: string, output: string): Promis
           return undefined
         }
       },
-      decideBatch: workflowDecideBatch(),
+      decideBatch: await workflowDecideBatch(),
       fallbackDecideBatch: workflowFallbackDecideBatch(),
       applierFor,
       actionContext: () => actionContextFor(),
@@ -660,19 +673,36 @@ export async function answerAutomationReview(id: string, output: string): Promis
  * Runs every few minutes; each (domain, service) is swept by one worker at a time.
  */
 export async function sweepAutomation(): Promise<Record<AutomationDomain, number>> {
+  let mailWorkflows: Promise<AutomationWorkflow[]> | undefined
+
   const deps: SweepDeps = {
     services: async domain => (await listServices(domain)).map(service => service.id),
     cursor: readSweepCursor,
     setCursor: writeSweepCursor,
-    load: (domain, service, since, limit) => domain === 'mail'
-      ? loadMailSince(service, since, limit)
-      : loadDocumentsSince(service, since, limit),
+    load: async (domain, service, cursor, limit) => {
+      if (domain !== 'mail') {
+        return await loadDocumentsSince(service, cursor, limit)
+      }
+
+      // Mail is only watched once a mail workflow covers the service, so an
+      // inactive service never gets a stale watermark.
+      const workflows = await (mailWorkflows ??= listWorkflows('mail'))
+      if (!workflowsForService(workflows, 'mail', service).some(workflow => workflow.enabled)) {
+        return { items: [], cursor }
+      }
+
+      // The sweep must not go back before activation: without a cursor it starts
+      // there, and a cursor older than it is raised to it.
+      const watermark = await ensureMailActivation(service)
+      const since = maxTimestamp([cursor, watermark].filter((value): value is string => !!value)) ?? new Date().toISOString()
+      return await loadMailSince(service, since, limit)
+    },
     evaluate: async (domain, service, items) => {
       const workflows = await listWorkflows(domain)
       if (!workflows.some(workflow => workflow.enabled)) {
         return []
       }
-      return await evaluateCandidates(domain, service, items, workflows, automationDeps(service))
+      return await evaluateCandidates(domain, service, items, workflows, await automationDeps(service))
     },
     withLock,
     logger: automationLogger('sweep')

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { loadMailItems, mailItemKey } from '../server/utils/automation-items'
+import { isMailAfter, loadMailItems, loadMailSince, mailItemKey } from '../server/utils/automation-items'
 import type { MailMessage, MailSummary } from '../../mail/shared/types/mail'
 
 const INBOX = 'INBOX'
@@ -63,5 +63,60 @@ describe('loadMailItems', () => {
     expect(mail.listMessages).toHaveBeenCalledOnce()
     expect(mail.getMessages).not.toHaveBeenCalled()
     expect(items).toEqual([])
+  })
+
+  it('drops mail from before the activation, before any body is fetched', async () => {
+    const mail = provider([summary(1, '<a@example.com>'), summary(2, '<b@example.com>')])
+    vi.stubGlobal('useMailSearchIndex', () => undefined)
+    vi.stubGlobal('useMailProvider', async () => mail)
+
+    const items = await loadMailItems('mail-1', 500, undefined, INBOX, '2026-10-18T09:01:30.000Z')
+
+    expect(mail.getMessages).toHaveBeenCalledOnce()
+    expect(mail.getMessages).toHaveBeenCalledWith(INBOX, [2])
+    expect(items.map(item => item.key)).toEqual([mailItemKey(INBOX, 2, '<b@example.com>')])
+  })
+})
+
+describe('isMailAfter', () => {
+  const since = '2026-10-18T09:00:00.000Z'
+
+  it.each([
+    ['newer', '2026-10-18T09:00:01.000Z', since, true],
+    ['equal', since, since, false],
+    ['older', '2026-10-18T08:59:59.000Z', since, false],
+    ['unparseable', 'not a date', since, false],
+    ['without a watermark', '2026-10-18T08:00:00.000Z', null, true]
+  ])('counts %s mail as new only when it is after the watermark', (_name, date, from, expected) => {
+    expect(isMailAfter(date as string, from as string | null)).toBe(expected)
+  })
+})
+
+describe('loadMailSince', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('fetches no body for mail at or before the cursor and never moves the cursor back', async () => {
+    const mail = provider([summary(1, '<a@example.com>')])
+    vi.stubGlobal('useMailSearchIndex', () => undefined)
+    vi.stubGlobal('useMailProvider', async () => mail)
+
+    const since = '2026-10-18T09:05:00.000Z'
+    const result = await loadMailSince('mail-1', since, 500)
+
+    expect(mail.getMessages).not.toHaveBeenCalled()
+    expect(result.items).toEqual([])
+    expect(result.cursor).toBe(since)
+  })
+
+  it('loads the mail after the cursor and advances the cursor to the newest of it', async () => {
+    const mail = provider([summary(1, '<a@example.com>'), summary(2, '<b@example.com>')])
+    vi.stubGlobal('useMailSearchIndex', () => undefined)
+    vi.stubGlobal('useMailProvider', async () => mail)
+
+    const result = await loadMailSince('mail-1', '2026-10-18T09:01:30.000Z', 500)
+
+    expect(mail.getMessages).toHaveBeenCalledWith(INBOX, [2])
+    expect(result.items.map(item => item.key)).toEqual([mailItemKey(INBOX, 2, '<b@example.com>')])
+    expect(result.cursor).toBe('2026-10-18T09:02:00.000Z')
   })
 })

@@ -76,4 +76,19 @@ export const automationSweep = sqliteTable('automation_sweep', {
   primaryKey({ columns: [table.domain, table.service] })
 ])
 
+/**
+ * When automation started watching one (domain, service). Mail at or before the
+ * watermark is old: connecting an account must not run workflows on the inbox it
+ * already has.
+ */
+export const automationActivation = sqliteTable('automation_activation', {
+  domain: text('domain', { enum: ['mail', 'documents'] }).$type<AutomationDomain>().notNull(),
+  service: text('service').notNull(),
+  /** ISO instant; everything at or before it is old */
+  since: text('since').notNull(),
+  at: integer('at', { mode: 'timestamp_ms' }).notNull()
+}, table => [
+  primaryKey({ columns: [table.domain, table.service] })
+])
+
 export type AutomationRunRow = typeof automationRuns.$inferSelect

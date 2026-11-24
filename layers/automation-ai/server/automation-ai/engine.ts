@@ -41,6 +41,8 @@ export function createAiDecisionEngine(fallback: Extract<DecisionFallback, { typ
   }
 
   return {
+    // Unavailability is signalled by `FallbackUnavailableError`, not by this check
+    available: async () => true,
     decide: async (state, questions) => (await decideBatch([state], questions))[0] ?? {},
     decideBatch
   }

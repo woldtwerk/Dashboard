@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createLayaClient } from '../server/laya/client'
+import { systemOneBaseUrl } from '../server/laya/systemone-url'
 import type { DecisionQuestion } from '../../automation/shared/types/automation'
 
 const questions: Record<string, DecisionQuestion> = {
@@ -51,6 +52,18 @@ describe('createLayaClient', () => {
     expect(new Headers(calls[0]!.init.headers).get('authorization')).toBeNull()
   })
 
+  it('appends /v1/systemone to the System One base', async () => {
+    const { fetch, calls } = recordingFetch(() => response(noul))
+
+    await createLayaClient({
+      url: systemOneBaseUrl('https://opencode.ai/inference/go/openai/v1'),
+      batch: false,
+      fetch
+    }).systemOne('x', questions)
+
+    expect(calls[0]!.url).toBe('https://opencode.ai/inference/go/systemone/v1/systemone')
+  })
+
   it('retries a 503 after Retry-After', async () => {
     const { fetch, calls } = recordingFetch((_call, index) => index === 0
       ? new Response('busy', { status: 503, headers: { 'retry-after': '0' } })
@@ -88,6 +101,26 @@ describe('createLayaClient', () => {
     expect(calls.every(call => call.url.endsWith('/v1/systemone/batch'))).toBe(true)
     // The stub returns two results per request; three requests yield six
     expect(answers).toHaveLength(6)
+  })
+
+  it('asks each state through /v1/systemone when batching is off', async () => {
+    const { fetch, calls } = recordingFetch((call) => {
+      const body = JSON.parse(String(call.init.body)) as { state: string }
+      return response({ urgent: { type: 'noul', noul: body.state === 'a' ? 0.1 : 0.9, answer_confidence: 0.9 } })
+    })
+
+    const answers = await createLayaClient({ url: 'http://opencode', batch: false, fetch })
+      .systemOneBatch(['a', 'b'], questions)
+
+    expect(calls.map(call => call.url)).toEqual(['http://opencode/v1/systemone', 'http://opencode/v1/systemone'])
+    expect(calls.some(call => call.url.endsWith('/batch'))).toBe(false)
+    expect(answers.map(answer => answer.urgent!.yes)).toEqual([0.1, 0.9])
+  })
+
+  it('names the configured server in a non-ok error', async () => {
+    const { fetch } = recordingFetch(() => new Response('bad', { status: 401 }))
+    await expect(createLayaClient({ url: 'https://opencode', label: 'OpenCode', fetch }).systemOne('x', questions))
+      .rejects.toThrow('OpenCode answered 401')
   })
 
   it('retries once when the call is aborted, then succeeds', async () => {

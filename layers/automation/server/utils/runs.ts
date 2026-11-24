@@ -14,7 +14,7 @@ import type {
 } from '../../shared/types/automation'
 import { pendingRunIds } from '../../shared/automation'
 import * as cacheSchema from '../db/cache-schema'
-import { automationRuns, automationSeen, automationSweep } from '../db/cache-schema'
+import { automationActivation, automationRuns, automationSeen, automationSweep } from '../db/cache-schema'
 import type { AutomationRunRow } from '../db/cache-schema'
 
 /** Keep the activity list useful without letting the cache grow forever */
@@ -272,5 +272,41 @@ export async function writeSweepCursor(domain: AutomationDomain, service: string
     .onConflictDoUpdate({
       target: [automationSweep.domain, automationSweep.service],
       set: { cursor, at }
+    })
+}
+
+/** Since when automation watches one (domain, service); null while nothing is recorded */
+export async function readActivation(domain: AutomationDomain, service: string): Promise<string | null> {
+  const row = await (await automationCacheDb()).select({ since: automationActivation.since }).from(automationActivation)
+    .where(and(eq(automationActivation.domain, domain), eq(automationActivation.service, service)))
+    .get()
+
+  return row?.since ?? null
+}
+
+/**
+ * Records the activation of one (domain, service) if it has none yet, so the first
+ * save or the startup wins. Insert-only: a later activation of the same service
+ * keeps the earlier watermark, so mail that arrived meanwhile is still new.
+ */
+export async function ensureActivation(domain: AutomationDomain, service: string, since: string, now = new Date()): Promise<string> {
+  const db = await automationCacheDb()
+  await db.insert(automationActivation)
+    .values({ domain, service, since, at: now })
+    .onConflictDoNothing()
+
+  return await readActivation(domain, service) ?? since
+}
+
+/**
+ * Overwrites the activation of one (domain, service). Only a workflow that is
+ * enabled again uses this: its disabled window is not replayed.
+ */
+export async function setActivation(domain: AutomationDomain, service: string, since: string, now = new Date()): Promise<void> {
+  await (await automationCacheDb()).insert(automationActivation)
+    .values({ domain, service, since, at: now })
+    .onConflictDoUpdate({
+      target: [automationActivation.domain, automationActivation.service],
+      set: { since, at: now }
     })
 }

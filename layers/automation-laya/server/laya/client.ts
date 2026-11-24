@@ -34,6 +34,10 @@ export interface LayaClientOptions {
   url: string
   /** Bearer token; empty when the server has no key set */
   apiKey?: string
+  /** Name of the server in errors, e.g. `OpenCode` */
+  label?: string
+  /** Use `/v1/systemone/batch` for a batch; false asks each state one after another */
+  batch?: boolean
   /** Timeout for one `/v1/systemone` call */
   singleTimeoutMs?: number
   /**
@@ -86,6 +90,8 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 export function createLayaClient(options: LayaClientOptions): LayaClient {
   const base = options.url.replace(/\/+$/, '')
+  const label = options.label ?? 'laya-serve'
+  const batch = options.batch ?? true
   const singleTimeoutMs = options.singleTimeoutMs ?? DEFAULT_SINGLE_TIMEOUT_MS
   const batchTimeoutMs = options.batchTimeoutMs ?? DEFAULT_BATCH_TIMEOUT_MS
   const batchSize = Math.min(options.batchSize ?? DEFAULT_BATCH_SIZE, DEFAULT_BATCH_SIZE)
@@ -134,7 +140,7 @@ export function createLayaClient(options: LayaClientOptions): LayaClient {
         continue
       }
       if (!response.ok) {
-        throw new Error(`laya-serve answered ${response.status} for ${path}`)
+        throw new Error(`${label} answered ${response.status} for ${path}`)
       }
       return response
     }
@@ -148,6 +154,15 @@ export function createLayaClient(options: LayaClientOptions): LayaClient {
   async function systemOneBatch(states: string[], questions: Record<string, DecisionQuestion>): Promise<Array<Record<string, DecisionAnswer>>> {
     if (!states.length) {
       return []
+    }
+
+    // OpenCode serves one decision per call, so a batch walks the states in order
+    if (!batch) {
+      const answers: Array<Record<string, DecisionAnswer>> = []
+      for (const state of states) {
+        answers.push(await systemOne(state, questions))
+      }
+      return answers
     }
 
     const answers: Array<Record<string, DecisionAnswer>> = []

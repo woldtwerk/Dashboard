@@ -10,6 +10,7 @@ import { normalizeDriveFolderInput } from '../../../drive/shared/drive-path'
 import { automationWorkflows } from '../db/schema'
 import type { AutomationWorkflowRow } from '../db/schema'
 import { forgetWorkflowRuns } from './runs'
+import { activateMailServices } from './automation-activation'
 
 export type { AutomationWorkflowRow }
 
@@ -252,6 +253,38 @@ async function nextPosition(): Promise<number> {
   return (row?.value ?? -1) + 1
 }
 
+/** Records the start of automation for a mail workflow; a cache failure must not fail the save */
+async function activateMailWorkflow(workflow: AutomationWorkflow, reset = false): Promise<void> {
+  if (workflow.domain !== 'mail' || !workflow.enabled) {
+    return
+  }
+
+  try {
+    await activateMailServices(workflow.service, { reset })
+  } catch (error) {
+    console.warn('[automation] Could not record the mail activation', { workflow: workflow.id, error: String(error) })
+  }
+}
+
+/**
+ * Startup: existing enabled mail workflows start watching now. A deploy or a wiped
+ * cache must not replay the inbox the workflow finds. A workflow without a service
+ * covers every configured mail account.
+ */
+export async function activateEnabledMailWorkflows(): Promise<void> {
+  const enabled = (await listWorkflows('mail')).filter(workflow => workflow.enabled)
+  if (!enabled.length) {
+    return
+  }
+
+  if (enabled.some(workflow => workflow.service === null)) {
+    await activateMailServices(null)
+  }
+
+  const services = [...new Set(enabled.flatMap(workflow => workflow.service ? [workflow.service] : []))]
+  await Promise.all(services.map(service => activateMailServices(service)))
+}
+
 /**
  * Inserts a workflow with a graph that is already built. Templates use this: they
  * are stored disabled and in suggest mode, with the graph exactly as instantiated
@@ -273,7 +306,10 @@ export async function insertWorkflow(input: AutomationWorkflowInput): Promise<Au
     updatedAt: now
   }).returning()
 
-  return toAutomationWorkflow(row!)
+  const workflow = toAutomationWorkflow(row!)
+  // Templates are inserted disabled, so this is a no-op for them
+  await activateMailWorkflow(workflow)
+  return workflow
 }
 
 export async function createWorkflow(input: z.infer<typeof automationWorkflowCreateSchema>): Promise<AutomationWorkflow> {
@@ -298,7 +334,10 @@ export async function updateWorkflow(id: string, patch: Partial<AutomationWorkfl
     updatedAt: new Date()
   }).where(eq(automationWorkflows.id, id)).returning()
 
-  return toAutomationWorkflow(row!)
+  const workflow = toAutomationWorkflow(row!)
+  // A workflow that was just enabled starts watching now: the disabled window is not replayed
+  await activateMailWorkflow(workflow, !existing.enabled && workflow.enabled)
+  return workflow
 }
 
 export async function removeWorkflow(id: string): Promise<void> {

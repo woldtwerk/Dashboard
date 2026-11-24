@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatRelative } from '../app/utils/time'
+import { formatRelative, formatUntil } from '../app/utils/time'
 
 describe('formatRelative', () => {
   const now = new Date('2024-01-01T12:00:00Z')
@@ -32,5 +32,37 @@ describe('formatRelative', () => {
 
   it('treats a future timestamp as just now', () => {
     expect(formatRelative('2024-01-01T12:00:30Z', now)).toBe('just now')
+  })
+})
+
+describe('formatUntil', () => {
+  const now = new Date('2024-01-01T12:00:00Z')
+
+  it('handles the near future', () => {
+    expect(formatUntil('2024-01-01T12:00:30Z', now)).toBe('now')
+    expect(formatUntil('2024-01-01T12:01:15Z', now)).toBe('in 1 min')
+    expect(formatUntil('2024-01-01T12:02:00Z', now)).toBe('in 2 min')
+    expect(formatUntil('2024-01-01T12:10:00Z', now)).toBe('in 10 min')
+  })
+
+  it('handles hours and days', () => {
+    expect(formatUntil('2024-01-01T13:00:00Z', now)).toBe('in 1 hour')
+    expect(formatUntil('2024-01-01T16:00:00Z', now)).toBe('in 4 hours')
+    expect(formatUntil('2024-01-02T18:00:00Z', now)).toBe('tomorrow')
+    expect(formatUntil('2024-01-05T12:00:00Z', now)).toBe('in 4 days')
+  })
+
+  it('handles months and years', () => {
+    expect(formatUntil('2024-02-01T12:00:00Z', now)).toBe('in 1 month')
+    expect(formatUntil('2024-05-01T12:00:00Z', now)).toBe('in 4 months')
+    expect(formatUntil('2025-02-01T12:00:00Z', now)).toBe('in 1 year')
+    expect(formatUntil('2026-01-01T12:00:00Z', now)).toBe('in 2 years')
+  })
+
+  it('handles missing, unparsable and past values', () => {
+    expect(formatUntil(null, now)).toBe('unknown')
+    expect(formatUntil(undefined, now)).toBe('unknown')
+    expect(formatUntil('not a date', now)).toBe('unknown')
+    expect(formatUntil('2024-01-01T11:59:00Z', now)).toBe('now')
   })
 })
