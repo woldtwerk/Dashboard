@@ -8,6 +8,7 @@ import { trashTarget } from '#layers/mail/shared/mail-delete'
 import { labelFromMailbox } from '#layers/mail/shared/mail-labels'
 import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
 import type { RetainedConversations, RetainedMail, RetainedMails } from '#layers/mail/app/utils/mail-retention'
+import { holdDeleted, releaseDeleted, withoutDeleted, type RecentlyDeleted } from '#layers/mail/app/utils/mail-delete-guard'
 import type { MailBatchAction, MailDeleteBatchResult, MailDeleteUndo, MailMoveBatchResult } from '#layers/mail/app/utils/mail-batch'
 import { mailAttachmentTarget, mailDoneTarget, MAIL_SHORTCUT_KEYS, type MailShortcutState } from '#layers/mail/app/utils/mail-shortcuts'
 import { applyLabel, applyLabelToConversations, doneToggleState, restoreLabels } from '#layers/mail/app/utils/mail-labels'
@@ -267,8 +268,12 @@ const mails = ref<MailSummary[]>([])
 const pageState = ref({ offset: 0, done: false })
 const loadingMore = ref(false)
 
+// Mails deleted here stay out of every list that still carries them until their
+// delete reached the server, so a reload that started earlier cannot bring one back
+const recentlyDeleted: RecentlyDeleted = new Map()
+
 watch(baseResult, (value) => {
-  mails.value = value.mails
+  mails.value = withoutDeleted(value.mails, recentlyDeleted)
   pageState.value = { offset: value.mails.length, done: value.done }
 
   // Only the pages that really arrived belong in the URL
@@ -709,7 +714,7 @@ async function loadMore() {
         ...mailSearchToApiQuery(criteria.value)
       }
     })
-    mails.value = mergePage(mails.value, page)
+    mails.value = withoutDeleted(mergePage(mails.value, page), recentlyDeleted)
     pageState.value = nextPageState(pageState.value, page.length, MAIL_PAGE_SIZE)
     const pages = Math.ceil(mails.value.length / MAIL_PAGE_SIZE)
     updateQuery({ pages: pages > 1 ? String(pages) : null })
@@ -1211,6 +1216,7 @@ function runConfirm() {
 async function undoDelete(snapshot: DeleteSnapshot, result: { trashMailbox?: string, trashUid?: number }): Promise<void> {
   if (!result.trashMailbox || !result.trashUid) {
     // Without the trash UID the moved mail cannot be addressed; reloading shows it back
+    releaseDeleted(recentlyDeleted, mailKey(snapshot.mail))
     reloadList()
     return
   }
@@ -1221,6 +1227,7 @@ async function undoDelete(snapshot: DeleteSnapshot, result: { trashMailbox?: str
       query: { service: service.value, mailbox: result.trashMailbox },
       body: { target: snapshot.mail.mailbox }
     })
+    releaseDeleted(recentlyDeleted, mailKey(snapshot.mail))
     restoreMail(snapshot, { ...snapshot.mail, uid: moved.uid ?? snapshot.mail.uid })
     refreshNuxtData('mail-folders')
   } catch (error) {
@@ -1254,6 +1261,7 @@ async function deleteMail(mail: MailSummary, confirmed = false): Promise<void> {
   }
 
   mails.value = removeFromList(mails.value, key)
+  holdDeleted(recentlyDeleted, mail)
   forgetRetention(key)
   if (snapshot.conversation) {
     conversations.value = conversations.value.filter(item => item !== snapshot.conversation)
@@ -1281,6 +1289,7 @@ async function deleteMail(mail: MailSummary, confirmed = false): Promise<void> {
       actions: [{ label: 'Undo', color: 'neutral', variant: 'link', onClick: () => void undoDelete(snapshot, result) }]
     })
   } catch (error) {
+    releaseDeleted(recentlyDeleted, key)
     restoreMail(snapshot)
     selectedMail.value = mail
 
@@ -1340,6 +1349,9 @@ async function undoDeleteBatch(
   }
 
   const entries = undo.entries.filter(entry => restoredKeys.has(`${entry.mail.mailbox}:${entry.mail.uid}`))
+  for (const entry of entries) {
+    releaseDeleted(recentlyDeleted, mailKey(entry.mail))
+  }
   const state = restoreMailDelete(
     { list: mails.value, retained: retained.value, conversations: conversations.value },
     { entries },
@@ -1402,6 +1414,9 @@ async function deleteMails(targets: MailSummary[], confirmed = false): Promise<v
   mails.value = state.list
   retained.value = state.retained
   conversations.value = state.conversations
+  for (const mail of unique) {
+    holdDeleted(recentlyDeleted, mail)
+  }
   if (open && deletedKeys.has(mailKey(open))) {
     selectedMail.value = next
   }
@@ -1439,6 +1454,9 @@ async function deleteMails(targets: MailSummary[], confirmed = false): Promise<v
   })
 
   if (failedKeys.size) {
+    for (const key of failedKeys) {
+      releaseDeleted(recentlyDeleted, key)
+    }
     const restored = restoreMailDelete(
       { list: mails.value, retained: retained.value, conversations: conversations.value },
       { entries: state.undo.entries.filter(entry => failedKeys.has(mailKey(entry.mail))) }
