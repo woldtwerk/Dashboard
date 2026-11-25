@@ -86,9 +86,20 @@ async function markSeen() {
   emits('seen')
 }
 
+// only scroll when the newest mail changed: a refresh of the same mails would
+// otherwise pull the reader away from the mail they opened
+let newestKey: string | undefined
+
 watch(mails, async () => {
+  const newest = mails.value?.at(-1)
+  const key = newest ? mailKey(newest) : undefined
+  const arrived = key !== newestKey
+  newestKey = key
+
   await nextTick()
-  scrollToNewest()
+  if (arrived) {
+    scrollToNewest()
+  }
   await markSeen()
 }, { immediate: true })
 
@@ -237,7 +248,9 @@ useDomainEvents({ domains: ['mail'] }, (event) => {
     </UDashboardNavbar>
 
     <div ref="scroller" class="flex-1 min-h-0 overflow-y-auto">
-      <div v-if="status === 'pending'" class="flex items-center justify-center p-8">
+      <!-- only spin while there is nothing to show: a refresh keeps the list and
+           its open mail mounted instead of dropping back to a spinner -->
+      <div v-if="status === 'pending' && !mails?.length" class="flex items-center justify-center p-8">
         <UIcon name="i-lucide-loader-circle" class="size-6 animate-spin text-dimmed" />
       </div>
       <UAlert
