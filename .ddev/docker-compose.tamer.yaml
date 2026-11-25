@@ -1,0 +1,52 @@
+# lumo-tamer: unofficial, OpenAI-compatible proxy for Proton's Lumo, driven by the
+# setup wizard through a control API (tamer has no HTTP login of its own).
+# Token: TAMER_CONTROL_TOKEN in .ddev/.env.tamer, the same value as
+# NUXT_LUMO_TAMER_TOKEN in .ddev/.env.web (both gitignored, paired by
+# ensure-secrets.sh); TAMER_API_KEY is the proxy's own bearer key, handed to the
+# dashboard by the control API and required on /v1.
+# The vault key is written once to .ddev/tamer/secrets/lumo-vault-key and mounted
+# as the `lumo-vault-key` secret: a new key makes the signed-in session unreadable.
+# config.yaml must exist before the container starts, otherwise Docker mounts a
+# directory there; ensure-secrets.sh renders it from TAMER_API_KEY. It is mounted
+# read-only at /etc/tamer/config.yaml and copied to /app/config.yaml by the
+# entrypoint, because tamer rewrites that file after a successful sign-in and the
+# container's own layer is the only place it may do so.
+# A `ddev restart` is required before this service is created (the task must not
+# restart it for you).
+services:
+  tamer:
+    container_name: ddev-${DDEV_SITENAME}-tamer
+    build: ./tamer
+    image: ddev-${DDEV_SITENAME}-tamer
+    pull_policy: build
+    hostname: tamer
+    labels:
+      com.ddev.site-name: ${DDEV_SITENAME}
+      com.ddev.approot: ${DDEV_APPROOT}
+    restart: "no"
+    environment:
+      - TAMER_CONTROL_PORT=3004
+      - TAMER_PUBLIC_BASE_URL=http://tamer:3003/v1
+    # 3003: OpenAI-compatible API, 3004: control API; only reachable inside the project network
+    expose:
+      - 3003
+      - 3004
+    volumes:
+      # The signed-in session (vault.enc): as sensitive as the Lumo account itself
+      - "tamer:/app/sessions"
+      # Read-only source for /app/config.yaml, which tamer rewrites after a sign-in
+      - "./tamer/config.yaml:/etc/tamer/config.yaml:ro"
+    secrets:
+      - source: lumo-vault-key
+        target: lumo-vault-key
+        mode: 0400
+    x-ddev:
+      describe-info: |
+        OpenAI-compatible API tamer:3003/v1, control API tamer:3004
+
+volumes:
+  tamer:
+
+secrets:
+  lumo-vault-key:
+    file: ./tamer/secrets/lumo-vault-key

@@ -13,7 +13,7 @@ Every domain is a [Nuxt layer](https://nuxt.com/docs/getting-started/layers) in 
 | `mail-proton` | Proton Mail connector: wizard (sign-in to the Bridge container) + `MailProvider` via Proton Mail Bridge (IMAP) |
 | `mail-search-meilisearch` | `MailSearchIndex` adapter: Meilisearch with hybrid (keyword + semantic) search |
 | `ai` | AI domain: language model port; providers are services (`registerAiProvider`) |
-| `ai-openai-compatible` | AI connectors: OpenCode (Go/Zen) and any OpenAI-compatible API (e.g. Ollama) |
+| `ai-openai-compatible` | AI connectors: OpenCode (Go/Zen), Lumo (Proton) and any OpenAI-compatible API (e.g. Ollama) |
 | `mail-ai` | Natural language search filters for the mail page and the `/assistant` chat |
 | `documents` | Documents domain: entities (`shared/types`), `DocumentsProvider` port (`server/utils`), API (`/api/documents/*`), UI (`/documents`) |
 | `documents-paperless` | Paperless-ngx connector: wizard (URL + token, or username/password) + `DocumentsProvider` via the Paperless-ngx REST API |
@@ -80,6 +80,18 @@ An AI provider is a service like a mail account: *Services → Add service → O
 - Questions and mail excerpts go to the configured provider. With an external provider (e.g. OpenCode), get approval before using it with personal or customer data; check OpenCode Go's terms (meant for coding agents) — Zen is meant for apps. A local model keeps everything on your machine.
 - Answers are rendered as plain text, and the model is told to treat mail content as untrusted data.
 
+### Lumo (Proton)
+
+Proton's assistant Lumo is reached through [lumo-tamer](https://github.com/ZeroTricks/lumo-tamer), an unofficial local proxy that speaks the OpenAI-compatible API. The proxy runs as its own container (`.ddev/tamer`) because tamer has no HTTP login: a control API in the container (`control.py`, port 3004) drives `tamer auth login` in a pseudo terminal, the same way `.ddev/proton-bridge` drives Bridge's CLI.
+
+- *Services → Add service → Lumo (Proton)*: the sign-in step collects the Proton address, password and two-factor code; the proxy's own API key is handed to the dashboard by the control API, so nobody types it. Models are `lumo` (Proton routes the request), `lumo-lite` and `lumo-max`.
+- The proxy listens on `tamer:3003/v1` inside the project network only, never published. Its Proton session lives in the `tamer` volume, encrypted with a vault key written once to `.ddev/tamer/secrets/lumo-vault-key`; a new key makes the stored session unreadable, so never regenerate it.
+- Tool calling is emulated: Lumo emits JSON as text and the proxy parses it back into `tool_calls` (upstream calls it experimental), so answers may come back without data or with a misrouted tool call.
+- No attachments: upstream's message converter keeps text parts only, so images and files are dropped. There is no `response_format` support either, so Lumo cannot drive the automation's AI decision step.
+- If Proton demands a CAPTCHA, the `login` method cannot solve it; the wizard reports it and the fallback is upstream's browser auth method.
+- One Proton session per container, unlike Bridge, which holds several accounts.
+- An unofficial, GPL-3.0 project that may conflict with Proton's terms. Prompts and mail excerpts go through Proton.
+
 ## Database
 
 SQLite via the built-in `node:sqlite` module and [Drizzle](https://orm.drizzle.team) (`sqlite-proxy` driver). Tables are defined in `layers/*/server/db/schema.ts`.
@@ -92,16 +104,16 @@ Migrations land in `layers/core/server/db/migrations`, are bundled with the serv
 
 ## DDEV
 
-`.ddev/` runs the Nuxt dev server plus Meilisearch, Redis, RedisInsight, Paperless-ngx and Proton Mail Bridge:
+`.ddev/` runs the Nuxt dev server plus Meilisearch, Redis, RedisInsight, Paperless-ngx, Proton Mail Bridge and the Lumo proxy:
 
 ```bash
 ddev start
 ddev describe   # URLs: app, Meilisearch dashboard (:7701), RedisInsight (https://redis.allmight.<tld>), Paperless-ngx (https://paperless.allmight.<tld>)
 ```
 
-Secrets live in gitignored env files (`.ddev/.env.web`, `.ddev/.env.meilisearch`, `.ddev/.env.proton-bridge`, `.ddev/.env.paperless`). A `pre-start` hook (`.ddev/scripts/ensure-secrets.sh`) creates missing ones on `ddev start` — `NUXT_APP_SECRET`, the Meilisearch key, the Bridge token and the Paperless admin/secret key — and never overwrites existing values: a new `NUXT_APP_SECRET` would make stored services unreadable. The app's SQLite database is shared with a dev server started outside DDEV, so don't run both at once.
+Secrets live in gitignored env files (`.ddev/.env.web`, `.ddev/.env.meilisearch`, `.ddev/.env.proton-bridge`, `.ddev/.env.paperless`, `.ddev/.env.tamer`). A `pre-start` hook (`.ddev/scripts/ensure-secrets.sh`) creates missing ones on `ddev start` — `NUXT_APP_SECRET`, the Meilisearch key, the Bridge token, the Paperless admin/secret key, the Lumo control token and proxy key — and never overwrites existing values: a new `NUXT_APP_SECRET` would make stored services unreadable. The app's SQLite database is shared with a dev server started outside DDEV, so don't run both at once.
 
-Paperless-ngx is a new service in `.ddev/docker-compose.paperless.yaml`; DDEV only creates it and registers its subdomain on the next **`ddev restart`**, which you have to run yourself.
+Paperless-ngx is a new service in `.ddev/docker-compose.paperless.yaml`; DDEV only creates it and registers its subdomain on the next **`ddev restart`**, which you have to run yourself. The Lumo proxy (`.ddev/docker-compose.tamer.yaml`) is created the same way, on the next **`ddev restart`**.
 
 ## Documents
 

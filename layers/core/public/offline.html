@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1b1718">
+  <title>You're offline · Allmight</title>
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      min-height: 100vh;
+      margin: 0;
+      padding: 1.5rem;
+      background: #1b1718;
+      color: #fafafa;
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      text-align: center;
+    }
+
+    .mark {
+      display: grid;
+      place-items: center;
+      width: 4rem;
+      height: 4rem;
+      border-radius: 1rem;
+      background: #22c55e;
+      color: #1b1718;
+      font-size: 2rem;
+      font-weight: 700;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 1.5rem;
+      font-weight: 600;
+    }
+
+    p {
+      max-width: 24rem;
+      margin: 0;
+      color: #a1a1aa;
+      line-height: 1.5;
+    }
+
+    button {
+      margin-top: 0.5rem;
+      padding: 0.625rem 1.25rem;
+      border: 0;
+      border-radius: 0.5rem;
+      background: #22c55e;
+      color: #1b1718;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    button:focus-visible {
+      outline: 2px solid #fafafa;
+      outline-offset: 2px;
+    }
+  </style>
+</head>
+<body>
+  <div class="mark">A</div>
+  <h1>You're offline</h1>
+  <p>Allmight can't reach the network right now. Check your connection and try again.</p>
+  <button type="button" onclick="location.reload()">Retry</button>
+</body>
+</html>

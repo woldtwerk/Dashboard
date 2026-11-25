@@ -10,6 +10,7 @@
     "@nuxt/ui": "catalog:",
     "@unovis/ts": "catalog:",
     "@unovis/vue": "catalog:",
+    "@vite-pwa/nuxt": "catalog:",
     "@vueuse/core": "catalog:",
     "@vueuse/nuxt": "catalog:",
     "consola": "catalog:",
@@ -24,7 +25,11 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@types/web-push": "catalog:"
+    "@types/web-push": "catalog:",
+    "@vite-pwa/assets-generator": "catalog:",
+    "workbox-core": "catalog:",
+    "workbox-precaching": "catalog:",
+    "workbox-routing": "catalog:"
   },
   "peerDependencies": {
     "nuxt": "catalog:"

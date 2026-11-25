@@ -10,9 +10,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('web-push', () => ({
-  default: {
-    sendNotification: mocks.sendNotification
-  }
+  sendNotification: mocks.sendNotification
 }))
 
 vi.mock('../server/db/push-subscription-repository', () => ({

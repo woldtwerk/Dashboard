@@ -102,3 +102,8 @@ export function selectOpenCodeSdk(meta: OpenCodeModelMeta | undefined, baseUrl: 
 export function createGenericModel(values: SetupValues): AiModel {
   return createOpenAICompatibleModel(toOpenAICompatibleSettings(values), 'openai-compatible')
 }
+
+/** lumo-tamer: Proton's Lumo behind an unofficial local OpenAI-compatible proxy */
+export function createLumoModel(values: SetupValues): AiModel {
+  return createOpenAICompatibleModel(toOpenAICompatibleSettings(values), 'lumo-tamer')
+}

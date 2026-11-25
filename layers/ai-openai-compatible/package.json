@@ -11,7 +11,8 @@
     "@ai-sdk/openai-compatible": "catalog:",
     "@allmight/ai": "workspace:*",
     "@allmight/core": "workspace:*",
-    "ai": "catalog:"
+    "ai": "catalog:",
+    "zod": "catalog:"
   },
   "peerDependencies": {
     "nuxt": "catalog:"

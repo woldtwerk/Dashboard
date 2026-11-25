@@ -1,12 +1,17 @@
 import { fileURLToPath } from 'node:url'
 
+// The injectManifest strategy points the module at the source directory, not a
+// file, so it must be absolute.
+const serviceWorkerSrcDir = fileURLToPath(new URL('./app/sw', import.meta.url))
+
 // Core layer: dashboard shell (layout, navigation, search, theming), services and the database.
 // Domain layers register their navigation entries via `app.config.ts` → `dashboard.navigation`.
 export default defineNuxtConfig({
   modules: [
     '@nuxt/ui',
     '@vueuse/nuxt',
-    'nuxt-auth-utils'
+    'nuxt-auth-utils',
+    '@vite-pwa/nuxt'
   ],
 
   css: [fileURLToPath(new URL('./app/assets/css/main.css', import.meta.url))],
@@ -57,6 +62,11 @@ export default defineNuxtConfig({
     }
   },
 
+  routeRules: {
+    '/sw.js': { headers: { 'Cache-Control': 'no-cache' } },
+    '/manifest.webmanifest': { headers: { 'Cache-Control': 'no-cache' } }
+  },
+
   nitro: {
     // Bundle drizzle-kit migrations, so the built server can apply them on startup
     serverAssets: [{
@@ -66,5 +76,43 @@ export default defineNuxtConfig({
       baseName: 'migrations-logs',
       dir: fileURLToPath(new URL('./server/db/logs-migrations', import.meta.url))
     }]
+  },
+
+  pwa: {
+    strategies: 'injectManifest',
+    srcDir: serviceWorkerSrcDir,
+    filename: 'sw.ts',
+    registerType: 'autoUpdate',
+    injectRegister: 'auto',
+    injectManifest: {
+      globPatterns: [
+        '_nuxt/**/*.{js,css,woff2}',
+        'pwa-*.png',
+        'apple-touch-icon-180x180.png',
+        'offline.html'
+      ],
+      // The module rewrites every *.html entry to a route URL for generated
+      // sites. This app is server-rendered and needs the real offline file.
+      manifestTransforms: [async (entries: Array<{ url: string, revision: string | null }>) => ({ manifest: entries, warnings: [] })]
+    },
+    manifest: {
+      name: 'Allmight',
+      short_name: 'Allmight',
+      description: 'One dashboard for mail, drive, calendar and more.',
+      start_url: '/',
+      scope: '/',
+      display: 'standalone',
+      theme_color: '#1b1718',
+      background_color: '#1b1718',
+      icons: [
+        { src: '/pwa-64x64.png', sizes: '64x64', type: 'image/png' },
+        { src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' },
+        { src: '/pwa-512x512.png', sizes: '512x512', type: 'image/png' },
+        { src: '/maskable-icon-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
+      ]
+    },
+    devOptions: {
+      enabled: false
+    }
   }
 })

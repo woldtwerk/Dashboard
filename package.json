@@ -11,7 +11,8 @@
     "lint": "eslint .",
     "typecheck": "nuxt typecheck",
     "test": "vitest run",
-    "db:generate": "drizzle-kit generate && drizzle-kit generate --config drizzle.calendar.config.ts && drizzle-kit generate --config drizzle.drive.config.ts && drizzle-kit generate --config drizzle.logs.config.ts && drizzle-kit generate --config drizzle.automation.config.ts && drizzle-kit generate --config drizzle.contacts.config.ts"
+    "db:generate": "drizzle-kit generate && drizzle-kit generate --config drizzle.calendar.config.ts && drizzle-kit generate --config drizzle.drive.config.ts && drizzle-kit generate --config drizzle.logs.config.ts && drizzle-kit generate --config drizzle.automation.config.ts && drizzle-kit generate --config drizzle.contacts.config.ts",
+    "pwa:icons": "pnpm --filter @allmight/core exec pwa-assets-generator --preset minimal-2023 public/logo.svg"
   },
   "dependencies": {
     "@iconify-json/lucide": "catalog:",
@@ -28,5 +29,5 @@
     "vitest": "catalog:",
     "vue-tsc": "catalog:"
   },
-  "packageManager": "pnpm@12.14.0"
+  "packageManager": "pnpm@12.23.0"
 }

@@ -1,4 +1,4 @@
-import webpush from 'web-push'
+import { sendNotification } from 'web-push'
 import type { AppNotification } from '../../shared/types/notifications'
 import { deleteSubscription, listSubscriptions } from '../db/push-subscription-repository'
 import type { PushSubscriptionRow } from '../db/push-subscription-repository'
@@ -67,7 +67,7 @@ async function forEachLimited<T>(items: T[], limit: number, task: (item: T) => P
 }
 
 async function deliver(subscription: PushSubscriptionRow, payload: string, vapidDetails: { subject: string, publicKey: string, privateKey: string }) {
-  return await webpush.sendNotification({
+  return await sendNotification({
     endpoint: subscription.endpoint,
     keys: {
       p256dh: subscription.p256dh,
