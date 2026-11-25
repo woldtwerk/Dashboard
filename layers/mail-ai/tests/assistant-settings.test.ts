@@ -24,15 +24,22 @@ function fakeTool(name: string, domain: string): DomainTool {
 registerDomainTools([fakeTool('settings_mail_search', 'mail'), fakeTool('settings_contacts_search', 'contacts')])
 
 const section = 'assistant-settings-test'
-registerSettings(section, assistantSettingsSchema, { domains: [] })
+registerSettings(section, assistantSettingsSchema, { domains: [], model: null })
 
 describe('assistant settings schema', () => {
   it('accepts domains that register tools', () => {
-    expect(parseSettings(section, { domains: ['mail', 'contacts'] }).success).toBe(true)
+    expect(parseSettings(section, { domains: ['mail', 'contacts'], model: null }).success).toBe(true)
+  })
+
+  it('keeps a saved model even when no live service offers it', () => {
+    expect(parseSettings(section, {
+      domains: [],
+      model: { serviceId: 'removed-service', modelId: 'removed-model' }
+    }).success).toBe(true)
   })
 
   it('rejects a domain without tools', () => {
-    const result = parseSettings(section, { domains: ['mail', 'nowhere'] })
+    const result = parseSettings(section, { domains: ['mail', 'nowhere'], model: null })
 
     expect(result.success).toBe(false)
     if (!result.success) {

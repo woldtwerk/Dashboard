@@ -1,7 +1,7 @@
 import type { DropdownMenuItem } from '@nuxt/ui'
 
 const COLORS = ['red', 'orange', 'amber', 'yellow', 'lime', 'green', 'emerald', 'teal', 'cyan', 'sky', 'blue', 'indigo', 'violet', 'purple', 'fuchsia', 'pink', 'rose']
-const NEUTRALS = ['slate', 'gray', 'zinc', 'neutral', 'stone', 'taupe', 'mauve', 'mist', 'olive']
+const NEUTRALS = ['slate', 'gray', 'zinc', 'neutral', 'stone', 'taupe', 'mauve', 'mist', 'olive', 'black']
 
 /**
  * The colour and appearance entries of the user menu. They read the live theme

@@ -30,7 +30,9 @@ const items = computed<SelectItem[][]>(() => buildModelChoices(props.services))
     variant="ghost"
     class="data-[state=open]:bg-elevated"
     :ui="{
-      trailingIcon: 'group-data-[state=open]:rotate-180 transition-transform duration-200'
+      trailingIcon: 'group-data-[state=open]:rotate-180 transition-transform duration-200',
+      // the theme sizes the popup to the trigger, but it should fit its longest entry
+      content: 'w-max'
     }"
   />
 </template>

@@ -45,8 +45,11 @@ const loadFailed = computed(() => isStoredChat && !chat.value && !!chatError.val
 // The model list loads after the page, so the chat is usable while the provider answers
 const { data: aiServices, status: modelsStatus } = useLazyFetch<AiServiceModels[]>('/api/ai/models', { default: () => [] })
 
-// The selected model lives in the URL as `?model=<serviceId>:<modelId>`
-const requestedModel = computed(() => parseModelParam(route.query.model))
+// The URL `?model` wins for a visit; otherwise the saved choice applies. Both
+// are only requests — resolveModelSelection falls back to the default when the
+// named service or model is gone.
+const { data: assistantSettings, save: saveAssistantSettings } = useSettings<AssistantSettings>('assistant')
+const requestedModel = computed(() => parseModelParam(route.query.model) ?? assistantSettings.value.model ?? undefined)
 const selection = computed(() => resolveModelSelection(aiServices.value, requestedModel.value))
 const selectedModel = computed(() => serializeModelParam(selection.value) ?? '')
 
@@ -55,13 +58,20 @@ function isDefault(candidate?: AiModelSelection): boolean {
   return !!candidate && !!first && candidate.serviceId === first.service.id && candidate.modelId === first.defaultModel
 }
 
+/** Writes only the URL; used by the cleanup so a stale param never changes the saved choice */
+function writeModelParam(next?: string) {
+  const current = typeof route.query.model === 'string' ? route.query.model : undefined
+  if (next !== current) {
+    void router.replace({ query: { ...route.query, model: next } })
+  }
+}
+
 function setModel(value?: string) {
   const parsed = parseModelParam(value)
-  const current = typeof route.query.model === 'string' ? route.query.model : undefined
-  const next = parsed && !isDefault(parsed) ? serializeModelParam(parsed) : undefined
-  if (next !== current) {
-    router.replace({ query: { ...route.query, model: next } })
-  }
+  const normalised = parsed && !isDefault(parsed) ? parsed : null
+  const next = normalised ? serializeModelParam(normalised) : undefined
+  writeModelParam(next)
+  void saveAssistantSettings({ ...assistantSettings.value, model: normalised })
 }
 
 // Drop a model the service does not offer from the URL; the select falls back to the default
@@ -71,7 +81,7 @@ watch(aiServices, (services) => {
     return
   }
   if (serializeModelParam(resolveModelSelection(services, parseModelParam(raw))) !== raw) {
-    setModel(undefined)
+    writeModelParam(undefined)
   }
 }, { immediate: true })
 
@@ -105,7 +115,6 @@ const suggestions = [
 
 // The empty state names what the assistant may read; every enabled area sends
 // its data to the AI provider, so the user sees the choice before asking.
-const { data: assistantSettings } = useSettings<AssistantSettings>('assistant')
 const { data: assistantDomains } = useLazyFetch<AssistantDomainInfo[]>('/api/mail/ai/domains', {
   key: 'assistant-domains',
   default: () => []

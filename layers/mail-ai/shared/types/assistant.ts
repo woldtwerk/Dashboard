@@ -1,9 +1,12 @@
 import type { UIMessage } from 'ai'
+import type { AiModelSelection } from '#layers/ai/shared/types/ai'
 
 /** Settings section `assistant` */
 export interface AssistantSettings {
   /** Domains whose read tools the assistant may use; every enabled domain's data reaches the AI provider */
   domains: string[]
+  /** The last model the user picked; the URL `?model` wins for a visit */
+  model: AiModelSelection | null
 }
 
 /** A stored chat as the list shows it, newest first. */

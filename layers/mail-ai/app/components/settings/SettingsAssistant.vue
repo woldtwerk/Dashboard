@@ -30,7 +30,7 @@ function toggle(domain: string, enabled: boolean) {
     ? [...new Set([...current, domain])]
     : current.filter(item => item !== domain)
 
-  void save({ domains: next })
+  void save({ ...data.value, domains: next })
 }
 </script>
 

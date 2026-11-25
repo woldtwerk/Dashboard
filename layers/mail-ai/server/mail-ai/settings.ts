@@ -18,5 +18,11 @@ export const assistantSettingsSchema = z.object({
         })
       }
     }
-  })
+  }),
+  // A saved model may name a service or model that no longer exists; resolving
+  // it falls back to the first service's default without rejecting the section.
+  model: z.object({
+    serviceId: z.string().trim().min(1).max(100),
+    modelId: z.string().trim().min(1).max(200)
+  }).nullable()
 })

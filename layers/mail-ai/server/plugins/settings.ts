@@ -7,6 +7,7 @@ import { assistantSettingsSchema } from '../mail-ai/settings'
 // opts a domain in.
 export default defineNitroPlugin(() => {
   registerSettings('assistant', assistantSettingsSchema, () => ({
-    domains: parseAssistantDomains(useRuntimeConfig().assistant.domains)
+    domains: parseAssistantDomains(useRuntimeConfig().assistant.domains),
+    model: null
   }))
 })
