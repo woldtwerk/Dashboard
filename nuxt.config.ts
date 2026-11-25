@@ -13,8 +13,15 @@ export default defineNuxtConfig({
   buildDir: process.env.NUXT_BUILD_DIR || undefined,
 
   // Worktrees of parallel coding agents are separate apps with their own dev server
-  ignore: ['.worktrees/**'],
+  ignore: ['.worktrees', '.worktrees/**'],
 
+  // Without a root `app/` dir, srcDir === rootDir and Nuxt defaults to the granular
+  // watcher, whose per-directory watchers only consult `ignore` and therefore crawl
+  // every layers/*/node_modules (~35k dirs, ~38s of the dev server start). The
+  // regular chokidar watcher excludes node_modules on its own.
+  experimental: {
+    watcher: 'chokidar'
+  },
   compatibilityDate: '2026-06-30',
   nitro: {
     output: process.env.NUXT_OUTPUT_DIR ? { dir: process.env.NUXT_OUTPUT_DIR } : undefined
