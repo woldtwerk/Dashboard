@@ -436,8 +436,13 @@ const conversationParams = computed(() => ({
 
 // Conversations page over the grouped result, one page at a time (index only)
 const conversations = ref<MailConversation[]>([])
-const conversationsStatus = ref<'idle' | 'pending' | 'success'>('idle')
-const conversationsLoading = ref(false)
+// The conversations list is fetched on the client only, so the server cannot
+// render a result. Opening on the threads view therefore starts both flags in
+// the loading state: SSR and the first client render then agree on the spinner
+// and on the refresh button instead of showing the server's "No conversations"
+// and a still refresh icon next to the client's spinner and a spinning one.
+const conversationsStatus = ref<'idle' | 'pending' | 'success'>(showThreads.value ? 'pending' : 'idle')
+const conversationsLoading = ref(showThreads.value)
 const conversationState = ref({ offset: 0, done: false })
 
 // The conversations list with the unread filter's drop-outs kept visible
