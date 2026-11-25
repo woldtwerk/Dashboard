@@ -44,7 +44,7 @@ const emits = defineEmits<{
   /** Done acts on every mail of the conversation, so the page gets its key */
   toggleDone: [key: string]
   label: [key: string, label: string, on: boolean]
-  delete: [mail: MailSummary]
+  delete: [conversation: MailConversation]
   /** One of the bulk actions for the whole selection */
   batch: [action: MailBatchAction]
   batchLabel: [label: string, on: boolean]
@@ -59,11 +59,6 @@ const conversationRefs = ref<Record<string, Element | null>>({})
 const anchor = ref<string | undefined>()
 
 const selection = computed(() => props.selection ?? [])
-
-/** A conversation with several mails has no single mail to delete */
-const deletableSelection = computed(() => props.conversations.filter(conversation =>
-  selection.value.includes(conversation.key) && conversation.count === 1
-))
 
 // One zone for the whole list, resolved once; the rows only format with it
 const zone = useTimeZone()
@@ -173,7 +168,6 @@ function contextItems(conversation: MailConversation): ContextMenuItem[][] {
       {
         // Delete is permanent when every deletable conversation sits in the trash
         permanent: targetConversations.every(item => props.isPermanent?.(item.latest) ?? false),
-        deletable: targetConversations.some(item => item.count === 1),
         done: labelToggleState(latest, doneLabel),
         doneLabel,
         labels: mailLabelChoices(props.labels ?? [], latest)
@@ -198,8 +192,7 @@ function contextItems(conversation: MailConversation): ContextMenuItem[][] {
     mail,
     {
       permanent: props.isPermanent?.(mail) ?? false,
-      // A conversation with several mails has no single mail to delete
-      deletable: conversation.count === 1,
+      deleteLabel: conversation.count > 1 ? 'Delete conversation' : undefined,
       done: labelToggleState([mail], doneLabel),
       doneLabel,
       labels: mailLabelChoices(props.labels ?? [], [mail])
@@ -210,7 +203,7 @@ function contextItems(conversation: MailConversation): ContextMenuItem[][] {
       toggleUnread: () => emits('toggleUnread', mail),
       toggleDone: () => emits('toggleDone', conversation.key),
       setLabel: (label, on) => emits('label', conversation.key, label, on),
-      delete: () => emits('delete', mail)
+      delete: () => emits('delete', conversation)
     }
   )
 
@@ -256,7 +249,6 @@ function contextItems(conversation: MailConversation): ContextMenuItem[][] {
         color="neutral"
         variant="ghost"
         size="xs"
-        :disabled="!deletableSelection.length"
         @click="emits('batch', 'delete')"
       />
       <UButton

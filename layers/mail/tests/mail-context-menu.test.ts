@@ -79,14 +79,12 @@ describe('mailContextMenuItems', () => {
     expect(groups[3]![0]!.color).toBe('error')
   })
 
-  it('leaves the delete group out when it is not deletable', () => {
-    const groups = mailContextMenuItems({ unread: false }, { permanent: false, deletable: false }, handlers())
+  it('names the delete entry by the label it is given, but a permanent delete reads "Delete forever"', () => {
+    const groups = mailContextMenuItems({ unread: false }, { permanent: false, deleteLabel: 'Delete conversation' }, handlers())
+    const permanent = mailContextMenuItems({ unread: false }, { permanent: true, deleteLabel: 'Delete conversation' }, handlers())
 
-    expect(labels(groups)).toEqual([
-      ['Open'],
-      ['Reply', 'Reply all', 'Forward'],
-      ['Mark as unread', 'Mark as done']
-    ])
+    expect(groups[3]![0]!.label).toBe('Delete conversation')
+    expect(permanent[3]![0]!.label).toBe('Delete forever')
   })
 
   it('shows the shortcuts the page binds on the answer, done and delete entries', () => {
@@ -152,15 +150,6 @@ describe('mailBatchContextMenuItems', () => {
 
     expect(groups[2]![0]!.label).toBe('Delete forever')
     expect(groups[2]![0]!.color).toBe('error')
-  })
-
-  it('leaves the delete group out when nothing can be deleted', () => {
-    const groups = mailBatchContextMenuItems('2 conversations', { permanent: false, deletable: false }, batchHandlers())
-
-    expect(labels(groups)).toEqual([
-      ['2 conversations'],
-      ['Mark as read', 'Mark as unread', 'Mark as done']
-    ])
   })
 
   it('calls the matching handler for each entry', () => {

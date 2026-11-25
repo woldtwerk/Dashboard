@@ -64,9 +64,9 @@ describe('mailShortcutTarget', () => {
       { kind: 'conversation', key: singleConversation.key, mail: onlyMail }
     ],
     [
-      'leaves a conversation with several mails alone',
+      'deletes every mail of a conversation with several mails',
       state({ view: 'conversations', openConversation: threadConversation }),
-      null
+      { kind: 'conversation', key: threadConversation.key, mail: threadConversation.latest }
     ],
     [
       'takes the conversation selection when there is one',
@@ -243,6 +243,7 @@ describe('context menu badges', () => {
     'Reply all': 'replyAll',
     'Forward': 'forward',
     'Delete': 'delete',
+    'Delete conversation': 'delete',
     'Delete forever': 'delete',
     'Mark as done': 'done',
     'Mark as not done': 'done',
@@ -255,10 +256,7 @@ describe('context menu badges', () => {
   const OPTIONS = [
     { permanent: false },
     { permanent: true },
-    { permanent: false, deletable: false },
-    { permanent: false, deletable: true },
-    { permanent: true, deletable: false },
-    { permanent: true, deletable: true }
+    { permanent: false, deleteLabel: 'Delete conversation' }
   ]
 
   function handlers(): MailContextMenuHandlers {

@@ -4,6 +4,7 @@ import type { MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
 import { buildReply, defaultSenderAddress } from '#layers/mail/shared/mail-compose'
 import { isStreamKey, latestIncomingMail, streamLabel, stripSubjectPrefix, type OwnMailContext } from '#layers/mail/shared/mail-thread'
 import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
+import { MAIL_SHORTCUT_KEYS } from '#layers/mail/app/utils/mail-shortcuts'
 
 const props = defineProps<{
   conversationKey: string
@@ -21,6 +22,7 @@ const emits = defineEmits<{
   close: []
   compose: [mode: MailComposeMode, mail: MailSummary]
   delete: [mail: MailSummary]
+  deleteConversation: []
 }>()
 
 const toast = useToast()
@@ -242,6 +244,18 @@ useDomainEvents({ domains: ['mail'] }, (event) => {
             variant="ghost"
             aria-label="Collapse all"
             @click="streamRef?.collapseAll()"
+          />
+        </UTooltip>
+        <UTooltip
+          :text="(mails?.length ?? 0) > 1 ? 'Delete conversation' : 'Delete'"
+          :kbds="[...MAIL_SHORTCUT_KEYS.delete]"
+        >
+          <UButton
+            icon="i-lucide-trash-2"
+            color="neutral"
+            variant="ghost"
+            aria-label="Delete conversation"
+            @click="emits('deleteConversation')"
           />
         </UTooltip>
       </template>

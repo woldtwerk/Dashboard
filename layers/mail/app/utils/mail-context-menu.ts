@@ -18,7 +18,8 @@ export interface MailContextMenuHandlers {
 /** The label and done state the two menus render */
 export interface MailContextMenuOptions {
   permanent: boolean
-  deletable?: boolean
+  /** What the delete entry says; a whole thread reads "Delete conversation" */
+  deleteLabel?: string
   /** Whether every target already carries the done label */
   done?: boolean
   /** The done label, left out of the label submenu because it has its own entry */
@@ -55,8 +56,8 @@ function labelMenuItems(options: MailContextMenuOptions, handlers: Pick<MailCont
 
 /**
  * The domain owned groups of a mail's context menu: open, answer, read state
- * and — where it applies — delete. Other layers' item actions are appended by
- * the component through `itemActionMenuItems`.
+ * and delete. Other layers' item actions are appended by the component through
+ * `itemActionMenuItems`.
  */
 export function mailContextMenuItems(
   mail: Pick<MailSummary, 'unread'>,
@@ -103,16 +104,13 @@ export function mailContextMenuItems(
     ...labelMenuItems(options, handlers)]
   ]
 
-  // A whole conversation has no single mail to delete
-  if (options.deletable !== false) {
-    groups.push([{
-      label: options.permanent ? 'Delete forever' : 'Delete',
-      icon: 'i-lucide-trash-2',
-      ...shortcut('delete'),
-      ...(options.permanent ? { color: 'error' as const } : {}),
-      onSelect: () => handlers.delete()
-    }])
-  }
+  groups.push([{
+    label: options.permanent ? 'Delete forever' : options.deleteLabel ?? 'Delete',
+    icon: 'i-lucide-trash-2',
+    ...shortcut('delete'),
+    ...(options.permanent ? { color: 'error' as const } : {}),
+    onSelect: () => handlers.delete()
+  }])
 
   return groups
 }
@@ -128,7 +126,7 @@ export interface MailBatchContextMenuHandlers {
 
 /**
  * The domain owned groups of a menu that acts on several targets: the label says
- * how many, then both read states, then — where it applies — delete.
+ * how many, then both read states, then delete.
  */
 export function mailBatchContextMenuItems(
   label: string,
@@ -149,15 +147,13 @@ export function mailBatchContextMenuItems(
     ...labelMenuItems(options, handlers)]
   ]
 
-  if (options.deletable !== false) {
-    groups.push([{
-      label: options.permanent ? 'Delete forever' : 'Delete',
-      icon: 'i-lucide-trash-2',
-      kbds: [...MAIL_SHORTCUT_KEYS.delete],
-      ...(options.permanent ? { color: 'error' as const } : {}),
-      onSelect: () => handlers.delete()
-    }])
-  }
+  groups.push([{
+    label: options.permanent ? 'Delete forever' : options.deleteLabel ?? 'Delete',
+    icon: 'i-lucide-trash-2',
+    kbds: [...MAIL_SHORTCUT_KEYS.delete],
+    ...(options.permanent ? { color: 'error' as const } : {}),
+    onSelect: () => handlers.delete()
+  }])
 
   return groups
 }

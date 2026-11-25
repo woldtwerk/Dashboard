@@ -1354,7 +1354,7 @@ async function undoDeleteBatch(
   }
   const state = restoreMailDelete(
     { list: mails.value, retained: retained.value, conversations: conversations.value },
-    { entries },
+    { entries, conversations: undo.conversations },
     (mail) => {
       const uid = replacements.get(`${mail.mailbox}:${mail.uid}`)
       return uid ? { ...mail, uid } : mail
@@ -1374,11 +1374,13 @@ async function undoDeleteBatch(
 /**
  * Deletes several mails, optimistically: they leave the list (and the
  * unread-retention state and the conversations) at once, the neighbour opens,
- * and only then one batch request per mailbox is asked. A permanent delete is
- * confirmed once for the whole selection; moving to the trash offers one undo
- * for the whole batch. A rejected mailbox group is restored on its own.
+ * and only then one batch request per mailbox is asked. A conversation listed in
+ * `removing` goes as a whole, so its row leaves and comes back with it. A
+ * permanent delete is confirmed once for the whole selection; moving to the
+ * trash offers one undo for the whole batch. A rejected mailbox group is
+ * restored on its own.
  */
-async function deleteMails(targets: MailSummary[], confirmed = false): Promise<void> {
+async function deleteMails(targets: MailSummary[], confirmed = false, removing: MailConversation[] = []): Promise<void> {
   const unique = [...new Map(targets.map(mail => [mailKey(mail), mail])).values()]
   if (!unique.length) {
     return
@@ -1389,7 +1391,7 @@ async function deleteMails(targets: MailSummary[], confirmed = false): Promise<v
     const description = permanent.length === unique.length
       ? `${unique.length === 1 ? 'This mail' : `These ${unique.length} mails`} will be removed permanently and cannot be restored.`
       : `${permanent.length} of ${unique.length} mails will be removed permanently and cannot be restored.`
-    askConfirm('Delete forever?', description, 'Delete forever', () => void deleteMails(unique, true))
+    askConfirm('Delete forever?', description, 'Delete forever', () => void deleteMails(unique, true, removing))
     return
   }
 
@@ -1399,7 +1401,8 @@ async function deleteMails(targets: MailSummary[], confirmed = false): Promise<v
 
   const state = applyMailDelete(
     { list: mails.value, retained: retained.value, conversations: conversations.value },
-    unique
+    unique,
+    removing
   )
 
   // The retention timers belong to the mails that just left
@@ -1421,6 +1424,11 @@ async function deleteMails(targets: MailSummary[], confirmed = false): Promise<v
     selectedMail.value = next
   }
   setSelectedKeys([])
+
+  // A conversation deleted as a whole takes its open panel with it
+  if (conversationKey.value && removing.some(conversation => conversation.key === conversationKey.value)) {
+    closeConversation()
+  }
 
   const groups = mailBatchGroups(unique)
   const results = await Promise.allSettled(groups.map(group => $fetch<MailDeleteBatchResult>('/api/mail/messages/delete', {
@@ -1459,7 +1467,7 @@ async function deleteMails(targets: MailSummary[], confirmed = false): Promise<v
     }
     const restored = restoreMailDelete(
       { list: mails.value, retained: retained.value, conversations: conversations.value },
-      { entries: state.undo.entries.filter(entry => failedKeys.has(mailKey(entry.mail))) }
+      { entries: state.undo.entries.filter(entry => failedKeys.has(mailKey(entry.mail))), conversations: state.undo.conversations }
     )
     mails.value = restored.list
     retained.value = restored.retained
@@ -1528,20 +1536,30 @@ async function batchSelectedMails(action: MailBatchAction): Promise<void> {
   await setSeenMany(selectedMails.value, action === 'read')
 }
 
-/** All mails of the selected conversations, deduplicated; null when they cannot be loaded */
-async function selectedConversationMails(): Promise<MailSummary[] | null> {
-  const keys = selectedConversations.value.map(conversation => conversation.key)
-  if (!keys.length) {
+/** The selected conversations with their mails; null when one of them cannot be loaded */
+async function selectedConversationGroups(): Promise<{ conversation: MailConversation, mails: MailSummary[] }[] | null> {
+  const selected = selectedConversations.value
+  if (!selected.length) {
     return []
   }
 
   try {
-    const lists = await Promise.all(keys.map(key => loadMailConversation(nuxtApp, requestFetch, service.value, key)))
-    return [...new Map(lists.flat().map(mail => [mailKey(mail), mail])).values()]
+    const lists = await Promise.all(selected.map(conversation => loadMailConversation(nuxtApp, requestFetch, service.value, conversation.key)))
+    return selected.map((conversation, index) => ({ conversation, mails: lists[index]! }))
   } catch (error) {
     toast.add({ title: 'Could not load the selected conversations', description: mailErrorMessage(error), color: 'error', icon: 'i-lucide-circle-alert' })
     return null
   }
+}
+
+/** All mails of the selected conversations, deduplicated; null when they cannot be loaded */
+async function selectedConversationMails(): Promise<MailSummary[] | null> {
+  const groups = await selectedConversationGroups()
+  if (!groups) {
+    return null
+  }
+
+  return [...new Map(groups.flatMap(group => group.mails).map(mail => [mailKey(mail), mail])).values()]
 }
 
 /** Applies a label to every mail of the selected conversations */
@@ -1562,6 +1580,17 @@ async function conversationMails(key: string): Promise<MailSummary[] | null> {
   }
 }
 
+/** Deletes every mail of one conversation, from its row menu or the thread panel. A permanent delete is confirmed first. */
+async function deleteConversation(key: string): Promise<void> {
+  const conversation = conversations.value.find(item => item.key === key)
+    ?? retainedConversations.value.get(key)?.conversation
+  const mails = await conversationMails(key)
+  if (!mails?.length) {
+    return
+  }
+  await deleteMails(mails, false, conversation ? [conversation] : [])
+}
+
 async function toggleConversationDone(key: string): Promise<void> {
   const mails = await conversationMails(key)
   if (mails) {
@@ -1578,8 +1607,8 @@ async function setConversationLabel(key: string, label: string, on: boolean): Pr
 
 /**
  * The selection bar's actions on the selected conversations. Read state applies
- * to every mail of those conversations; delete only to the single-mail ones, as
- * the context menu does.
+ * to every mail of those conversations; delete removes the conversations as a
+ * whole, as their context menu does.
  */
 async function batchSelectedConversations(action: MailBatchAction): Promise<void> {
   const selected = selectedConversations.value
@@ -1588,16 +1617,12 @@ async function batchSelectedConversations(action: MailBatchAction): Promise<void
   }
 
   if (action === 'delete') {
-    const deletable = selected.filter(conversation => conversation.count === 1)
-    if (!deletable.length) {
+    const groups = await selectedConversationGroups()
+    if (!groups) {
       return
     }
 
-    const keys = new Set(deletable.map(conversation => conversation.key))
-    await deleteMails(deletable.map(conversation => conversation.latest))
-    if (conversationKey.value && keys.has(conversationKey.value)) {
-      closeConversation()
-    }
+    await deleteMails(groups.flatMap(group => group.mails), false, groups.map(group => group.conversation))
     return
   }
 
@@ -1642,10 +1667,9 @@ const shortcutState = computed<MailShortcutState>(() => ({
 
 /**
  * # / Delete remove what the shortcut points at: the list's selection, the open
- * mail, or the only mail of an open conversation, which then closes with it. A
- * conversation with several mails is out of scope, as in its context menu.
- * Backspace does the same; Nuxt UI's defineShortcuts already ignores a focused
- * input, so typing in the search box or the composer never deletes a mail.
+ * mail, or the open conversation, which is deleted as a whole. Backspace does
+ * the same; Nuxt UI's defineShortcuts already ignores a focused input, so typing
+ * in the search box or the composer never deletes a mail.
  */
 function deleteShortcut() {
   const target = mailShortcutTarget(shortcutState.value)
@@ -1662,8 +1686,9 @@ function deleteShortcut() {
     return
   }
 
-  if (target.kind === 'conversation' && conversationKey.value === target.key) {
-    closeConversation()
+  if (target.kind === 'conversation') {
+    void deleteConversation(target.key)
+    return
   }
 
   void deleteMail(target.mail)
@@ -2053,7 +2078,7 @@ const isMobile = breakpoints.smaller('lg')
         @toggle-unread="toggleUnread"
         @toggle-done="toggleConversationDone"
         @label="setConversationLabel"
-        @delete="deleteMail($event)"
+        @delete="deleteConversation($event.key)"
         @batch="batchSelectedConversations"
         @batch-label="batchSelectedLabel"
         @update-selection="setSelectedKeys"
@@ -2119,6 +2144,7 @@ const isMobile = breakpoints.smaller('lg')
     @close="closeConversation"
     @compose="(mode, mail) => openCompose(mode, mail)"
     @delete="deleteMail($event)"
+    @delete-conversation="conversationKey && deleteConversation(conversationKey)"
   />
   <MailView
     v-else-if="selectedMail && !isMobile"
@@ -2153,6 +2179,7 @@ const isMobile = breakpoints.smaller('lg')
           @close="closeConversation"
           @compose="(mode, mail) => openCompose(mode, mail)"
           @delete="deleteMail($event)"
+          @delete-conversation="conversationKey && deleteConversation(conversationKey)"
         />
         <MailView
           v-else-if="selectedMail"

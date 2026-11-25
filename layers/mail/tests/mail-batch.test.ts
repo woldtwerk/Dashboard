@@ -73,6 +73,23 @@ describe('applyMailDelete', () => {
 
     expect(state.conversations).toEqual(conversations)
     expect(state.undo.entries[0]!.conversation).toBeUndefined()
+    expect(state.undo.conversations).toEqual([])
+  })
+
+  it('drops a conversation deleted as a whole and puts it back at its index', () => {
+    const list = [mail(4), mail(3), mail(2), mail(1)]
+    const conversations = [conversation('one', mail(4)), conversation('many', mail(2), 3), conversation('two', mail(1))]
+
+    const deleted = applyMailDelete({ list, retained: new Map(), conversations }, [mail(3), mail(2)], [conversations[1]!])
+
+    expect(deleted.conversations.map(item => item.key)).toEqual(['one', 'two'])
+
+    const restored = restoreMailDelete(
+      { list: deleted.list, retained: deleted.retained, conversations: deleted.conversations },
+      deleted.undo
+    )
+
+    expect(restored.conversations.map(item => item.key)).toEqual(['one', 'many', 'two'])
   })
 
   it('keeps a mail that was not in the loaded list in the undo snapshot', () => {

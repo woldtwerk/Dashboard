@@ -45,7 +45,7 @@ export interface MailShortcutState {
   own?: OwnMailContext
 }
 
-/** What a shortcut acts on; a conversation only once it holds a single mail */
+/** What a shortcut acts on */
 export type MailShortcutTarget = { kind: 'batch' }
   | { kind: 'mail', mail: MailSummary }
   | { kind: 'conversation', key: string, mail: MailSummary }
@@ -53,8 +53,7 @@ export type MailShortcutTarget = { kind: 'batch' }
 
 /**
  * What # / Delete removes: the list's selection when it has one, then the open
- * mail, then the only mail of an open conversation. A conversation with several
- * mails has no single mail to delete and stays out, as it does in its menu.
+ * mail, then the open conversation, which is deleted as a whole.
  */
 export function mailShortcutTarget(state: MailShortcutState): MailShortcutTarget {
   if (state.composerOpen || state.previewOpen) {
@@ -70,20 +69,19 @@ export function mailShortcutTarget(state: MailShortcutState): MailShortcutTarget
   }
 
   const conversation = state.openConversation
-  if (!conversation || conversation.count !== 1) {
+  if (!conversation) {
     return null
   }
 
   return { kind: 'conversation', key: conversation.key, mail: conversation.latest }
 }
 
-/** What e toggles done on; a conversation keeps every mail, unlike delete */
+/** What e toggles done on; a conversation keeps every mail */
 export type MailDoneTarget = { kind: 'batch' } | { kind: 'mails', mails: MailSummary[] } | null
 
 /**
  * What e toggles done on: the list's selection, the open mail, or every mail of
- * the open conversation — a thread has no single mail to leave out, unlike
- * delete.
+ * the open conversation.
  */
 export function mailDoneTarget(state: MailShortcutState): MailDoneTarget {
   if (state.composerOpen || state.previewOpen) {

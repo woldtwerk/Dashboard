@@ -76,9 +76,17 @@ export interface MailDeleteUndoEntry {
   conversation?: MailConversation
 }
 
+/** A conversation a delete removed as a whole, with the place it had */
+export interface MailDeleteConversationUndo {
+  conversation: MailConversation
+  index: number
+}
+
 /** What an optimistic delete took away, so a failure or an undo can put it back */
 export interface MailDeleteUndo {
   entries: MailDeleteUndoEntry[]
+  /** The conversations removed as a whole, e.g. every mail of a thread */
+  conversations?: MailDeleteConversationUndo[]
 }
 
 /** The pieces of the page an optimistic delete changes */
@@ -90,10 +98,12 @@ export interface MailListState {
 
 /**
  * Removes the mails from the loaded list, the unread-retention state and the
- * single-mail conversations they emptied, and records where they were. The
- * returned state is new; the given maps and arrays are left untouched.
+ * single-mail conversations they emptied, and records where they were. A
+ * conversation passed in `removing` goes as a whole, e.g. every mail of a
+ * thread. The returned state is new; the given maps and arrays are left
+ * untouched.
  */
-export function applyMailDelete(state: MailListState, deleting: MailSummary[]): MailListState & { undo: MailDeleteUndo } {
+export function applyMailDelete(state: MailListState, deleting: MailSummary[], removing: MailConversation[] = []): MailListState & { undo: MailDeleteUndo } {
   const keys = new Set(deleting.map(mailKey))
 
   const entries: MailDeleteUndoEntry[] = deleting.map((mail) => {
@@ -118,19 +128,30 @@ export function applyMailDelete(state: MailListState, deleting: MailSummary[]): 
   }
 
   const conversationKeys = new Set(entries.filter(entry => entry.conversation).map(entry => entry.conversation!.key))
+  const removed = new Set(removing.map(conversation => conversation.key))
+
+  const conversations: MailDeleteConversationUndo[] = []
+  state.conversations.forEach((conversation, index) => {
+    if (!removed.has(conversation.key)) {
+      return
+    }
+    conversationKeys.add(conversation.key)
+    conversations.push({ conversation, index })
+  })
 
   return {
     list: state.list.filter(item => !keys.has(mailKey(item))),
     retained,
     conversations: state.conversations.filter(item => !conversationKeys.has(item.key)),
-    undo: { entries }
+    undo: { entries, conversations }
   }
 }
 
 /**
  * Puts back what an optimistic delete removed: the list entries at their old
- * indices, their retention and their conversations. `replace` exchanges a mail
- * for its new form, e.g. the uid it got when it was moved out of the trash.
+ * indices, their retention and their conversations — the emptied single-mail
+ * ones and the ones deleted as a whole. `replace` exchanges a mail for its new
+ * form, e.g. the uid it got when it was moved out of the trash.
  */
 export function restoreMailDelete(
   state: MailListState,
@@ -159,6 +180,14 @@ export function restoreMailDelete(
     if (entry.conversation && !conversations.some(item => item.key === entry.conversation!.key)) {
       const next = [...conversations]
       next.splice(Math.min(entry.conversationIndex, next.length), 0, entry.conversation)
+      conversations = next
+    }
+  }
+
+  for (const entry of [...(undo.conversations ?? [])].sort((left, right) => left.index - right.index)) {
+    if (!conversations.some(item => item.key === entry.conversation.key)) {
+      const next = [...conversations]
+      next.splice(Math.min(entry.index, next.length), 0, entry.conversation)
       conversations = next
     }
   }
