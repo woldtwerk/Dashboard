@@ -1,5 +1,5 @@
 import type { MailConversation, MailSummary } from '#layers/mail/shared/types/mail'
-import type { RetainedMail, RetainedMails } from './mail-retention'
+import type { RetainedMails } from './mail-retention'
 import { mailKey } from './mail'
 
 /** The bulk actions the list and the context menu offer for several mails */
@@ -70,7 +70,7 @@ export interface MailDeleteUndoEntry {
   /** Its place in the loaded list; -1 when it was not in it, e.g. a linked mail */
   listIndex: number
   /** The unread-retention entry it had, if any */
-  retained?: RetainedMail
+  retained?: MailSummary
   /** Its place among the conversations, for the single-mail conversation it emptied */
   conversationIndex: number
   conversation?: MailConversation
@@ -171,7 +171,7 @@ export function restoreMailDelete(
     }
 
     if (entry.retained && !retained.has(mailKey(mail))) {
-      retained.set(mailKey(mail), { ...entry.retained, mail })
+      retained.set(mailKey(mail), { ...entry.retained, ...mail, unread: false })
     }
   }
 

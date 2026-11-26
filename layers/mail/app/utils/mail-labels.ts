@@ -56,7 +56,7 @@ export function applyLabelToConversations(
  * Whether a mail carries the label. A provider summary has no `labels`, but a
  * mail browsed inside the label's own folder is filed under it too.
  */
-function hasLabel(mail: Pick<MailSummary, 'labels' | 'mailbox'>, label: string): boolean {
+export function hasLabel(mail: Pick<MailSummary, 'labels' | 'mailbox'>, label: string): boolean {
   return labelFromMailbox(mail.mailbox) === label || (mail.labels ?? []).includes(label)
 }
 

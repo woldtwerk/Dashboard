@@ -54,7 +54,7 @@ describe('mailBatchGroups', () => {
 describe('applyMailDelete', () => {
   it('removes the mails, their retention and the conversations they emptied', () => {
     const list = [mail(3), mail(2), mail(1)]
-    const retained: RetainedMails = new Map([[mailKey(mail(2)), { mail: mail(2), until: null }]])
+    const retained: RetainedMails = new Map([[mailKey(mail(2)), mail(2)]])
     const conversations = [conversation('one', mail(1)), conversation('many', mail(2), 2)]
 
     const state = applyMailDelete({ list, retained, conversations }, [mail(2), mail(1)])
@@ -103,7 +103,7 @@ describe('applyMailDelete', () => {
 describe('restoreMailDelete', () => {
   it('puts the mails, their retention and a conversation back where they were', () => {
     const list = [mail(3), mail(2), mail(1)]
-    const retained: RetainedMails = new Map([[mailKey(mail(2)), { mail: mail(2), until: null }]])
+    const retained: RetainedMails = new Map([[mailKey(mail(2)), mail(2)]])
     const conversations = [conversation('one', mail(1))]
 
     const deleted = applyMailDelete({ list, retained, conversations }, [mail(2), mail(1)])

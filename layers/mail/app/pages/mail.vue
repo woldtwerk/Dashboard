@@ -7,7 +7,7 @@ import { buildReply, emptyOutgoingMail, type OutgoingMail } from '#layers/mail/s
 import { trashTarget } from '#layers/mail/shared/mail-delete'
 import { labelFromMailbox } from '#layers/mail/shared/mail-labels'
 import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
-import type { RetainedConversations, RetainedMail, RetainedMails } from '#layers/mail/app/utils/mail-retention'
+import type { RetainedConversations, RetainedMails } from '#layers/mail/app/utils/mail-retention'
 import { holdDeleted, releaseDeleted, withoutDeleted, type RecentlyDeleted } from '#layers/mail/app/utils/mail-delete-guard'
 import type { MailBatchAction, MailDeleteBatchResult, MailDeleteUndo, MailMoveBatchResult } from '#layers/mail/app/utils/mail-batch'
 import { mailAttachmentTarget, mailDoneTarget, MAIL_SHORTCUT_KEYS, type MailShortcutState } from '#layers/mail/app/utils/mail-shortcuts'
@@ -285,42 +285,16 @@ watch(baseResult, (value) => {
   }
 }, { immediate: true })
 
-// Mails and conversations the unread filter dropped but that stay visible: while
-// one is open, and for a moment after it was left. Client-only UI state per tab.
+// Mails and conversations the unread filter dropped but that stay visible: a mail
+// read while the list showed only unread stays in place, marked read, until the
+// list identity changes. Client-only UI state per tab.
 const retained = ref<RetainedMails>(new Map())
 const retainedConversations = ref<RetainedConversations>(new Map())
-const retentionTimers = new Map<string, ReturnType<typeof setTimeout>>()
-
-/** The retained mail that is open right now, by `mailKey` */
-let openRetainedKey: string | null = null
-/** The retained conversation that is open right now, by conversation key */
-let openRetainedConversationKey: string | null = null
-
-function scheduleRetentionExpire(key: string) {
-  const pending = retentionTimers.get(key)
-  if (pending) {
-    clearTimeout(pending)
-  }
-  retentionTimers.set(key, setTimeout(() => {
-    retentionTimers.delete(key)
-    expire(retained.value, Date.now())
-    expire(retainedConversations.value, Date.now())
-    // expire() mutates the maps in place; hand the computed a fresh map so it re-runs
-    retained.value = new Map(retained.value)
-    retainedConversations.value = new Map(retainedConversations.value)
-  }, MAIL_RETENTION_MS))
-}
 
 /** Drop everything held; a changed folder, search or filter starts over */
 function clearRetention() {
-  for (const timer of retentionTimers.values()) {
-    clearTimeout(timer)
-  }
-  retentionTimers.clear()
   retained.value = new Map()
   retainedConversations.value = new Map()
-  openRetainedKey = null
-  openRetainedConversationKey = null
 }
 
 onBeforeUnmount(clearRetention)
@@ -471,7 +445,7 @@ const openConversationSummary = computed<MailConversation | null>(() => {
     return null
   }
   return conversations.value.find(item => item.key === key)
-    ?? retainedConversations.value.get(key)?.conversation
+    ?? retainedConversations.value.get(key)
     ?? null
 })
 
@@ -496,21 +470,13 @@ watch(selectedConversationKey, async (key) => {
   }
 }, { immediate: import.meta.client })
 
-// Keep the open conversation in the list while it is unread-filtered, then let it go
+// Keep a conversation opened under the unread filter in the list, shown as read
 watch(selectedConversationKey, (key) => {
-  const previous = openRetainedConversationKey
-  if (previous && previous !== key) {
-    release(retainedConversations.value, previous, Date.now())
-    scheduleRetentionExpire(previous)
-    openRetainedConversationKey = null
-  }
-
   if (key && criteria.value.unread) {
     const conversation = conversations.value.find(item => item.key === key)
-      ?? retainedConversations.value.get(key)?.conversation
+      ?? retainedConversations.value.get(key)
     if (conversation) {
       retainConversation(retainedConversations.value, conversation)
-      openRetainedConversationKey = key
     }
   }
 }, { immediate: import.meta.client })
@@ -817,7 +783,13 @@ async function setSeenMany(targets: MailSummary[], seen: boolean): Promise<boole
 
   const affected = new Set(targets.map(mailKey))
   const previous = new Map(targets.map(mail => [mailKey(mail), mail.unread]))
+  const identity = listIdentity.value
   mails.value = mails.value.map(item => affected.has(mailKey(item)) ? { ...item, unread: !seen } : item)
+
+  // The unread filter drops a read mail; keep it in place, marked read, until the list changes
+  if (criteria.value.unread) {
+    retained.value = retainedAfterSeen(retained.value, targets, mails.value, seen)
+  }
 
   const groups = mailBatchGroups(targets)
   const results = await Promise.allSettled(groups.map(group => $fetch('/api/mail/messages/seen', {
@@ -842,6 +814,22 @@ async function setSeenMany(targets: MailSummary[], seen: boolean): Promise<boole
     mails.value = mails.value.map(item => failedKeys.has(mailKey(item))
       ? { ...item, unread: previous.get(mailKey(item)) ?? item.unread }
       : item)
+    if (criteria.value.unread && listIdentity.value === identity) {
+      // Put back the retention the optimistic update added or removed
+      const next = new Map(retained.value)
+      for (const mail of targets) {
+        if (!failedKeys.has(mailKey(mail))) {
+          continue
+        }
+        if (previous.get(mailKey(mail)) ?? true) {
+          next.delete(mailKey(mail))
+        } else {
+          const current = mails.value.find(item => mailKey(item) === mailKey(mail)) ?? mail
+          retain(next, current)
+        }
+      }
+      retained.value = next
+    }
     toast.add({ title: 'Could not update some messages', color: 'error', icon: 'i-lucide-circle-alert' })
   }
 
@@ -877,9 +865,9 @@ async function setLabelMany(targets: MailSummary[], label: string, on: boolean):
   mails.value = applyLabel(mails.value, affected, label, on)
   conversations.value = applyLabelToConversations(conversations.value, affected, label, on)
   openConversationMails.value = applyLabel(openConversationMails.value, affected, label, on)
-  retained.value = new Map([...retained.value].map(([key, entry]) => [
+  retained.value = new Map([...retained.value].map(([key, mail]) => [
     key,
-    affected.has(key) ? { ...entry, mail: applyLabel([entry.mail], [key], label, on)[0] ?? entry.mail } : entry
+    affected.has(key) ? applyLabel([mail], [key], label, on)[0] ?? mail : mail
   ]))
 
   const groups = mailBatchGroups(unique)
@@ -924,9 +912,9 @@ async function setLabelMany(targets: MailSummary[], label: string, on: boolean):
         ? { ...conversation, latest: restoreLabels([conversation.latest], rollback)[0] ?? conversation.latest }
         : conversation
     })
-    retained.value = new Map([...retained.value].map(([key, entry]) => [
+    retained.value = new Map([...retained.value].map(([key, mail]) => [
       key,
-      rollback.has(key) ? { ...entry, mail: restoreLabels([entry.mail], rollback)[0] ?? entry.mail } : entry
+      rollback.has(key) ? restoreLabels([mail], rollback)[0] ?? mail : mail
     ]))
     toast.add({ title: 'Could not update some messages', color: 'error', icon: 'i-lucide-circle-alert' })
   }
@@ -961,24 +949,8 @@ async function toggleDone(targets: MailSummary[]): Promise<void> {
   await setDone(targets, on)
 }
 
-watch(() => selectedMail.value && mailKey(selectedMail.value), (key) => {
-  // Leaving the previously open mail: let it go after the delay
-  const previous = openRetainedKey
-  if (previous && previous !== key) {
-    release(retained.value, previous, Date.now())
-    scheduleRetentionExpire(previous)
-    openRetainedKey = null
-  }
-
+watch(() => selectedMail.value && mailKey(selectedMail.value), () => {
   const mail = selectedMail.value
-  const held = key ? retained.value.get(key) : undefined
-
-  // Keep it visible while open; also when a released mail is opened again
-  if (key && criteria.value.unread && mail && (mail.unread || held)) {
-    retain(retained.value, mail)
-    openRetainedKey = key
-  }
-
   if (mail?.unread) {
     setSeen(mail, true)
   }
@@ -1164,22 +1136,16 @@ interface DeleteSnapshot {
   /** Its place in the loaded list; -1 when it was not in it, e.g. a linked mail */
   listIndex: number
   /** The unread-retention entry it had, if any */
-  retained?: RetainedMail
+  retained?: MailSummary
   /** Its place among the conversations, for the single-mail conversation it emptied */
   conversationIndex: number
   conversation?: MailConversation
 }
 
-/** Forget a retained mail: its timer and its entry */
+/** Forget a retained mail: its entry in the unread list */
 function forgetRetention(key: string) {
-  const timer = retentionTimers.get(key)
-  if (timer) {
-    clearTimeout(timer)
-    retentionTimers.delete(key)
-  }
   if (retained.value.has(key)) {
     retained.value.delete(key)
-    // delete() mutates the map in place; hand the computed a fresh map so it re-runs
     retained.value = new Map(retained.value)
   }
 }
@@ -1195,7 +1161,7 @@ function restoreMail(snapshot: DeleteSnapshot, mail = snapshot.mail) {
   }
 
   if (snapshot.retained && !retained.value.has(key)) {
-    retained.value.set(key, { ...snapshot.retained, mail })
+    retained.value.set(key, { ...snapshot.retained, ...mail, unread: false })
     retained.value = new Map(retained.value)
   }
 
@@ -1410,15 +1376,6 @@ async function deleteMails(targets: MailSummary[], confirmed = false, removing: 
     removing
   )
 
-  // The retention timers belong to the mails that just left
-  for (const mail of unique) {
-    const timer = retentionTimers.get(mailKey(mail))
-    if (timer) {
-      clearTimeout(timer)
-      retentionTimers.delete(mailKey(mail))
-    }
-  }
-
   mails.value = state.list
   retained.value = state.retained
   conversations.value = state.conversations
@@ -1588,7 +1545,7 @@ async function conversationMails(key: string): Promise<MailSummary[] | null> {
 /** Deletes every mail of one conversation, from its row menu or the thread panel. A permanent delete is confirmed first. */
 async function deleteConversation(key: string): Promise<void> {
   const conversation = conversations.value.find(item => item.key === key)
-    ?? retainedConversations.value.get(key)?.conversation
+    ?? retainedConversations.value.get(key)
   const mails = await conversationMails(key)
   if (!mails?.length) {
     return
@@ -1650,11 +1607,35 @@ async function batchSelectedConversations(action: MailBatchAction): Promise<void
     keys.has(conversation.key) ? { ...conversation, unread: action !== 'read' } : conversation
   )
 
+  // The unread filter drops a read conversation; keep the selected ones in place
+  if (criteria.value.unread) {
+    const next = new Map(retainedConversations.value)
+    for (const conversation of selected) {
+      if (action === 'read') {
+        retainConversation(next, conversation)
+      } else {
+        next.set(conversation.key, { ...conversation, unread: true })
+      }
+    }
+    retainedConversations.value = next
+  }
+
   const applied = await setSeenMany(mails, action === 'read')
   if (!applied) {
     conversations.value = conversations.value.map(conversation =>
       previous.has(conversation.key) ? { ...conversation, unread: previous.get(conversation.key)! } : conversation
     )
+    if (criteria.value.unread) {
+      const next = new Map(retainedConversations.value)
+      for (const conversation of selected) {
+        if (previous.get(conversation.key)) {
+          next.delete(conversation.key)
+        } else {
+          retainConversation(next, conversation)
+        }
+      }
+      retainedConversations.value = next
+    }
   }
 }
 

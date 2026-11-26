@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { MailConversation, MailSummary } from '../shared/types/mail'
+import type { MailConversation, MailSearch, MailSummary } from '../shared/types/mail'
 import { mailKey } from '../app/utils/mail'
-import { expire, release, retain, retainConversation, visibleConversations, visibleMails, type RetainedConversations, type RetainedMails } from '../app/utils/mail-retention'
+import { retain, retainConversation, retainedAfterSeen, visibleConversations, visibleMails, type RetainedConversations, type RetainedMails } from '../app/utils/mail-retention'
 
 const mail = (uid: number, date: string, unread = false): MailSummary => ({
   uid,
@@ -23,67 +23,60 @@ const conversation = (key: string, date: string, unread = true): MailConversatio
 })
 
 describe('retain', () => {
-  it('keeps the mail, shown as read, with no deadline', () => {
+  it('stores the mail shown as read', () => {
     const state: RetainedMails = new Map()
     retain(state, mail(7, '2026-10-16T10:00:00Z', true))
 
-    expect([...state.values()]).toEqual([{
-      mail: { ...mail(7, '2026-10-16T10:00:00Z'), unread: false },
-      until: null
-    }])
+    expect([...state.values()]).toEqual([{ ...mail(7, '2026-10-16T10:00:00Z'), unread: false }])
   })
 
-  it('retains a released mail again when it is reopened', () => {
-    const state: RetainedMails = new Map()
-    const opened = mail(7, '2026-10-16T10:00:00Z', true)
+  it('stores the conversation and its latest mail as read', () => {
+    const state: RetainedConversations = new Map()
+    const opened = conversation('id:opened@example.com', '2026-10-16T10:00:00Z')
+    retainConversation(state, opened)
 
-    retain(state, opened)
-    release(state, mailKey(opened), 1000)
-    retain(state, opened)
-
-    expire(state, 1_000_000)
-    expect(state.get(mailKey(opened))!.until).toBeNull()
-    expect(state.size).toBe(1)
+    expect(state.get(opened.key)).toEqual({ ...opened, unread: false, latest: { ...opened.latest, unread: false } })
   })
 })
 
-describe('release and expire', () => {
-  it('holds a released mail for three seconds by default', () => {
+describe('retainedAfterSeen', () => {
+  const date = '2026-10-16T10:00:00Z'
+
+  it('keeps a mail still in the loaded list as read', () => {
+    const unread = mail(1, date, true)
+    const next = retainedAfterSeen(new Map(), [unread], [unread], true)
+
+    expect(next.get(mailKey(unread))).toEqual({ ...unread, unread: false })
+  })
+
+  it('keeps a read mail the list already dropped as read', () => {
+    const read = mail(2, date)
+    const state: RetainedMails = new Map([[mailKey(read), read]])
+    const next = retainedAfterSeen(state, [read], [], true)
+
+    expect(next.get(mailKey(read))).toEqual({ ...read, unread: false })
+  })
+
+  it('keeps a row the list dropped when it is marked unread again', () => {
+    const read = mail(3, date)
+    const state: RetainedMails = new Map([[mailKey(read), read]])
+    const next = retainedAfterSeen(state, [read], [], false)
+
+    expect(next.get(mailKey(read))).toEqual({ ...read, unread: true })
+  })
+
+  it('does not add a mail that was never in the list', () => {
+    const linked = mail(4, date, true)
     const state: RetainedMails = new Map()
-    const opened = mail(1, '2026-10-16T10:00:00Z', true)
 
-    retain(state, opened)
-    release(state, mailKey(opened), 1000)
-
-    expire(state, 1000 + 2999)
-    expect(state.size).toBe(1)
-
-    expire(state, 1000 + 3000)
+    expect(retainedAfterSeen(state, [linked], [], true)).toEqual(state)
     expect(state.size).toBe(0)
   })
 
-  it('honours an explicit delay', () => {
-    const state: RetainedMails = new Map()
-    const opened = mail(1, '2026-10-16T10:00:00Z')
+  it('adds no entry for a mail still in the list that is marked unread', () => {
+    const unread = mail(5, date, true)
 
-    retain(state, opened)
-    release(state, mailKey(opened), 0, 500)
-
-    expire(state, 499)
-    expect(state.size).toBe(1)
-
-    expire(state, 500)
-    expect(state.size).toBe(0)
-  })
-
-  it('keeps entries without a deadline and ignores unknown keys', () => {
-    const state: RetainedMails = new Map()
-    retain(state, mail(1, '2026-10-16T10:00:00Z'))
-
-    release(state, 'INBOX/999', 0)
-    expire(state, 1_000_000)
-
-    expect(state.size).toBe(1)
+    expect(retainedAfterSeen(new Map(), [unread], [unread], false).size).toBe(0)
   })
 })
 
@@ -135,6 +128,30 @@ describe('visibleMails', () => {
     expect(visibleMails([read], state, { unread: true })).toEqual([{ ...read, unread: false }])
   })
 
+  it('shows a retained mail that was marked unread as unread', () => {
+    const unread = mail(6, '2026-10-16T10:00:00Z', true)
+    const state: RetainedMails = new Map([[mailKey(unread), unread]])
+
+    expect(visibleMails([], state, { unread: true })).toEqual([unread])
+  })
+
+  const pruned: [string, MailSearch, MailSummary][] = [
+    ['label', { label: 'Done' }, { ...mail(7, '2026-10-16T10:00:00Z'), labels: ['Other'] }],
+    ['notLabel', { notLabel: 'Done' }, { ...mail(8, '2026-10-16T10:00:00Z'), labels: ['Done'] }]
+  ]
+  it.each(pruned)('does not splice a retained mail that fails %s', (_name, filter, held) => {
+    const state: RetainedMails = new Map([[mailKey(held), held]])
+
+    expect(visibleMails([], state, { unread: true, ...filter })).toEqual([])
+  })
+
+  it('splices a retained mail that still matches the label filter', () => {
+    const labelled = { ...mail(9, '2026-10-16T10:00:00Z'), labels: ['Done'] }
+    const state: RetainedMails = new Map([[mailKey(labelled), labelled]])
+
+    expect(visibleMails([], state, { unread: true, label: 'Done' })).toEqual([labelled])
+  })
+
   it('keeps read mails without the unread filter', () => {
     const state: RetainedMails = new Map()
     retain(state, mail(1, '2026-10-16T10:00:00Z', true))
@@ -175,6 +192,40 @@ describe('visibleConversations', () => {
 
     expect(visibleConversations([], state, { unread: true })).toEqual([{ ...read, unread: false }])
     expect(visibleConversations([read], state, { unread: true })).toEqual([{ ...read, unread: false }])
+  })
+
+  it('shows a retained conversation with the same latest mail as read', () => {
+    const state: RetainedConversations = new Map()
+    const opened = conversation('id:opened@example.com', '2026-10-16T10:00:00Z')
+    retainConversation(state, opened)
+
+    const fetched = [{ ...opened, unread: true }]
+    const visible = visibleConversations(fetched, state, { unread: true })
+
+    expect(visible).toEqual([{ ...opened, unread: false, latest: { ...opened.latest, unread: false } }])
+  })
+
+  it.each([
+    ['a new uid', mail(2, '2026-10-16T10:00:00Z', true)],
+    ['a new date', mail(1, '2026-10-16T11:00:00Z', true)]
+  ])('shows a retained conversation with %s in its latest mail as unread again', (_label, latest) => {
+    const state: RetainedConversations = new Map()
+    const opened = conversation('id:opened@example.com', '2026-10-16T10:00:00Z')
+    retainConversation(state, opened)
+
+    const fresh = { ...opened, unread: true, latest }
+    const visible = visibleConversations([fresh], state, { unread: true })
+
+    expect(visible).toEqual([fresh])
+    expect(visible[0]!.unread).toBe(true)
+  })
+
+  it('does not splice a retained conversation whose latest carries the excluded label', () => {
+    const state: RetainedConversations = new Map()
+    const opened = conversation('id:opened@example.com', '2026-10-16T10:00:00Z')
+    retainConversation(state, { ...opened, latest: { ...opened.latest, labels: ['Done'] } })
+
+    expect(visibleConversations([], state, { unread: true, notLabel: 'Done' })).toEqual([])
   })
 
   it('keeps read conversations without the unread filter', () => {
