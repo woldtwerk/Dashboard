@@ -1,17 +1,27 @@
 import { useDebounceFn } from '@vueuse/core'
 import { defineQueryInvalidation } from '#layers/core/app/utils/query-invalidation'
-import { mailQueryKeysFor } from '../utils/mail-events'
+import { mailListMovedBy, mailQueryKeysFor, type MailListQueryScope } from '../utils/mail-events'
 import { MAIL_FOLDERS_KEY, refetchMailFolders } from '../composables/useMailFolders'
 
 /**
  * A mail change makes its cached data stale. Core turns this rule into cache
- * invalidations; mail keeps knowing which keys its events touch. A reconnect
- * may have missed events, so everything mail is refreshed.
+ * invalidations; mail keeps knowing which keys its events touch, including the
+ * cached lists, whose predicate keeps a change in one folder from refreshing
+ * the other folders' lists. A reconnect may have missed events, so everything
+ * mail is refreshed.
  */
 export default defineNuxtPlugin(() => {
   defineQueryInvalidation({
     filter: { domains: ['mail'] },
-    keys: event => event ? mailQueryKeysFor(event) : [['mail']]
+    keys: event => event ? mailQueryKeysFor(event) : [['mail']],
+    // A change in one folder leaves the lists of the other folders alone
+    predicate: (event, entryKey) => {
+      const view = entryKey[2]
+      if (view !== 'list' && view !== 'conversations') {
+        return true
+      }
+      return mailListMovedBy(event, entryKey[3] as MailListQueryScope)
+    }
   })
 
   const queryCache = useQueryCache()

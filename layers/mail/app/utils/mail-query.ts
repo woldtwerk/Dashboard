@@ -119,6 +119,22 @@ export function restoreRequests(pages: number, pageSize: number): number[] {
   return Array.from({ length: Math.max(0, Math.floor(pages)) }, (_, index) => index * pageSize)
 }
 
+/**
+ * The depth a list request restores. A list already in the cache reloads what it
+ * had loaded; the list the page was opened with honours the depth the URL names;
+ * a list reached by changing filters starts at one page, so the previous list's
+ * depth does not follow it.
+ */
+export function mailListRequestPages(
+  state: { loadedOffset?: number, urlPages: number, openedWithList: boolean },
+  pageSize: number
+): number {
+  if (state.loadedOffset !== undefined) {
+    return Math.max(1, Math.ceil(state.loadedOffset / pageSize))
+  }
+  return state.openedWithList ? Math.max(1, state.urlPages) : 1
+}
+
 /** Appends items by key, dropping the ones already present; order is kept */
 function mergeByKey<T>(list: T[], page: T[], keyOf: (item: T) => string): T[] {
   const seen = new Set(list.map(keyOf))

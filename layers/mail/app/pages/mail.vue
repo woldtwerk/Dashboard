@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { breakpointsTailwind, refDebounced, useDebounceFn, useDocumentVisibility, useIntervalFn } from '@vueuse/core'
+import { breakpointsTailwind, refDebounced, useDocumentVisibility, useIntervalFn } from '@vueuse/core'
 import type { LocationQueryRaw } from 'vue-router'
 import type { DropdownMenuItem } from '@nuxt/ui'
 import type { MailConversation, MailAttachment, MailFacets, MailIndexStatus, MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
@@ -7,6 +7,7 @@ import { buildReply, emptyOutgoingMail, type OutgoingMail } from '#layers/mail/s
 import { trashTarget } from '#layers/mail/shared/mail-delete'
 import { labelFromMailbox } from '#layers/mail/shared/mail-labels'
 import type { MailComposeMode } from '#layers/mail/app/utils/mail-query'
+import { mailListRequestPages } from '#layers/mail/app/utils/mail-query'
 import type { RetainedConversations, RetainedMails } from '#layers/mail/app/utils/mail-retention'
 import { holdDeleted, releaseDeleted, withoutDeleted, type RecentlyDeleted } from '#layers/mail/app/utils/mail-delete-guard'
 import type { MailBatchAction, MailDeleteBatchResult, MailDeleteUndo, MailMoveBatchResult } from '#layers/mail/app/utils/mail-batch'
@@ -241,11 +242,11 @@ const effectiveView = computed(() => effectiveListView(viewParam.value, savedLis
 const conversationKey = computed(() => mailConversationFromQuery(route.query))
 const showThreads = computed(() => effectiveView.value === 'conversations')
 
-// The URL `?pages=N` restores the loaded depth. A provider caps one request, so
+// The URL `?pages=N` says how deep the list is; a provider caps one request, so
 // the depth is restored page by page in parallel and merged newest first.
-const basePages = ref(list.value.pages)
 // The messages API accepts at most 1000 per request
 const MAIL_REQUEST_MAX = 1000
+const basePages = computed(() => Math.max(1, list.value.pages))
 
 const baseQuery = computed(() => ({
   service: service.value,
@@ -254,43 +255,89 @@ const baseQuery = computed(() => ({
   ...mailSearchToApiQuery(criteria.value)
 }))
 
-const { data: baseResult, status, error, refresh } = await useAsyncData('mail-restore', async () => {
-  // The conversations view never shows the mails list, so fetching it there is a
-  // second, unused request. It loads when the view switches back to mails.
-  if (showThreads.value) {
-    return { mails: [] as MailSummary[], done: false }
-  }
+// The list's own params: account, folder, view and search filters start a fresh
+// list. The selection (uid/in/conversation/compose) is deliberately not part of
+// it, so opening a mail or a conversation leaves the list and its scroll alone.
+const listIdentity = computed(() => listIdentityFromQuery(route.query))
 
-  const pages = Math.min(basePages.value, Math.ceil(MAIL_REQUEST_MAX / MAIL_PAGE_SIZE))
-  const results = await Promise.all(restoreRequests(pages, MAIL_PAGE_SIZE).map(offset => requestFetch<MailSummary[]>('/api/mail/messages', {
-    query: { ...baseQuery.value, limit: MAIL_PAGE_SIZE, offset }
-  })))
-
-  return {
-    mails: results.reduce<MailSummary[]>((merged, page) => mergePage(merged, page), []),
-    done: (results.at(-1)?.length ?? 0) < MAIL_PAGE_SIZE
-  }
-}, { default: () => ({ mails: [] as MailSummary[], done: false }) })
-
-// Everything loaded so far; appended pages keep the newest-first order
-const mails = ref<MailSummary[]>([])
-const pageState = ref({ offset: 0, done: false })
-const loadingMore = ref(false)
+// The list the page was opened with: only it restores the depth the URL names;
+// a list reached by a change of filters starts at one page
+const openedListIdentity = listIdentity.value
 
 // Mails deleted here stay out of every list that still carries them until their
 // delete reached the server, so a reload that started earlier cannot bring one back
 const recentlyDeleted: RecentlyDeleted = new Map()
 
-watch(baseResult, (value) => {
-  mails.value = withoutDeleted(value.mails, recentlyDeleted)
-  pageState.value = { offset: value.mails.length, done: value.done }
+/** The list the cache holds: the mails on screen and where the next page continues. */
+interface MailListData {
+  mails: MailSummary[]
+  offset: number
+  done: boolean
+}
 
-  // Only the pages that really arrived belong in the URL
-  if (import.meta.client) {
-    const pages = Math.max(1, Math.ceil(value.mails.length / MAIL_PAGE_SIZE))
-    if (pages !== list.value.pages) {
-      updateQuery({ pages: pages > 1 ? String(pages) : null })
+const listKey = computed(() => ['mail', service.value, 'list', baseQuery.value] as const)
+
+/**
+ * Everything loaded so far, cached per list identity: a visited folder or search
+ * shows at once and revalidates when stale. A refetch restores the depth the URL
+ * asks for, so "load more" survives a reload.
+ */
+const listQuery = useQuery<MailListData, Error & { statusMessage?: string }>({
+  key: listKey,
+  query: async () => {
+    // A refetch continues where the list left off; a fresh list starts over
+    const pages = Math.min(mailListRequestPages({
+      loadedOffset: queryCache.getQueryData<MailListData>(listKey.value)?.offset,
+      urlPages: basePages.value,
+      openedWithList: listIdentity.value === openedListIdentity
+    }, MAIL_PAGE_SIZE), Math.ceil(MAIL_REQUEST_MAX / MAIL_PAGE_SIZE))
+    const results = await Promise.all(restoreRequests(pages, MAIL_PAGE_SIZE).map(offset => requestFetch<MailSummary[]>('/api/mail/messages', {
+      query: { ...baseQuery.value, limit: MAIL_PAGE_SIZE, offset }
+    })))
+    const merged = results.reduce<MailSummary[]>((list, page) => mergePage(list, page), [])
+
+    return {
+      // A mail deleted here stays out of a reload that started earlier
+      mails: withoutDeleted(merged, recentlyDeleted),
+      // The offset counts what arrived, deleted mails included, so the next page does not repeat them
+      offset: merged.length,
+      done: (results.at(-1)?.length ?? 0) < MAIL_PAGE_SIZE
     }
+  },
+  // The conversations view shows none of the list; it loads when the view switches back
+  enabled: () => !showThreads.value,
+  ssrCatchError: true
+})
+const { data: listData, status, error, refetch: refetchList } = listQuery
+
+/** Writes go through the cache, so an optimistic change survives a remount */
+function writeListData(patch: Partial<MailListData>) {
+  queryCache.setQueryData<MailListData>(listKey.value, previous => ({
+    mails: previous?.mails ?? [],
+    offset: previous?.offset ?? 0,
+    done: previous?.done ?? false,
+    ...patch
+  }))
+}
+
+// The list plus its page cursor; every assignment in this file keeps working
+const mails = computed<MailSummary[]>({
+  get: () => listData.value?.mails ?? [],
+  set: (value) => { writeListData({ mails: value }) }
+})
+const pageState = computed(() => ({
+  offset: listData.value?.offset ?? 0,
+  done: listData.value?.done ?? false
+}))
+
+// Only the pages that really arrived belong in the URL; it also restores the depth
+watch(() => listData.value?.offset, (offset) => {
+  if (!import.meta.client || offset === undefined) {
+    return
+  }
+  const pages = Math.max(1, Math.ceil(offset / MAIL_PAGE_SIZE))
+  if (pages !== list.value.pages) {
+    updateQuery({ pages: pages > 1 ? String(pages) : null })
   }
 }, { immediate: true })
 
@@ -310,11 +357,6 @@ onBeforeUnmount(clearRetention)
 
 const listRef = ref<{ scrollToTop: () => void } | null>(null)
 
-// The list's own params: account, folder, view and search filters start a fresh
-// list. The selection (uid/in/conversation/compose) is deliberately not part of
-// it, so opening a mail or a conversation leaves the list and its scroll alone.
-const listIdentity = computed(() => listIdentityFromQuery(route.query))
-
 // Multi-select of list rows; ordered keys in `?sel=`, one entry is no selection.
 // A mail is keyed by mailbox and uid, a conversation by its own key.
 const selectedMailKeys = computed(() => selectionFromQuery(route.query))
@@ -324,7 +366,9 @@ function setSelectedKeys(keys: string[]) {
   updateQuery({ sel: showThreads.value ? conversationSelectionToQuery(keys) : selectionToQuery(keys) })
 }
 
-// A filter, folder, account or view change starts the visible list over
+// A filter, folder, account or view change starts the visible list over. The
+// list itself is cached per identity: an unchanged view keeps its entry, a new
+// one shows at once when it was visited before, or fetches from its own key.
 watch(listIdentity, () => {
   clearRetention()
 
@@ -333,14 +377,9 @@ watch(listIdentity, () => {
     updateQuery({ sel: null })
   }
 
-  if (showThreads.value) {
-    // The conversations watcher below reloads the list that is actually shown
-    return
+  if (!showThreads.value) {
+    listRef.value?.scrollToTop()
   }
-
-  basePages.value = 1
-  refresh()
-  listRef.value?.scrollToTop()
 })
 
 // Index progress: poll while any account is still incomplete, and only on a
@@ -415,16 +454,71 @@ const conversationParams = computed(() => ({
   ...mailSearchToApiQuery(criteria.value)
 }))
 
-// Conversations page over the grouped result, one page at a time (index only)
-const conversations = ref<MailConversation[]>([])
-// The conversations list is fetched on the client only, so the server cannot
-// render a result. Opening on the threads view therefore starts both flags in
-// the loading state: SSR and the first client render then agree on the spinner
-// and on the refresh button instead of showing the server's "No conversations"
-// and a still refresh icon next to the client's spinner and a spinning one.
-const conversationsStatus = ref<'idle' | 'pending' | 'success'>(showThreads.value ? 'pending' : 'idle')
-const conversationsLoading = ref(showThreads.value)
-const conversationState = ref({ offset: 0, done: false })
+/** The conversations the cache holds: the rows on screen and where the next page continues. */
+interface MailConversationListData {
+  conversations: MailConversation[]
+  offset: number
+  done: boolean
+}
+
+const conversationsKey = computed(() => ['mail', service.value, 'conversations', conversationParams.value] as const)
+
+function fetchConversationPage(offset: number) {
+  return $fetch<MailConversation[]>('/api/mail/conversations', {
+    query: { ...conversationParams.value, limit: MAIL_PAGE_SIZE, offset }
+  })
+}
+
+/**
+ * The conversations list, cached per identity like the mails list. The client
+ * asks the index: the server renders the loading state, so SSR and the first
+ * client render agree on the spinner instead of the server's empty list.
+ */
+const conversationsQuery = useQuery<MailConversationListData>({
+  key: conversationsKey,
+  query: async () => {
+    // A refetch restores the depth the user has loaded
+    const loaded = queryCache.getQueryData<MailConversationListData>(conversationsKey.value)?.offset ?? 0
+    const pages = Math.max(1, Math.ceil(loaded / MAIL_PAGE_SIZE))
+    const results = await Promise.all(restoreRequests(pages, MAIL_PAGE_SIZE).map(offset => fetchConversationPage(offset)))
+    const merged = results.reduce<MailConversation[]>((list, page) => mergeConversations(list, page), [])
+
+    return {
+      conversations: merged,
+      offset: merged.length,
+      done: (results.at(-1)?.length ?? 0) < MAIL_PAGE_SIZE
+    }
+  },
+  enabled: () => showThreads.value && import.meta.client,
+  ssrCatchError: true
+})
+const { data: conversationsData, refetch: refetchConversations } = conversationsQuery
+
+/** Writes go through the cache, so an optimistic change survives a remount */
+function writeConversations(patch: Partial<MailConversationListData>) {
+  queryCache.setQueryData<MailConversationListData>(conversationsKey.value, previous => ({
+    conversations: previous?.conversations ?? [],
+    offset: previous?.offset ?? 0,
+    done: previous?.done ?? false,
+    ...patch
+  }))
+}
+
+// The list plus its page cursor; every assignment in this file keeps working
+const conversations = computed<MailConversation[]>({
+  get: () => conversationsData.value?.conversations ?? [],
+  set: (value) => { writeConversations({ conversations: value }) }
+})
+const conversationState = computed(() => ({
+  offset: conversationsData.value?.offset ?? 0,
+  done: conversationsData.value?.done ?? false
+}))
+
+// A pending append shows in the list's own load-more footer
+const appendingConversations = ref(false)
+const conversationsLoading = computed(() => conversationsQuery.isLoading.value || appendingConversations.value)
+// The server renders no conversations, so pending means "not loaded yet"
+const conversationsStatus = computed(() => conversationsQuery.isPending.value ? 'pending' : 'success')
 
 // The conversations list with the unread filter's drop-outs kept visible
 const visibleConversationList = computed(() => visibleConversations(conversations.value, retainedConversations.value, criteria.value))
@@ -488,68 +582,39 @@ watch(selectedConversationKey, (key) => {
   }
 }, { immediate: import.meta.client })
 
-async function fetchConversations(offset: number, limit: number) {
-  return $fetch<MailConversation[]>('/api/mail/conversations', {
-    query: { ...conversationParams.value, limit, offset }
-  })
-}
-
-async function loadConversations(reset = false) {
-  if (!showThreads.value || (!reset && (conversationState.value.done || conversationsLoading.value))) {
+/** Append the next page; the depth stays in the cached list */
+async function loadConversations() {
+  if (!showThreads.value || conversationState.value.done || appendingConversations.value) {
     return
   }
 
-  const offset = reset ? 0 : conversationState.value.offset
-  conversationsLoading.value = true
-  conversationsStatus.value = 'pending'
+  const key = conversationsKey.value
+  const offset = conversationState.value.offset
+  appendingConversations.value = true
   try {
-    const page = await fetchConversations(offset, MAIL_PAGE_SIZE)
-    conversations.value = reset ? page : mergeConversations(conversations.value, page)
-    conversationState.value = nextPageState({ offset, done: false }, page.length, MAIL_PAGE_SIZE)
-    conversationsStatus.value = 'success'
+    const page = await fetchConversationPage(offset)
+    // The page belongs to the list it was asked for, even after a navigation
+    queryCache.setQueryData<MailConversationListData>(key, previous => ({
+      conversations: mergeConversations(previous?.conversations ?? [], page),
+      ...nextPageState({ offset, done: false }, page.length, MAIL_PAGE_SIZE)
+    }))
   } catch {
-    // A mailbox that is not indexed yet answers 409 and has no conversations
-    if (reset) {
-      conversations.value = []
-      conversationState.value = { offset: 0, done: true }
-    }
-    conversationsStatus.value = 'success'
+    // Keep the page state, so the next scroll retries the same page
   } finally {
-    conversationsLoading.value = false
+    appendingConversations.value = false
   }
 }
 
-/** Reload the depth already loaded, page by page, e.g. after unread flags changed */
-async function reloadConversations() {
-  if (!showThreads.value) {
-    return
-  }
-
-  const pages = Math.max(1, Math.ceil(conversationState.value.offset / MAIL_PAGE_SIZE))
-  conversationsLoading.value = true
-  conversationsStatus.value = 'pending'
-  try {
-    const results = await Promise.all(restoreRequests(pages, MAIL_PAGE_SIZE).map(offset => fetchConversations(offset, MAIL_PAGE_SIZE)))
-    conversations.value = results.reduce<MailConversation[]>((merged, page) => mergeConversations(merged, page), [])
-    conversationState.value = {
-      offset: conversations.value.length,
-      done: (results.at(-1)?.length ?? 0) < MAIL_PAGE_SIZE
-    }
-    conversationsStatus.value = 'success'
-  } catch {
-    conversationsStatus.value = 'success'
-  } finally {
-    conversationsLoading.value = false
-  }
+/** Reload the depth already loaded, e.g. after unread flags changed */
+function reloadConversations() {
+  return showThreads.value ? refetchConversations() : Promise.resolve()
 }
 
-// Fetch once the view is switched, and again from the start whenever the list
-// identity changes. Selection params are not part of it, so opening a
-// conversation neither reloads the list nor scrolls it back to the top.
+// Switching to the conversations view starts at the top; a changed identity
+// shows its own cached list, or fetches one page when nothing is cached
 watch([showThreads, listIdentity], () => {
   if (import.meta.client && showThreads.value) {
     conversationListRef.value?.scrollToTop()
-    loadConversations(true)
   }
 }, { immediate: true })
 
@@ -568,19 +633,19 @@ function prefetchConversation(key: string) {
 }
 
 function onConversationSeen() {
-  reloadConversationsFromEvents()
+  // The seen change also arrives as a mail event, which invalidates the cached
+  // lists and the open conversation; the folder counts need their own fresh read
   refetchMailFolders(queryCache, requestFetch)
 }
 
-// Reloading keeps the loaded depth: fetch as many pages as the URL says are shown
+// Reloading keeps the loaded depth: the URL says how deep the list is
 function reloadList() {
-  basePages.value = list.value.pages
-  return refresh()
+  return refetchList()
 }
 
 // The refresh button spins while anything runs on its behalf, and its tooltip
 // names which one it is
-const reloading = computed(() => showThreads.value ? conversationsLoading.value : status.value === 'pending')
+const reloading = computed(() => showThreads.value ? conversationsLoading.value : listQuery.isLoading.value)
 const syncing = computed(() => !!currentIndex.value?.syncing)
 const refreshing = computed(() => reloading.value || syncing.value || indexing.value)
 const refreshTooltip = computed(() => mailRefreshTooltip({
@@ -619,33 +684,6 @@ async function refreshMail() {
   ])
 }
 
-const refreshListFromEvents = useDebounceFn(() => reloadList(), 300)
-// A seen-update and the server's own change event both ask for a reload; debounced,
-// the two become one and the conversations list is fetched once.
-const reloadConversationsFromEvents = useDebounceFn(() => reloadConversations(), 300)
-
-// Only the visible list is reloaded here. Folders, index status and the other
-// cached queries are invalidated by the layer's rule, on events and reconnect.
-useDomainEvents({ domains: ['mail'] }, (event) => {
-  const plan = mailRefreshFor(event, {
-    service: service.value,
-    mailbox: mailbox.value,
-    allFolders: allFolders.value
-  })
-  if (plan.list) {
-    // Refresh only the list on screen; the other view fetches fresh when opened
-    if (showThreads.value) {
-      reloadConversationsFromEvents()
-    } else {
-      refreshListFromEvents()
-    }
-  }
-}, {
-  onReconnect: () => {
-    refreshListFromEvents()
-  }
-})
-
 // Sender suggestions for the `from` control, from the index facets; null without an index
 const facetsQuery = computed(() => ({
   service: service.value,
@@ -666,28 +704,30 @@ const { data: facets } = useQuery<MailFacets | null>({
 })
 const fromItems = computed(() => (facets.value?.from ?? []).map(item => item.value))
 
-// Append the next page; the loaded depth goes back into the URL so a reload restores it
+const loadingMore = ref(false)
+
+// Append the next page; the offset watcher puts the loaded depth back into the URL
 async function loadMore() {
   if (loadingMore.value || pageState.value.done || !mails.value.length) {
     return
   }
 
+  const key = listKey.value
+  const offset = pageState.value.offset
   loadingMore.value = true
   try {
     const page = await $fetch<MailSummary[]>('/api/mail/messages', {
       query: {
-        service: service.value,
-        scope: allFolders.value ? 'all' : undefined,
-        mailbox: allFolders.value ? undefined : mailbox.value,
+        ...baseQuery.value,
         limit: MAIL_PAGE_SIZE,
-        offset: pageState.value.offset,
-        ...mailSearchToApiQuery(criteria.value)
+        offset
       }
     })
-    mails.value = withoutDeleted(mergePage(mails.value, page), recentlyDeleted)
-    pageState.value = nextPageState(pageState.value, page.length, MAIL_PAGE_SIZE)
-    const pages = Math.ceil(mails.value.length / MAIL_PAGE_SIZE)
-    updateQuery({ pages: pages > 1 ? String(pages) : null })
+    // The page belongs to the list it was asked for, even after a navigation
+    queryCache.setQueryData<MailListData>(key, previous => ({
+      mails: withoutDeleted(mergePage(previous?.mails ?? [], page), recentlyDeleted),
+      ...nextPageState({ offset, done: false }, page.length, MAIL_PAGE_SIZE)
+    }))
   } catch {
     // Keep the page state, so the next scroll retries the same page
   } finally {
@@ -841,9 +881,6 @@ async function setSeenMany(targets: MailSummary[], seen: boolean): Promise<boole
 
   // Update unread counts in the sidebar
   refetchMailFolders(queryCache, requestFetch)
-  if (showThreads.value) {
-    reloadConversationsFromEvents()
-  }
 
   return failedKeys.size === 0
 }
@@ -2065,7 +2102,7 @@ const isMobile = breakpoints.smaller('lg')
         :shortcuts-disabled="isAttachmentPreviewOpen"
         @select="openConversation"
         @prefetch="prefetchConversation"
-        @load-more="loadConversations(false)"
+        @load-more="loadConversations"
         @compose="(mode, mail) => openCompose(mode, mail)"
         @toggle-unread="toggleUnread"
         @toggle-done="toggleConversationDone"

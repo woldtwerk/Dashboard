@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MailConversation, MailSummary } from '../shared/types/mail'
-import { isSelectedMail, listIdentityFromQuery, mailComposeFromQuery, mailComposeToQuery, mailConversationFromQuery, mailConversationToQuery, mailListFromQuery, mailListToQuery, mailSearchFromQuery, mailSearchToApiQuery, mailSearchToQuery, mailSelectionFromQuery, mailSelectionToQuery, mailViewFromQuery, mailViewParamFromQuery, mailViewToQuery, effectiveListView, mergeConversations, mergePage, nextPageState, restoreRequests } from '../app/utils/mail-query'
+import { isSelectedMail, listIdentityFromQuery, mailComposeFromQuery, mailComposeToQuery, mailConversationFromQuery, mailConversationToQuery, mailListFromQuery, mailListRequestPages, mailListToQuery, mailSearchFromQuery, mailSearchToApiQuery, mailSearchToQuery, mailSelectionFromQuery, mailSelectionToQuery, mailViewFromQuery, mailViewParamFromQuery, mailViewToQuery, effectiveListView, mergeConversations, mergePage, nextPageState, restoreRequests } from '../app/utils/mail-query'
 
 const today = new Date('2026-10-16T12:00:00Z')
 
@@ -190,6 +190,17 @@ describe('restoreRequests', () => {
   it('is empty without pages', () => {
     expect(restoreRequests(0, 50)).toEqual([])
     expect(restoreRequests(-3, 50)).toEqual([])
+  })
+})
+
+describe('mailListRequestPages', () => {
+  it.each([
+    ['a cached list keeps the depth it had loaded', { loadedOffset: 250, urlPages: 1, openedWithList: false }, 3],
+    ['an empty cached list is still one page', { loadedOffset: 0, urlPages: 5, openedWithList: true }, 1],
+    ['the list the page was opened with restores the URL depth', { urlPages: 5, openedWithList: true }, 5],
+    ['a list reached by changing filters starts at one page', { urlPages: 5, openedWithList: false }, 1]
+  ])('%s', (_label, state, expected) => {
+    expect(mailListRequestPages(state, 100)).toBe(expected)
   })
 })
 

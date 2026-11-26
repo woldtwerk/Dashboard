@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DomainEvent } from '../../core/shared/types/domain-events'
-import { mailQueryKeysFor, mailRefreshFor } from '../app/utils/mail-events'
+import { mailListMovedBy, mailQueryKeysFor, mailRefreshFor, type MailListQueryScope } from '../app/utils/mail-events'
 
 const event = (extra: Partial<DomainEvent> = {}): DomainEvent => ({
   domain: 'mail',
@@ -71,6 +71,8 @@ describe('mailQueryKeysFor', () => {
     ['change', {}, [
       ['mail', 'index-status'],
       ['mail', 'important'],
+      ['mail', 'account', 'list'],
+      ['mail', 'account', 'conversations'],
       ['mail', 'account', 'message'],
       ['mail', 'account', 'conversation'],
       ['mail', 'account', 'facets']
@@ -82,5 +84,18 @@ describe('mailQueryKeysFor', () => {
 
   it.each(cases)('%s', (_name, extra, expected) => {
     expect(mailQueryKeysFor(event(extra))).toEqual(expected)
+  })
+})
+
+describe('mailListMovedBy', () => {
+  it.each([
+    ['an all-folders list with another folder', event({ resource: 'Sent' }), { mailbox: 'INBOX', scope: 'all' }, true],
+    ['a single folder with its own change', event({ resource: 'INBOX' }), { mailbox: 'INBOX' }, true],
+    ['a single folder with another folder', event({ resource: 'Sent' }), { mailbox: 'INBOX' }, false],
+    ['a list when the event names no folder', event(), { mailbox: 'INBOX' }, true],
+    ['a finished sync', event({ type: 'synced', resource: 'INBOX' }), { mailbox: 'INBOX' }, false],
+    ['another domain', event({ domain: 'drive' }), { mailbox: 'INBOX' }, false]
+  ] satisfies [string, DomainEvent, MailListQueryScope, boolean][])('%s', (_label, domainEvent, query, expected) => {
+    expect(mailListMovedBy(domainEvent, query)).toBe(expected)
   })
 })

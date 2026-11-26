@@ -39,8 +39,9 @@ export function mailRefreshFor(event: DomainEvent, current: MailRefreshCurrent):
 
 /**
  * The query-cache prefixes a mail event makes stale. The dashboard widget spans
- * accounts; the rest belongs to the event's service. Message bodies carry their
- * own flags (unread, flagged, labels), so a change refreshes them too.
+ * accounts; the rest belongs to the event's service, with the two list prefixes
+ * narrowed by the invalidation rule's predicate. Message bodies carry their own
+ * flags (unread, flagged, labels), so a change refreshes them too.
  */
 export function mailQueryKeysFor(event: DomainEvent): EntryKey[] {
   if (event.domain !== 'mail') {
@@ -55,10 +56,31 @@ export function mailQueryKeysFor(event: DomainEvent): EntryKey[] {
   if (event.type === 'changed') {
     keys.push(
       ['mail', 'important'],
+      ['mail', event.service, 'list'],
+      ['mail', event.service, 'conversations'],
       ['mail', event.service, 'message'],
       ['mail', event.service, 'conversation'],
       ['mail', event.service, 'facets']
     )
   }
   return keys
+}
+
+/** The parts of a cached list query that decide which folder changes move it. */
+export interface MailListQueryScope {
+  mailbox?: string
+  scope?: string
+}
+
+/**
+ * Whether a mail event moves one cached list query: the all-folders list moves
+ * with any folder, a single folder only with its own changes. The key already
+ * carries the service, so the event is read as that list's own account.
+ */
+export function mailListMovedBy(event: DomainEvent, query: MailListQueryScope): boolean {
+  return mailRefreshFor(event, {
+    service: event.service,
+    mailbox: query.mailbox ?? '',
+    allFolders: query.scope === 'all'
+  }).list
 }
