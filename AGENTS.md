@@ -27,7 +27,7 @@ opencode run --auto -m 'opencode-go/deepseek-v4.1-flash#high' --session ses_<tas
   live with `opencode -s ses_<task>`.
 - Put the rules from this file that apply to the task into the prompt — ddev,
   pnpm scripts, UI/logic split with vitest, URL state, never touch `.data/`,
-  `touch nuxt/nuxt.config.ts` after layer edits.
+  `touch nuxt.config.ts` after layer edits.
 - Run several opencode agents in parallel when tasks are independent, each in
   its own git worktree under `.worktrees/<task>` (inside the repo, so ddev
   sees it) and its own session. Tasks that touch `pnpm-workspace.yaml`, the
@@ -44,11 +44,7 @@ opencode run --auto -m 'opencode-go/deepseek-v4.1-flash#high' --session ses_<tas
 ## pnpm scripts, not binaries
 
 Never run the underlying tools directly (`pnpm exec eslint`, `pnpm exec nuxt
-typecheck`, `pnpm exec vue-tsc`). The TypeScript wrapper scripts only take
-effect through the npm scripts: the `lint` and `typecheck` scripts preload
-`nuxt/scripts/use-ts6.cjs`, which resolves `typescript` to the TS 6 alias —
-the environment otherwise has TS 7, which vue-tsc and typescript-eslint reject.
-Always run `ddev exec pnpm run lint` and `ddev exec pnpm run typecheck`.
+typecheck`, `pnpm exec vue-tsc`). Always run `ddev exec pnpm run lint` and `ddev exec pnpm run typecheck`.
 
 ## 3rd party packages
 
@@ -74,10 +70,10 @@ Make use of [nuxt layers](https://nuxt.com/docs/4.x/getting-started/layers) to s
 ### After editing a layer, touch `nuxt.config.ts`
 
 The dev server does not reliably pick up work done inside `layers/`. Finish
-every change under `nuxt/layers/` with:
+every change under `layers/` with:
 
 ```
-touch nuxt/nuxt.config.ts
+touch nuxt.config.ts
 ```
 
 Nuxt watches the config and rebuilds itself on a change — verified:
@@ -179,10 +175,6 @@ For a reactive boolean, use the `useTailwindBreakpoints()` composable instead.
 ## Tooling
 
 Always run tooling through the `package.json` scripts (`pnpm lint`, `pnpm typecheck`, …). Never call the binary directly (`pnpm exec eslint`, `npx tsc`).
-
-The scripts carry a wrapper the bare binary cannot know about: `lint` and `typecheck` preload `scripts/use-ts6.cjs` via `NODE_OPTIONS=--require`, which patches `Module._resolveFilename` so `typescript` resolves to the `typescript-6` alias. typescript-eslint and vue-tsc do not support the TS 7 API the editor and the Vite build run on. Calling `eslint` directly skips the shim and fails with `typescript-eslint does not support TS 7.0` — that looks like broken tooling, but it is not.
-
-`NODE_OPTIONS=--require` is silently ignored by bun, so a bun runtime needs `bun --preload ./scripts/use-ts6.cjs` (or a `bunfig.toml` `preload`) instead. `bun run lint` still works, because the `eslint` bin's shebang hands it to node.
 
 
 ## Node Cluster Compatibility
