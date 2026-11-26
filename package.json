@@ -21,6 +21,7 @@
   },
   "devDependencies": {
     "@nuxt/eslint": "catalog:",
+    "@pinia/colada": "catalog:",
     "drizzle-kit": "catalog:",
     "eslint": "catalog:",
     "eslint-plugin-better-tailwindcss": "catalog:",

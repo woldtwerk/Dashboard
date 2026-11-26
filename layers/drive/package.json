@@ -8,6 +8,7 @@
     "@allmight/core": "workspace:*",
     "@allmight/image": "workspace:*",
     "@nuxt/ui": "catalog:",
+    "@pinia/colada": "catalog:",
     "@vueuse/core": "catalog:",
     "drizzle-orm": "catalog:",
     "h3": "catalog:",

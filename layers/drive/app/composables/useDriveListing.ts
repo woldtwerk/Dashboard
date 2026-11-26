@@ -1,100 +1,66 @@
 import type { MaybeRefOrGetter } from 'vue'
+import type { QueryCache } from '@pinia/colada'
 import type { DriveEntry } from '#layers/drive/shared/types/drive'
-import { driveListingCacheKey, rememberDriveListing, type DriveListingRequests } from '#layers/drive/app/utils/drive-listing-cache'
 
-type NuxtApp = ReturnType<typeof useNuxtApp>
 type Fetcher = ReturnType<typeof useRequestFetch>
 
-/**
- * One cache per Nuxt app: the server hands each request its own app, the browser
- * each tab its own, so a cached listing can never reach another visitor.
- */
-const caches = new WeakMap<NuxtApp, DriveListingRequests>()
+/** A folder listing across accounts; paths repeat, so the service is part of the key. */
+export function driveListingQueryKey(service: string, path: string) {
+  return ['drive', service, path] as const
+}
 
-function listingCache(nuxtApp: NuxtApp): DriveListingRequests {
-  let cache = caches.get(nuxtApp)
-  if (!cache) {
-    cache = new Map()
-    caches.set(nuxtApp, cache)
+/** The one query the page and a prefetch share, so both hit the same cache entry and request. */
+export function driveListingQueryOptions(fetcher: Fetcher, service: string, path: string) {
+  return {
+    key: driveListingQueryKey(service, path),
+    query: () => fetcher<DriveEntry[]>('/api/drive/contents', { query: { service, path } })
   }
-  return cache
+}
+
+/** Whether the cache already holds a fresh listing for this folder. */
+export function hasFreshDriveListing(queryCache: QueryCache, service: string, path: string): boolean {
+  const entry = queryCache.get(driveListingQueryKey(service, path))
+  return !!entry && !entry.stale
 }
 
 /**
- * A folder listing; an in-flight request is shared, a resolved one is kept
- * (capped, oldest first). `fetcher` is the caller's request-scoped fetch, so a
- * server render forwards the session cookie the same way `useFetch` does.
- */
-export function loadDriveListing(
-  nuxtApp: NuxtApp,
-  fetcher: Fetcher,
-  service: string,
-  path: string
-): Promise<DriveEntry[]> {
-  const cache = listingCache(nuxtApp)
-  const key = driveListingCacheKey(service, path)
-  const cached = cache.get(key)
-  if (cached) {
-    return cached
-  }
-
-  const request = fetcher<DriveEntry[]>('/api/drive/contents', { query: { service, path } })
-  rememberDriveListing(cache, key, request)
-  // A failure leaves nothing to share; a newer request for the same key stays
-  request.catch(() => {
-    if (cache.get(key) === request) {
-      cache.delete(key)
-    }
-  })
-  return request
-}
-
-/**
- * Warm a folder the explorer is about to open; the page reuses the very same
- * request. Resolves once the request settles, so a prefetch queue can serialize
- * its loads.
+ * Warm a folder the explorer is about to open. `refresh` is a no-op while the
+ * entry is fresh and joins an in-flight request otherwise; it resolves once the
+ * request settles, so a prefetch queue can serialize its loads.
  */
 export function prefetchDriveListing(
-  nuxtApp: NuxtApp,
+  queryCache: QueryCache,
   fetcher: Fetcher,
   service: string,
   path: string
 ): Promise<void> {
-  return loadDriveListing(nuxtApp, fetcher, service, path).then(() => {}, () => {})
+  return queryCache
+    .refresh(queryCache.ensure(driveListingQueryOptions(fetcher, service, path)))
+    .then(() => {}, () => {})
 }
 
 /**
- * The open folder's entries. The key is stable per folder, so the page, a hover
- * prefetch and a remount all share one request. A listing already in the payload
- * is shown at once (and revalidated by the caller); a manual refresh drops the
- * cached copy first, so the refresh button really asks again.
+ * The open folder's listing, cached by Pinia Colada: a visited folder shows at
+ * once and revalidates when stale. `refetch` ignores staleness, for the refresh
+ * button and after a mutation; the returned `data` is the getter only, writes
+ * go through `queryCache.setQueryData`.
  */
 export function useDriveListing(
   service: MaybeRefOrGetter<string>,
   path: MaybeRefOrGetter<string>
 ) {
-  const nuxtApp = useNuxtApp()
-  const requestFetch = useRequestFetch()
+  const fetcher = useRequestFetch()
+  // $fetch errors carry `statusMessage`, which the page's error alert shows
+  const query = useQuery<DriveEntry[], Error & { statusMessage?: string }>({
+    key: () => driveListingQueryKey(toValue(service), toValue(path)),
+    query: () => fetcher<DriveEntry[]>('/api/drive/contents', {
+      query: { service: toValue(service), path: toValue(path) }
+    }),
+    ssrCatchError: true
+  })
 
-  const asyncData = useAsyncData<DriveEntry[]>(
-    () => `drive:${toValue(service)}:${toValue(path)}`,
-    () => loadDriveListing(nuxtApp, requestFetch, toValue(service), toValue(path)),
-    {
-      default: () => [],
-      getCachedData(key, app, ctx) {
-        if (ctx.cause === 'refresh:manual') {
-          return undefined
-        }
-        return app.payload.data[key] ?? app.static.data[key]
-      }
-    }
-  )
+  // The template and the optimistic updates expect a list, even before the first load
+  const data = computed(() => query.data.value ?? [])
 
-  const reload = asyncData.refresh
-  asyncData.refresh = (...args) => {
-    listingCache(nuxtApp).delete(driveListingCacheKey(toValue(service), toValue(path)))
-    return reload(...args)
-  }
-
-  return asyncData
+  return { ...query, data }
 }

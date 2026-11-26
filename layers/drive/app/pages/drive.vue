@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { refDebounced, useDebounceFn } from '@vueuse/core'
+import { refDebounced } from '@vueuse/core'
 import type { DropdownMenuItem } from '@nuxt/ui'
+import { useQueryCache } from '@pinia/colada'
 import type { DriveEntry, DriveInvitation, DriveOrder, DriveSort, DriveView } from '#layers/drive/shared/types/drive'
 import type { DriveSelectionAction } from '../utils/selection-action'
+import { driveListingQueryKey, hasFreshDriveListing, prefetchDriveListing } from '../composables/useDriveListing'
 import { breadcrumbs, isWithinPath, joinPath, parentPath } from '#layers/drive/shared/drive-path'
 import { DRIVE_SECTIONS, downloadUrl, filterEntries, sectionByKey, sectionOf, sortEntries } from '../utils/drive'
 import { driveRequest } from '../utils/drive-request'
@@ -47,15 +49,12 @@ watch(() => queryString('q'), (value) => {
   }
 })
 
-const nuxtApp = useNuxtApp()
 const requestFetch = useRequestFetch()
-const contentsKey = computed(() => `drive:${service.value}:${path.value}`)
 
-// The listing comes from a per-app promise cache, so a hover prefetch that is
-// still in flight and the click on the same folder are one request. A visited
-// folder is read straight from the payload, so it shows at once and still
-// revalidates in the background. A manual refresh always fetches.
-const { data: entries, status, error, refresh } = await useDriveListing(service, path)
+// The listing lives in Pinia Colada: a visited folder shows at once and is
+// revalidated when stale. `refresh` is the forced refetch, for the refresh
+// button and after a mutation.
+const { data: entries, status, error, isLoading, refetch: refresh } = useDriveListing(service, path)
 
 // Only a first, dataless load may show a spinner; a revalidation keeps the list
 const loading = computed(() => status.value === 'pending' && !entries.value.length)
@@ -71,36 +70,21 @@ watch(loading, (value) => {
   }
 }, { immediate: true })
 
-// A cached listing is shown at once, which makes Nuxt skip the request; refresh
-// it in the background anyway, so a folder changed elsewhere is not stale.
-watch(contentsKey, () => {
-  if (import.meta.client && nuxtApp.payload.data[contentsKey.value] !== undefined) {
-    refresh()
-  }
-})
-
 const visible = computed(() => sortEntries(filterEntries(entries.value, debouncedSearch.value), sort.value, order.value))
 const visiblePaths = computed(() => visible.value.map(entry => entry.path))
 
-const refreshFromEvents = useDebounceFn(() => refresh(), 300)
-useDomainEvents({ domains: ['drive'] }, (event) => {
-  if (driveRefreshFor(event, path.value)) {
-    refreshFromEvents()
-  }
-}, {
-  onReconnect: () => refreshFromEvents()
-})
-
 // --- Prefetch -------------------------------------------------------------
 
-// A hover (after a short intent delay) or a press on a folder warms its listing
-// through one shared promise, so the click that follows reuses the request. One
-// prefetch runs at a time, and navigating drops the ones not started yet.
+// A hover (after a short intent delay) or a press on a folder warms the same
+// query entry in Pinia Colada, so the click that follows reuses the request. A
+// fresh entry is skipped. One prefetch runs at a time, and navigating drops the
+// ones not started yet.
+const queryCache = useQueryCache()
 const prefetchQueue = createDrivePrefetchQueue((target) => {
-  const key = `drive:${target.service}:${target.path}`
-  if (import.meta.client && nuxtApp.payload.data[key] === undefined) {
-    return prefetchDriveListing(nuxtApp, requestFetch, target.service, target.path)
+  if (!import.meta.client || hasFreshDriveListing(queryCache, target.service, target.path)) {
+    return
   }
+  return prefetchDriveListing(queryCache, requestFetch, target.service, target.path)
 })
 
 onScopeDispose(() => prefetchQueue.cancelQueued())
@@ -193,13 +177,14 @@ function onFilePicked(event: Event) {
 // --- Optimistic updates ---------------------------------------------------
 
 async function applyOptimistic(mutate: (list: DriveEntry[]) => DriveEntry[], request: () => Promise<unknown>, failureMessage: string) {
-  const previous = entries.value
-  entries.value = mutate(previous)
+  const key = driveListingQueryKey(service.value, path.value)
+  const previous = queryCache.getQueryData<DriveEntry[]>(key)
+  queryCache.setQueryData<DriveEntry[]>(key, mutate(previous ?? []))
   try {
     await request()
     await refresh()
   } catch (failure) {
-    entries.value = previous
+    queryCache.setQueryData<DriveEntry[]>(key, previous ?? [])
     const message = failure instanceof Error ? failure.message : failureMessage
     toast.add({ title: message, color: 'error', icon: 'i-lucide-circle-alert' })
   }
@@ -660,7 +645,7 @@ useEventListener('keydown', (event: KeyboardEvent) => {
             color="neutral"
             variant="ghost"
             size="sm"
-            :loading="status === 'pending'"
+            :loading="isLoading"
             @click="refresh()"
           />
         </UTooltip>

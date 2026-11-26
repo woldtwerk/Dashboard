@@ -11,7 +11,9 @@ export default defineNuxtConfig({
     '@nuxt/ui',
     '@vueuse/nuxt',
     'nuxt-auth-utils',
-    '@vite-pwa/nuxt'
+    '@vite-pwa/nuxt',
+    '@pinia/nuxt',
+    '@pinia/colada-nuxt'
   ],
 
   css: [fileURLToPath(new URL('./app/assets/css/main.css', import.meta.url))],

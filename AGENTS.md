@@ -159,6 +159,8 @@ When fetching data structure the code in a way that allows for easy prefetching.
 
 When updating data prefer using optimistic updates. This means that you update the UI immediately and then send the request to the server. If the request fails, you can revert the UI back to its previous state.
 
+Fetch server data with Pinia Colada `useQuery`/`useMutation` and array keys, never into Pinia state. A layer registers its domain-event → query invalidation rule from its own client plugin through the core registry. `useFetch`/`useAsyncData` remain only for code not yet migrated.
+
 ## Responsive images
 
 Never hardcode breakpoint pixels into a `sizes` attribute (or any other media query written in script). Build them from `breakpointsTailwind` in `@vueuse/core` — the same source the `sm:`/`md:`/`lg:` classes come from — so an image's chosen candidate and the layout it sits in cannot drift apart:
