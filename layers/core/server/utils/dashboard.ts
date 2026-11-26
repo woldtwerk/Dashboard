@@ -7,6 +7,7 @@ import type {
 import type { ServiceInfo } from '../../shared/types/setup'
 import { useServiceLogger } from './service-logger'
 import { sharedStorage } from './shared-storage'
+import { invalidateSwr } from './swr-cache'
 
 export interface DashboardSeriesSource {
   info: Omit<DashboardSeriesInfo, 'id' | 'domain'>
@@ -205,8 +206,8 @@ async function logStatusFailure(service: ServiceInfo, error: string): Promise<vo
   }
 }
 
-/** One service with the health its domain reports; unknown without a source or after a timeout */
-export async function dashboardServiceStatus(service: ServiceInfo, timeoutMs = SERVICE_STATUS_TIMEOUT_MS): Promise<ServiceStatus> {
+/** The health a domain reports for one service; unknown without a source or after a timeout */
+export async function dashboardServiceHealth(service: ServiceInfo, timeoutMs = SERVICE_STATUS_TIMEOUT_MS): Promise<Omit<ServiceStatus, 'id' | 'name' | 'domain' | 'icon'>> {
   const source = sources.get(service.domain)
   let status: Omit<ServiceStatus, 'id' | 'name' | 'domain' | 'icon'> = { health: 'unknown', syncedAt: null }
 
@@ -223,13 +224,28 @@ export async function dashboardServiceStatus(service: ServiceInfo, timeoutMs = S
     }
   }
 
+  return status
+}
+
+/** One service with the health its domain reports */
+export async function dashboardServiceStatus(service: ServiceInfo, timeoutMs = SERVICE_STATUS_TIMEOUT_MS): Promise<ServiceStatus> {
   return {
     id: service.id,
     name: service.name,
     domain: service.domain,
     icon: service.icon,
-    ...status
+    ...await dashboardServiceHealth(service, timeoutMs)
   }
+}
+
+export const SERVICE_STATUS_SWR = { freshMs: 30_000, storeTtlSeconds: 24 * 60 * 60, lockTtlMs: 60_000 } as const
+
+export function dashboardStatusKey(serviceId: string): string {
+  return `dashboard:status:${serviceId}`
+}
+
+export async function invalidateDashboardStatus(serviceId: string): Promise<void> {
+  await invalidateSwr(dashboardStatusKey(serviceId), SERVICE_STATUS_SWR.storeTtlSeconds)
 }
 
 // --- Buckets --------------------------------------------------------------
