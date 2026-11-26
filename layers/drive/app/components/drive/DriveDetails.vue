@@ -59,7 +59,7 @@ const rows = computed(() => {
 </script>
 
 <template>
-  <USlideover v-model:open="open" title="Details">
+  <ResponsiveOverlay v-model:open="open" title="Details">
     <template #body>
       <div v-if="entry" class="space-y-4">
         <div class="flex h-56 items-center justify-center overflow-hidden rounded-lg border border-default bg-elevated text-muted">
@@ -119,5 +119,5 @@ const rows = computed(() => {
         </div>
       </div>
     </template>
-  </USlideover>
+  </ResponsiveOverlay>
 </template>

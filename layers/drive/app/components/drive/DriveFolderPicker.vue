@@ -5,6 +5,7 @@ import { entryIcon } from '../../utils/drive'
 import { driveRequest } from '../../utils/drive-request'
 
 const open = defineModel<boolean>('open', { required: true })
+useOverlayHistory(open)
 
 const props = withDefaults(defineProps<{
   service: string

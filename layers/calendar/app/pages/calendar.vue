@@ -35,6 +35,8 @@ function updateQuery(patch: Record<string, string | null>) {
   router.replace({ query: Object.fromEntries(Object.entries({ ...route.query, ...patch }).filter(([, value]) => value)) })
 }
 
+const { open: openOverlay, close: closeOverlay } = useQueryOverlay()
+
 const viewState = computed(() => viewFromQuery(route.query, timeZone.value))
 const view = computed(() => viewState.value.view)
 const anchor = computed(() => viewState.value.date)
@@ -98,7 +100,7 @@ async function openSearchHit(hit: CalendarSearchResult) {
   }
 
   await nextTick()
-  updateQuery({ event: uid, recurrence: recurrenceId || null })
+  openOverlay('calendar-editor', { event: uid, recurrence: recurrenceId || null }, !!editorKey.value)
 }
 
 // The month view scrolls through weeks continuously, so its grid comes from a
@@ -695,7 +697,7 @@ const isEditorOpen = computed({
   get: () => !!editorKey.value,
   set: (open: boolean) => {
     if (!open) {
-      updateQuery({ event: null, recurrence: null })
+      closeOverlay('calendar-editor', { event: null, recurrence: null })
     }
   }
 })
@@ -750,12 +752,12 @@ function newEventOn(day?: Date, hour?: number) {
   if (editorKey.value === 'new') {
     resetForm(day, hour)
   } else {
-    updateQuery({ event: 'new', recurrence: null })
+    openOverlay('calendar-editor', { event: 'new', recurrence: null }, !!editorKey.value)
   }
 }
 
 function openEvent(event: CalendarEvent) {
-  updateQuery({ event: event.uid, recurrence: event.recurrenceId ?? null })
+  openOverlay('calendar-editor', { event: event.uid, recurrence: event.recurrenceId ?? null }, !!editorKey.value)
 }
 
 // The key the form was last filled for; a deep link or a search hit sets
@@ -1247,7 +1249,7 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
     </div>
   </UDashboardPanel>
 
-  <USlideover v-model:open="isEditorOpen" :title="editingEvent ? 'Edit event' : 'New event'">
+  <ResponsiveOverlay v-model:open="isEditorOpen" :title="editingEvent ? 'Edit event' : 'New event'">
     <template #body>
       <form class="space-y-4" @submit.prevent="save">
         <UFormField label="Title" required>
@@ -1331,5 +1333,5 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
         </div>
       </div>
     </template>
-  </USlideover>
+  </ResponsiveOverlay>
 </template>

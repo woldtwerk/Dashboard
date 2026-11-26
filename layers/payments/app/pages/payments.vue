@@ -103,6 +103,7 @@ function moment(value: string | null): string {
 
 const qrCache = new Map<string, PaymentQrPayload>()
 const qrOpen = ref(false)
+useOverlayHistory(qrOpen)
 const qrLoading = ref(false)
 const qrRequest = ref<PaymentRequest | null>(null)
 const qrPayload = ref<PaymentQrPayload | null>(null)
@@ -264,6 +265,7 @@ function rowItems(request: PaymentRequest) {
 // --- New request ----------------------------------------------------------
 
 const formOpen = ref(false)
+useOverlayHistory(formOpen)
 
 async function onCreated(response: PaymentCreateResponse) {
   formOpen.value = false
@@ -399,11 +401,11 @@ async function onCreated(response: PaymentCreateResponse) {
     </div>
   </UDashboardPanel>
 
-  <USlideover v-model:open="formOpen" title="New payment request">
+  <ResponsiveOverlay v-model:open="formOpen" title="New payment request">
     <template #body>
       <PaymentRequestForm :services="services" @created="onCreated" />
     </template>
-  </USlideover>
+  </ResponsiveOverlay>
 
   <UModal
     v-model:open="qrOpen"

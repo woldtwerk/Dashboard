@@ -183,11 +183,10 @@ function onFinished() {
   />
 
   <ClientOnly>
-    <USlideover
+    <ResponsiveOverlay
       v-if="isMobile"
       v-model:open="isChatListOpen"
       title="Chats"
-      side="left"
     >
       <template #body>
         <div class="flex h-full min-h-0 flex-col gap-3">
@@ -208,6 +207,6 @@ function onFinished() {
           />
         </div>
       </template>
-    </USlideover>
+    </ResponsiveOverlay>
   </ClientOnly>
 </template>

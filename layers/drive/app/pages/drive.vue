@@ -31,6 +31,8 @@ function updateQuery(patch: Record<string, string | null | undefined>) {
   router.replace({ query: Object.fromEntries(Object.entries({ ...route.query, ...patch }).filter(([, value]) => value)) })
 }
 
+const { open: openOverlay, close: closeOverlay } = useQueryOverlay()
+
 const service = computed(() => services.value.find(item => item.id === queryString('service'))?.id ?? services.value[0]?.id ?? '')
 const path = computed(() => queryString('path') ?? '/my-files')
 const section = computed(() => sectionOf(path.value))
@@ -138,7 +140,7 @@ function open(entry: DriveEntry) {
     // No content to preview: the provider's web app opens it instead
     window.open(entry.webUrl, '_blank', 'noopener,noreferrer')
   } else {
-    updateQuery({ item: entry.path })
+    openOverlay('drive-details', { item: entry.path }, !!item.value)
   }
 }
 
@@ -311,6 +313,7 @@ function onDropOn(target: DriveEntry, files: File[] | null) {
 const renamePath = ref<string>()
 
 const newFolderOpen = ref(false)
+useOverlayHistory(newFolderOpen)
 const newFolderName = ref('')
 
 async function confirmNewFolder() {
@@ -367,7 +370,7 @@ const detailsOpen = computed({
   get: () => !!detailEntry.value,
   set: (value: boolean) => {
     if (!value) {
-      updateQuery({ item: null })
+      closeOverlay('drive-details', { item: null })
     }
   }
 })

@@ -3,6 +3,7 @@ import type { DriveEntry, DriveShare } from '#layers/drive/shared/types/drive'
 import { driveRequest } from '../../utils/drive-request'
 
 const open = defineModel<boolean>('open', { required: true })
+useOverlayHistory(open)
 
 const props = defineProps<{
   entry: DriveEntry | null

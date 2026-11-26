@@ -106,6 +106,7 @@ async function removeNote(note: DocumentsNote) {
 }
 
 const shareOpen = ref(false)
+useOverlayHistory(shareOpen)
 const shareVersion = ref<'archive' | 'original'>('archive')
 
 async function createShareLink() {

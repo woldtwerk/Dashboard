@@ -14,7 +14,7 @@ const props = defineProps<{
 }>()
 
 const route = useRoute()
-const router = useRouter()
+const { open: openOverlay } = useQueryOverlay()
 
 const visible = computed(() => visibleMailAttachments(props.attachments))
 const entityRef = computed(() => mailEntityRef(props.service, props.mail.mailbox, props.mail.uid))
@@ -46,21 +46,17 @@ function downloadUrl(attachment: MailAttachment): string {
   return mailAttachmentUrl(props.service, props.mail.mailbox, props.mail.uid, attachment.part!)
 }
 
-function updateQuery(patch: Record<string, string | undefined>) {
-  const query = Object.fromEntries(Object.entries({ ...route.query, ...patch })
-    .filter(([, value]) => value !== undefined && value !== null && value !== ''))
-  router.replace({ query })
-}
+const previewOpen = computed(() => typeof route.query.att === 'string')
 
 function openPreview(attachment: MailAttachment) {
   if (!attachment.part) {
     return
   }
-  updateQuery(mailAttachmentPreviewToQuery({
+  openOverlay('mail-attachment', mailAttachmentPreviewToQuery({
     part: attachment.part,
     uid: props.mail.uid,
     mailbox: props.mail.mailbox
-  }) as Record<string, string | undefined>)
+  }), previewOpen.value)
 }
 
 function contextFor(attachment: MailAttachment): AttachmentActionContext {

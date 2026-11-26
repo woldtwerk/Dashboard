@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { breakpointsTailwind } from '@vueuse/core'
 import type { OutgoingMail } from '#layers/mail/shared/mail-compose'
 import type { MailComposeDraft } from '#layers/mail/app/utils/mail-compose'
 
@@ -68,21 +67,13 @@ function discard() {
 defineShortcuts({
   meta_enter: { handler: send, usingInput: true }
 })
-
-const isMobile = useBreakpoints(breakpointsTailwind).smaller('lg')
-
-// Full screen on a phone, a panel on a desktop
-const slideoverUi = computed(() => isMobile.value
-  ? { content: 'w-screen max-w-none h-dvh rounded-none' }
-  : { content: 'sm:max-w-2xl' })
 </script>
 
 <template>
-  <USlideover
+  <ResponsiveOverlay
     :open="open"
     :title="title ?? 'New mail'"
-    :side="isMobile ? 'bottom' : 'right'"
-    :ui="slideoverUi"
+    :ui="{ content: 'sm:max-w-2xl' }"
     @update:open="value => emits('update:open', value)"
   >
     <template #body>
@@ -165,5 +156,5 @@ const slideoverUi = computed(() => isMobile.value
         />
       </UTooltip>
     </template>
-  </USlideover>
+  </ResponsiveOverlay>
 </template>

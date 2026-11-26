@@ -3,8 +3,17 @@ import type { EntityGraph } from '#layers/core/shared/types/entities'
 import { entityKey, normalizeEmail } from '#layers/core/shared/entities'
 
 const route = useRoute()
+const router = useRouter()
 // Forwards the browser's cookies on the server; plain `$fetch` on the client
 const requestFetch = useRequestFetch()
+
+function goBack() {
+  if (window.history.state?.back) {
+    router.back()
+    return
+  }
+  void router.push('/contacts')
+}
 
 const email = computed(() => normalizeEmail(String(route.params.email ?? '')) ?? String(route.params.email ?? ''))
 const entity = computed(() => ({ type: 'person', id: email.value }) as const)
@@ -31,8 +40,8 @@ const graphTo = computed(() => `/graph?ref=${encodeURIComponent(entityKey(entity
           icon="i-lucide-arrow-left"
           color="neutral"
           variant="ghost"
-          to="/contacts"
-          aria-label="Back to contacts"
+          aria-label="Back"
+          @click="goBack"
         />
       </template>
     </UDashboardNavbar>

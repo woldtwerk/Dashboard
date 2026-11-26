@@ -51,6 +51,8 @@ function updateQuery(patch: LocationQueryRaw) {
   router.replace({ query: Object.fromEntries(Object.entries({ ...route.query, ...patch }).filter(([, value]) => value)) })
 }
 
+const { open: openOverlay, close: closeOverlay } = useQueryOverlay()
+
 // A changed filter starts a fresh list; opening a mail or loading more keeps the loaded pages
 function updateFilters(patch: LocationQueryRaw) {
   updateQuery({ ...patch, pages: null })
@@ -117,6 +119,10 @@ const tabItems = [{
   label: 'Unread',
   value: 'unread'
 }]
+
+const mobileTabItems = computed(() => tabItems.map(item => item.value === 'unread'
+  ? { ...item, badge: unreadCount.value || undefined }
+  : item))
 
 const selectedTab = computed({
   get: () => queryString('unread') ? 'unread' : 'all',
@@ -623,11 +629,11 @@ watch([showThreads, listIdentity], () => {
 }, { immediate: true })
 
 function openConversation(key: string) {
-  updateQuery(mailConversationToQuery(key))
+  openOverlay('mail-panel', { ...mailConversationToQuery(key), person: null }, !!conversationKey.value)
 }
 
 function closeConversation() {
-  updateQuery(mailConversationToQuery(null))
+  closeOverlay('mail-panel', { ...mailConversationToQuery(null), person: null })
 }
 
 // The panel fetches the same conversation through the same cache, so the hover
@@ -767,7 +773,13 @@ const { data: linkedMail } = useQuery<MailMessage>({
 
 const selectedMail = computed<MailSummary | null>({
   get: () => visibleList.value.find(mail => isSelectedMail(mail, selection.value)) ?? linkedMail.value ?? null,
-  set: mail => updateQuery(mailSelectionToQuery(mail ? { uid: mail.uid, mailbox: mail.mailbox } : null, mailbox.value))
+  set: (mail) => {
+    if (mail) {
+      openOverlay('mail-panel', { ...mailSelectionToQuery({ uid: mail.uid, mailbox: mail.mailbox }, mailbox.value), person: null }, !!selection.value)
+    } else {
+      closeOverlay('mail-panel', { ...mailSelectionToQuery(null, mailbox.value), person: null })
+    }
+  }
 })
 
 // --- Attachment preview ---
@@ -797,11 +809,11 @@ const attachmentPreviewAttachments = computed(() => attachmentPreviewMessage.val
 const isAttachmentPreviewOpen = computed(() => !!attachmentPreview.value)
 
 function openAttachmentPreview(mail: Pick<MailSummary, 'uid' | 'mailbox'>, part: string) {
-  updateQuery(mailAttachmentPreviewToQuery({ part, uid: mail.uid, mailbox: mail.mailbox }))
+  openOverlay('mail-attachment', mailAttachmentPreviewToQuery({ part, uid: mail.uid, mailbox: mail.mailbox }), !!attachmentPreview.value)
 }
 
 function closeAttachmentPreview() {
-  updateQuery(mailAttachmentPreviewToQuery(null))
+  closeOverlay('mail-attachment', mailAttachmentPreviewToQuery(null))
 }
 
 function setAttachmentPreviewPart(part: string) {
@@ -817,7 +829,7 @@ const isMailPanelOpen = computed({
   },
   set(value: boolean) {
     if (!value) {
-      updateQuery({ uid: null, in: null, conversation: null })
+      closeOverlay('mail-panel', { uid: null, in: null, conversation: null, person: null })
     }
   }
 })
@@ -1086,16 +1098,16 @@ function prefetchMessage(mail: MailSummary) {
 }
 
 function openCompose(mode: MailComposeMode, mail?: MailSummary) {
-  updateQuery(mailComposeToQuery(
+  openOverlay('mail-compose', mailComposeToQuery(
     mode === 'new' || !mail ? { mode: 'new' } : { mode, uid: mail.uid, mailbox: mail.mailbox },
     mailbox.value
-  ))
+  ), !!composeQuery.value)
 }
 
 /** The unsent draft stays in sessionStorage, so reopening restores it */
 function closeCompose() {
   composeDraft.value = null
-  updateQuery(mailComposeToQuery(null, mailbox.value))
+  closeOverlay('mail-compose', mailComposeToQuery(null, mailbox.value))
 }
 
 function discardCompose() {
@@ -1220,6 +1232,7 @@ function restoreMail(snapshot: DeleteSnapshot, mail = snapshot.mail) {
   }
 }
 
+// Destructive confirmations stay local: a history entry here would let forward resurrect a stale action
 const confirmState = reactive({ open: false, title: '', description: '', confirmLabel: 'Confirm', action: undefined as (() => void) | undefined })
 
 function askConfirm(title: string, description: string, confirmLabel: string, action: () => void) {
@@ -1285,7 +1298,9 @@ async function deleteMail(mail: MailSummary, confirmed = false): Promise<void> {
   if (snapshot.conversation) {
     conversations.value = conversations.value.filter(item => item !== snapshot.conversation)
   }
-  selectedMail.value = next
+  if (!showThreads.value && selection.value?.uid === mail.uid && selection.value.mailbox === mail.mailbox) {
+    selectedMail.value = next
+  }
 
   try {
     const result = await $fetch<{ action: 'trashed' | 'deleted', trashMailbox?: string, trashUid?: number }>(
@@ -1430,7 +1445,7 @@ async function deleteMails(targets: MailSummary[], confirmed = false, removing: 
   for (const mail of unique) {
     holdDeleted(recentlyDeleted, mail)
   }
-  if (open && deletedKeys.has(mailKey(open))) {
+  if (!showThreads.value && open && deletedKeys.has(mailKey(open))) {
     selectedMail.value = next
   }
   setSelectedKeys([])
@@ -1866,9 +1881,18 @@ const isMobile = breakpoints.smaller('lg')
         <UDashboardSidebarCollapse />
       </template>
       <template #trailing>
-        <UTooltip v-if="unreadCount" :text="unreadLabel">
-          <UBadge :label="unreadCount" variant="subtle" :aria-label="unreadLabel" />
-        </UTooltip>
+        <span v-if="unreadCount" class="max-lg:hidden">
+          <UTooltip :text="unreadLabel">
+            <UBadge :label="unreadCount" variant="subtle" :aria-label="unreadLabel" />
+          </UTooltip>
+        </span>
+        <UTabs
+          v-model="selectedTab"
+          :items="mobileTabItems"
+          :content="false"
+          size="xs"
+          class="lg:hidden"
+        />
       </template>
 
       <template #right>
@@ -1881,7 +1905,7 @@ const isMobile = breakpoints.smaller('lg')
       </template>
     </UDashboardNavbar>
 
-    <UDashboardToolbar class="justify-start">
+    <UDashboardToolbar class="justify-start max-lg:hidden">
       <UTabs
         v-model="selectedTab"
         :items="tabItems"
@@ -2199,11 +2223,15 @@ const isMobile = breakpoints.smaller('lg')
   </div>
 
   <ClientOnly>
-    <USlideover v-if="isMobile" v-model:open="isMailPanelOpen">
+    <ResponsiveOverlay
+      v-if="isMobile"
+      v-model:open="isMailPanelOpen"
+    >
       <template #content>
         <MailConversation
           v-if="showThreads && conversationKey"
           :key="conversationKey"
+          class="min-h-0"
           :conversation-key="conversationKey"
           :service="service"
           :own-address="ownAddress"
@@ -2218,6 +2246,7 @@ const isMobile = breakpoints.smaller('lg')
         <MailView
           v-else-if="selectedMail"
           :key="selectedMail.uid"
+          class="min-h-0"
           :mail="selectedMail"
           :service="service"
           :permanent="isPermanentDelete(selectedMail)"
@@ -2230,7 +2259,7 @@ const isMobile = breakpoints.smaller('lg')
           @prefetch="prefetchCompose"
         />
       </template>
-    </USlideover>
+    </ResponsiveOverlay>
   </ClientOnly>
 
   <MailComposer

@@ -233,6 +233,7 @@ const bulkItems = computed<DropdownMenuItem[]>(() => [
 // --- Saved views ----------------------------------------------------------
 
 const saveOpen = ref(false)
+useOverlayHistory(saveOpen)
 const viewName = ref('')
 
 async function saveView() {

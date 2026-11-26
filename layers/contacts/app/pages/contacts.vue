@@ -55,11 +55,12 @@ const groups = computed(() => groupContacts(filtered.value))
 // --- Selection and editor (in the URL) ---
 
 const editorKey = computed(() => queryString('contact'))
+const { open: openOverlay, close: closeOverlay } = useQueryOverlay()
 const isEditorOpen = computed({
   get: () => !!editorKey.value,
   set: (open: boolean) => {
     if (!open) {
-      updateQuery({ contact: null })
+      closeOverlay('contact-editor', { contact: null })
     }
   }
 })
@@ -76,11 +77,11 @@ const contactForm = useTemplateRef<{
 }>('contactForm')
 
 function openContact(contact: Contact) {
-  updateQuery({ contact: contact.uid })
+  openOverlay('contact-editor', { contact: contact.uid }, !!editorKey.value)
 }
 
 function openNew() {
-  updateQuery({ contact: 'new' })
+  openOverlay('contact-editor', { contact: 'new' }, !!editorKey.value)
 }
 
 async function save() {
@@ -321,7 +322,7 @@ const isMobile = breakpoints.smaller('lg')
     </div>
   </div>
 
-  <USlideover v-model:open="isEditorOpen" :title="selected ? 'Edit contact' : 'New contact'">
+  <ResponsiveOverlay v-model:open="isEditorOpen" :title="selected ? 'Edit contact' : 'New contact'">
     <template #body>
       <ContactForm
         ref="contactForm"
@@ -359,5 +360,5 @@ const isMobile = breakpoints.smaller('lg')
         </div>
       </div>
     </template>
-  </USlideover>
+  </ResponsiveOverlay>
 </template>

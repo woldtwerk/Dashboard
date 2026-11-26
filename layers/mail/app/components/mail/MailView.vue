@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { breakpointsTailwind } from '@vueuse/core'
 import type { MailSummary } from '#layers/mail/shared/types/mail'
 import type { EntityRef } from '#layers/core/shared/types/entities'
 import { normalizeEmail, entityKey } from '#layers/core/shared/entities'
@@ -79,26 +80,25 @@ const itemContext = computed<Record<string, unknown>>(() => ({
   snippet: props.mail.snippet
 }))
 
-// The person panel lives in the URL (`?person=<email>`), so a link can open it directly
-function updateQuery(patch: Record<string, string | null>) {
-  router.replace({ query: Object.fromEntries(Object.entries({ ...route.query, ...patch }).filter(([, value]) => value)) })
-}
+const isMobile = useBreakpoints(breakpointsTailwind).smaller('lg')
 
+const { open: openOverlay, close: closeOverlay } = useQueryOverlay()
+
+// The person panel lives in the URL (`?person=<email>`), so a link can open it directly
 const personEmail = computed(() => typeof route.query.person === 'string' ? route.query.person : undefined)
-const isPersonOpen = computed({
-  get: () => !!personEmail.value,
-  set: (open: boolean) => {
-    if (!open) {
-      updateQuery({ person: null })
-    }
-  }
-})
 
 function openPerson(address?: string) {
   const email = normalizeEmail(address)
-  if (email) {
-    updateQuery({ person: email })
+  if (!email) return
+  if (isMobile.value) {
+    void router.push(`/people/${encodeURIComponent(email)}`)
+    return
   }
+  openOverlay('mail-person', { person: email }, !!personEmail.value)
+}
+
+function closePerson() {
+  closeOverlay('mail-person', { person: null })
 }
 </script>
 
@@ -231,6 +231,23 @@ function openPerson(address?: string) {
         </p>
       </div>
 
+      <section v-if="personEmail" class="border-b border-default px-4 py-4 sm:px-6">
+        <div class="mb-3 flex items-center justify-between gap-2">
+          <h2 class="text-sm font-semibold">
+            Contact
+          </h2>
+          <UButton
+            icon="i-lucide-x"
+            color="neutral"
+            variant="ghost"
+            size="xs"
+            aria-label="Close contact details"
+            @click="closePerson"
+          />
+        </div>
+        <PersonDetails :email="personEmail" />
+      </section>
+
       <div v-if="status === 'pending'" class="flex items-center justify-center p-8">
         <UIcon name="i-lucide-loader-circle" class="size-6 animate-spin text-dimmed" />
       </div>
@@ -267,10 +284,4 @@ function openPerson(address?: string) {
       </div>
     </div>
   </UDashboardPanel>
-
-  <USlideover v-model:open="isPersonOpen" :title="personEmail ?? 'Person'">
-    <template #body>
-      <PersonDetails v-if="personEmail" :email="personEmail" />
-    </template>
-  </USlideover>
 </template>

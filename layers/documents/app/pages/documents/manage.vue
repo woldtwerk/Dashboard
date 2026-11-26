@@ -111,6 +111,7 @@ function refresh() {
 }
 
 const editorOpen = ref(false)
+useOverlayHistory(editorOpen)
 const editingId = ref<number | null>(null)
 const saving = ref(false)
 
