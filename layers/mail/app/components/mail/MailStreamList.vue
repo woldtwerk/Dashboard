@@ -22,6 +22,9 @@ const emits = defineEmits<{
   delete: [mail: MailSummary]
 }>()
 
+const queryCache = useQueryCache()
+const requestFetch = useRequestFetch()
+
 // One zone for the whole conversation, resolved once; the items only format with it
 const zone = useTimeZone()
 
@@ -56,9 +59,7 @@ function loadMessage(mail: MailSummary) {
   }
 
   loading.value = { ...loading.value, [value]: true }
-  const request = $fetch<MailMessage>(`/api/mail/messages/${mail.uid}`, {
-    query: { service: props.service, mailbox: mail.mailbox }
-  })
+  const request = loadMailMessage(queryCache, requestFetch, props.service, mail.mailbox, mail.uid)
   requests.set(value, request)
   request.catch(() => requests.delete(value))
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DomainEvent } from '../../core/shared/types/domain-events'
-import { mailRefreshFor } from '../app/utils/mail-events'
+import { mailQueryKeysFor, mailRefreshFor } from '../app/utils/mail-events'
 
 const event = (extra: Partial<DomainEvent> = {}): DomainEvent => ({
   domain: 'mail',
@@ -63,5 +63,24 @@ describe('mailRefreshFor', () => {
       folders: false,
       indexStatus: false
     })
+  })
+})
+
+describe('mailQueryKeysFor', () => {
+  const cases: [name: string, extra: Partial<DomainEvent>, expected: string[][]][] = [
+    ['change', {}, [
+      ['mail', 'index-status'],
+      ['mail', 'important'],
+      ['mail', 'account', 'message'],
+      ['mail', 'account', 'conversation'],
+      ['mail', 'account', 'facets']
+    ]],
+    ['sync', { type: 'synced' }, [['mail', 'index-status']]],
+    ['another type', { type: 'sync-failed' }, []],
+    ['another domain', { domain: 'drive' }, []]
+  ]
+
+  it.each(cases)('%s', (_name, extra, expected) => {
+    expect(mailQueryKeysFor(event(extra))).toEqual(expected)
   })
 })

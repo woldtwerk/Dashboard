@@ -1,52 +1,30 @@
 <script setup lang="ts">
-import { useDebounceFn } from '@vueuse/core'
 import type { ImportantMail } from '#layers/mail/shared/mail-importance'
 import { mailLink } from '#layers/mail/shared/mail-source'
 import { formatRelative } from '#layers/core/app/utils/time'
 import { useDashboardNow } from '#layers/core/app/composables/useDashboardNow'
-import { useDomainEvents } from '#layers/core/app/composables/useDomainEvents'
 import { formatMailAddress, mailKey } from '../../utils/mail'
 
-const nuxtApp = useNuxtApp()
+const queryCache = useQueryCache()
+const requestFetch = useRequestFetch()
 const now = useDashboardNow()
 
-const { data: mails, status, refresh } = await useFetch<ImportantMail[]>('/api/mail/important', {
-  key: 'dashboard-important-mail',
-  query: { limit: 8 },
-  lazy: true,
-  default: () => []
+const { data: importantMails, status } = useQuery<ImportantMail[]>({
+  key: ['mail', 'important'],
+  query: () => requestFetch<ImportantMail[]>('/api/mail/important', { query: { limit: 8 } }),
+  ssrCatchError: true
 })
+const mails = computed(() => importantMails.value ?? [])
 
 const loading = computed(() => status.value === 'pending' && !mails.value.length)
 
-// The domain sends `changed` events in bursts; one refresh per burst is enough
-const refreshFromEvents = useDebounceFn(() => refresh(), 500)
-useDomainEvents({ domains: ['mail'] }, (event) => {
-  if (event.type === 'changed') {
-    refreshFromEvents()
-  }
-}, {
-  onReconnect: () => refreshFromEvents()
-})
-
-// Hovering a mail warms the payload key the mail page reads when it opens it
+// Hovering a mail warms the same message query the mail page reads when it opens
 function prefetch(mail: ImportantMail) {
   if (!import.meta.client || !mail.service) {
     return
   }
 
-  const key = `mail-linked:${mail.service}:${mail.mailbox}:${mail.uid}`
-  if (nuxtApp.payload.data[key] !== undefined) {
-    return
-  }
-
-  $fetch(`/api/mail/messages/${mail.uid}`, { query: { service: mail.service, mailbox: mail.mailbox } })
-    .then((data) => {
-      nuxtApp.payload.data[key] = data
-    })
-    .catch(() => {
-      // A failed prefetch is not worth surfacing; opening the mail fetches for real
-    })
+  prefetchMailMessage(queryCache, requestFetch, mail.service, mail.mailbox, mail.uid)
 }
 
 function link(mail: ImportantMail) {

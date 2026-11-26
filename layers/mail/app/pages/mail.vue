@@ -2,7 +2,7 @@
 import { breakpointsTailwind, refDebounced, useDebounceFn, useDocumentVisibility, useIntervalFn } from '@vueuse/core'
 import type { LocationQueryRaw } from 'vue-router'
 import type { DropdownMenuItem } from '@nuxt/ui'
-import type { MailConversation, MailAttachment, MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
+import type { MailConversation, MailAttachment, MailFacets, MailIndexStatus, MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
 import { buildReply, emptyOutgoingMail, type OutgoingMail } from '#layers/mail/shared/mail-compose'
 import { trashTarget } from '#layers/mail/shared/mail-delete'
 import { labelFromMailbox } from '#layers/mail/shared/mail-labels'
@@ -23,7 +23,7 @@ useSeoMeta({ title: 'Mail' })
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
-const nuxtApp = useNuxtApp()
+const queryCache = useQueryCache()
 // Forwards the browser's cookies on the server; plain `$fetch` on the client
 const requestFetch = useRequestFetch()
 
@@ -40,7 +40,7 @@ if (!services.value.length) {
   await navigateTo('/services/new', { replace: true })
 }
 
-const { data: folders } = await useMailFolders()
+const { data: folders } = useMailFolders()
 
 // Account, folder, search and filters live in the URL, so the sidebar and links can drive them
 const queryString = (key: string) => typeof route.query[key] === 'string' ? route.query[key] : undefined
@@ -219,8 +219,17 @@ async function applyAssistant() {
   }
 }
 
-// Search index status (null without an index); refreshed when a sync finishes
-const { data: indexStatus, refresh: refreshIndexStatus } = await useFetch('/api/mail/index-status')
+// Search index status (null without an index), cached by Pinia Colada. The
+// poll and a finished sync force the refetch.
+const indexStatusQuery = useQuery<MailIndexStatus[] | null>({
+  key: ['mail', 'index-status'],
+  query: () => requestFetch<MailIndexStatus[] | null>('/api/mail/index-status'),
+  ssrCatchError: true
+})
+// The effective view — and with it the first list request — depends on the
+// status, so setup waits for it, as the previous useFetch did.
+await indexStatusQuery.refresh()
+const { data: indexStatus, refetch: refreshIndexStatus } = indexStatusQuery
 const currentIndex = computed(() => indexStatus.value?.find(item => item.service === service.value))
 const indexAvailable = computed(() => !!indexStatus.value)
 const indexing = computed(() => !!currentIndex.value && (currentIndex.value.syncing || !currentIndex.value.complete))
@@ -387,15 +396,13 @@ const ownAddress = computed(() => String(serviceSetup.value?.values.user ?? '') 
 
 // Every address the account may send from, for the composer's From control and
 // reply prefills; cached per service and warmed on the compose hover.
-const { data: mailAddresses, refresh: refreshMailAddresses } = await useFetch<{ addresses: string[], default?: string }>(
-  '/api/mail/addresses',
-  {
-    query: computed(() => ({ service: service.value })),
-    key: () => `mail-addresses:${service.value}`,
-    lazy: true,
-    default: () => ({ addresses: [] as string[], default: undefined })
-  }
-)
+const { data: mailAddresses, refetch: refreshMailAddresses } = useQuery<{ addresses: string[], default?: string }>({
+  key: () => ['mail', service.value, 'addresses'],
+  query: () => requestFetch<{ addresses: string[], default?: string }>('/api/mail/addresses', { query: { service: service.value } }),
+  staleTime: 10 * 60_000,
+  enabled: () => !!service.value,
+  ssrCatchError: true
+})
 const sentMailboxes = computed(() => (folders.value.find(entry => entry.service.id === service.value)?.mailboxes ?? [])
   .filter(item => item.specialUse === '\\Sent')
   .map(item => item.path))
@@ -461,7 +468,7 @@ watch(selectedConversationKey, async (key) => {
 
   const account = service.value
   try {
-    const mails = await loadMailConversation(nuxtApp, requestFetch, account, key)
+    const mails = await loadMailConversation(queryCache, requestFetch, account, key)
     if (service.value === account && selectedConversationKey.value === key) {
       openConversationMails.value = mails
     }
@@ -557,12 +564,12 @@ function closeConversation() {
 // The panel fetches the same conversation through the same cache, so the hover
 // prefetch and the click are one request, not two.
 function prefetchConversation(key: string) {
-  prefetchMailConversation(nuxtApp, requestFetch, service.value, key)
+  prefetchMailConversation(queryCache, requestFetch, service.value, key)
 }
 
 function onConversationSeen() {
   reloadConversationsFromEvents()
-  refreshFoldersFromEvents()
+  refetchMailFolders(queryCache, requestFetch)
 }
 
 // Reloading keeps the loaded depth: fetch as many pages as the URL says are shown
@@ -607,18 +614,18 @@ async function refreshMail() {
 
   await Promise.all([
     showThreads.value ? reloadConversations() : reloadList(),
-    refreshNuxtData('mail-folders'),
+    refetchMailFolders(queryCache, requestFetch),
     sync.then(() => refreshIndexStatus())
   ])
 }
 
 const refreshListFromEvents = useDebounceFn(() => reloadList(), 300)
-const refreshFoldersFromEvents = useDebounceFn(() => refreshNuxtData('mail-folders'), 300)
-const refreshIndexFromEvents = useDebounceFn(() => refreshIndexStatus(), 300)
 // A seen-update and the server's own change event both ask for a reload; debounced,
 // the two become one and the conversations list is fetched once.
 const reloadConversationsFromEvents = useDebounceFn(() => reloadConversations(), 300)
 
+// Only the visible list is reloaded here. Folders, index status and the other
+// cached queries are invalidated by the layer's rule, on events and reconnect.
 useDomainEvents({ domains: ['mail'] }, (event) => {
   const plan = mailRefreshFor(event, {
     service: service.value,
@@ -633,17 +640,9 @@ useDomainEvents({ domains: ['mail'] }, (event) => {
       refreshListFromEvents()
     }
   }
-  if (plan.folders) {
-    refreshFoldersFromEvents()
-  }
-  if (plan.indexStatus) {
-    refreshIndexFromEvents()
-  }
 }, {
   onReconnect: () => {
     refreshListFromEvents()
-    refreshFoldersFromEvents()
-    refreshIndexStatus()
   }
 })
 
@@ -655,16 +654,16 @@ const facetsQuery = computed(() => ({
   ...mailSearchToApiQuery({ ...criteria.value, from: undefined })
 }))
 
-const { data: facets, refresh: refreshFacets } = await useFetch('/api/mail/facets', {
-  query: facetsQuery,
-  // The automatic query watcher cannot tell a filter change from a selection
-  // change (both rewrite `route.query`), so it is off; the list identity drives it.
-  watch: false,
-  default: () => null,
-  lazy: true
+// Only on purpose: the query object is part of the cache key, so just a
+// folder/scope/criteria change asks the index again. Opening a mail only changes
+// the selection and leaves the cached suggestions alone — a route watcher could
+// not tell the two apart, which is why the old fetch had watching switched off.
+const { data: facets } = useQuery<MailFacets | null>({
+  key: () => ['mail', service.value, 'facets', facetsQuery.value],
+  query: () => requestFetch<MailFacets | null>('/api/mail/facets', { query: facetsQuery.value }),
+  enabled: () => !!service.value,
+  ssrCatchError: true
 })
-
-watch(listIdentity, () => refreshFacets())
 const fromItems = computed(() => (facets.value?.from ?? []).map(item => item.value))
 
 // Append the next page; the loaded depth goes back into the URL so a reload restores it
@@ -698,7 +697,6 @@ async function loadMore() {
 
 // The open mail lives in the URL (`?uid=&in=`); `in` names a folder outside the current one
 const selection = computed(() => mailSelectionFromQuery(route.query, mailbox.value))
-const selectionKey = computed(() => selection.value && `${selection.value.mailbox}:${selection.value.uid}`)
 
 // The list as it should render: fetched mails plus the ones the unread filter dropped
 const visibleList = computed(() => visibleMails(mails.value, retained.value, criteria.value))
@@ -707,12 +705,20 @@ const visibleList = computed(() => visibleMails(mails.value, retained.value, cri
 const selectedMails = computed(() => visibleList.value.filter(mail => selectedMailKeys.value.includes(mailSelectionKey(mail))))
 
 // A linked mail may not be in the current list, e.g. outside the loaded pages
-const { data: linkedMail } = await useAsyncData(
-  () => `mail-linked:${service.value}:${selectionKey.value ?? ''}`,
-  () => selection.value && !mails.value.some(mail => isSelectedMail(mail, selection.value))
-    ? requestFetch(`/api/mail/messages/${selection.value.uid}`, { query: { service: service.value, mailbox: selection.value.mailbox } }).catch(() => null)
-    : Promise.resolve(null)
-)
+// or opened from the dashboard. It reads the same message query the reader and
+// a hover prefetch warm, so opening it costs no second request.
+const { data: linkedMail } = useQuery<MailMessage>({
+  key: () => {
+    const current = selection.value
+    return mailMessageQueryKey(service.value, current?.mailbox ?? '', current?.uid ?? 0)
+  },
+  // Never called without a selection; `enabled` guards it
+  query: () => requestFetch<MailMessage>(`/api/mail/messages/${selection.value?.uid ?? 0}`, {
+    query: { service: service.value, mailbox: selection.value?.mailbox ?? '' }
+  }),
+  enabled: () => !!selection.value && !mails.value.some(mail => isSelectedMail(mail, selection.value!)),
+  ssrCatchError: true
+})
 
 const selectedMail = computed<MailSummary | null>({
   get: () => visibleList.value.find(mail => isSelectedMail(mail, selection.value)) ?? linkedMail.value ?? null,
@@ -834,7 +840,7 @@ async function setSeenMany(targets: MailSummary[], seen: boolean): Promise<boole
   }
 
   // Update unread counts in the sidebar
-  refreshNuxtData('mail-folders')
+  refetchMailFolders(queryCache, requestFetch)
   if (showThreads.value) {
     reloadConversationsFromEvents()
   }
@@ -920,7 +926,7 @@ async function setLabelMany(targets: MailSummary[], label: string, on: boolean):
   }
 
   // Label folders repeat the mail, so their counts change with the copies
-  refreshNuxtData('mail-folders')
+  refetchMailFolders(queryCache, requestFetch)
   return failedKeys.size === 0
 }
 
@@ -1010,17 +1016,17 @@ const defaultFrom = computed(() => mailAddresses.value?.default ?? ownAddress.va
 
 /**
  * Loads the account's sendable addresses when they are not in yet. A lazy
- * useFetch may still be on its way when the composer opens — a reload with
- * `?compose=reply…` in the URL, or a quick click — and building a draft from the
- * half list would send from the login and let a reply-all address an own alias.
- * Errors are swallowed; the setup-address fallback stands.
+ * addresses query may still be on its way when the composer opens — a reload
+ * with `?compose=reply…` in the URL, or a quick click — and building a draft
+ * from the half list would send from the login and let a reply-all address an
+ * own alias. Errors are swallowed; the setup-address fallback stands.
  */
 async function ensureMailAddresses(): Promise<void> {
   if (mailAddresses.value?.addresses.length) {
     return
   }
   try {
-    await refreshMailAddresses()
+    await refreshMailAddresses(true)
   } catch {
     // The setup address is the fallback
   }
@@ -1029,12 +1035,12 @@ async function ensureMailAddresses(): Promise<void> {
 // One full-message request per mail, shared by the reader, the composer and its
 // hover prefetch; the cache lives in `useMailMessage`
 function mailMessage(uid: number, fromMailbox: string): Promise<MailMessage> {
-  return loadMailMessage(nuxtApp, requestFetch, service.value, fromMailbox, uid)
+  return loadMailMessage(queryCache, requestFetch, service.value, fromMailbox, uid)
 }
 
 /** Warm the reader for a mail the list points at, on hover and around the arrow keys */
 function prefetchMessage(mail: MailSummary) {
-  prefetchMailMessage(nuxtApp, requestFetch, service.value, mail.mailbox, mail.uid)
+  prefetchMailMessage(queryCache, requestFetch, service.value, mail.mailbox, mail.uid)
 }
 
 function openCompose(mode: MailComposeMode, mail?: MailSummary) {
@@ -1200,7 +1206,7 @@ async function undoDelete(snapshot: DeleteSnapshot, result: { trashMailbox?: str
     })
     releaseDeleted(recentlyDeleted, mailKey(snapshot.mail))
     restoreMail(snapshot, { ...snapshot.mail, uid: moved.uid ?? snapshot.mail.uid })
-    refreshNuxtData('mail-folders')
+    refetchMailFolders(queryCache, requestFetch)
   } catch (error) {
     toast.add({ title: 'Could not undo', description: mailErrorMessage(error), color: 'error', icon: 'i-lucide-circle-alert' })
   }
@@ -1245,7 +1251,7 @@ async function deleteMail(mail: MailSummary, confirmed = false): Promise<void> {
       { method: 'POST', query: { service: service.value, mailbox: mail.mailbox }, body: { permanent: confirmed } }
     )
 
-    refreshNuxtData('mail-folders')
+    refetchMailFolders(queryCache, requestFetch)
 
     if (result.action === 'deleted') {
       toast.add({ title: 'Deleted permanently', color: 'success', icon: 'i-lucide-trash-2' })
@@ -1339,7 +1345,7 @@ async function undoDeleteBatch(
   if (needsReload) {
     reloadList()
   }
-  refreshNuxtData('mail-folders')
+  refetchMailFolders(queryCache, requestFetch)
 }
 
 /**
@@ -1449,7 +1455,7 @@ async function deleteMails(targets: MailSummary[], confirmed = false, removing: 
 
   const trashedCount = trashed.reduce((sum, group) => sum + group.items.length, 0)
   if (trashedCount || deletedCount) {
-    refreshNuxtData('mail-folders')
+    refetchMailFolders(queryCache, requestFetch)
   }
 
   if (trashedCount && !deletedCount && !failedKeys.size) {
@@ -1506,7 +1512,7 @@ async function selectedConversationGroups(): Promise<{ conversation: MailConvers
   }
 
   try {
-    const lists = await Promise.all(selected.map(conversation => loadMailConversation(nuxtApp, requestFetch, service.value, conversation.key)))
+    const lists = await Promise.all(selected.map(conversation => loadMailConversation(queryCache, requestFetch, service.value, conversation.key)))
     return selected.map((conversation, index) => ({ conversation, mails: lists[index]! }))
   } catch (error) {
     toast.add({ title: 'Could not load the selected conversations', description: mailErrorMessage(error), color: 'error', icon: 'i-lucide-circle-alert' })
@@ -1535,7 +1541,7 @@ async function batchSelectedLabel(label: string, on: boolean): Promise<void> {
 /** The mails of one conversation, for a menu entry that acts on the whole thread */
 async function conversationMails(key: string): Promise<MailSummary[] | null> {
   try {
-    return await loadMailConversation(nuxtApp, requestFetch, service.value, key)
+    return await loadMailConversation(queryCache, requestFetch, service.value, key)
   } catch (error) {
     toast.add({ title: 'Could not load the conversation', description: mailErrorMessage(error), color: 'error', icon: 'i-lucide-circle-alert' })
     return null

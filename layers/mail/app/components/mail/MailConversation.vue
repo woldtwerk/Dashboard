@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { useDebounceFn } from '@vueuse/core'
 import type { MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
 import { buildReply, defaultSenderAddress } from '#layers/mail/shared/mail-compose'
 import { isStreamKey, latestIncomingMail, streamLabel, stripSubjectPrefix, type OwnMailContext } from '#layers/mail/shared/mail-thread'
@@ -26,6 +25,8 @@ const emits = defineEmits<{
 }>()
 
 const toast = useToast()
+const queryCache = useQueryCache()
+const requestFetch = useRequestFetch()
 
 const { data: mails, status, error, refresh } = useMailConversation(() => props.conversationKey, () => props.service)
 
@@ -146,18 +147,10 @@ const pendingItem = computed(() => pendingReply.value && pendingMail.value
   ? { mail: pendingMail.value, text: pendingReply.value.text }
   : null)
 
-// One full-message request per mail; the summary does not carry Message-ID or text
-const messageCache = new Map<string, Promise<MailMessage>>()
-
+// The summary does not carry Message-ID or text; the full message comes from the
+// same query the reader and a hover prefetch warm
 function mailMessage(mail: MailSummary): Promise<MailMessage> {
-  const key = mailKey(mail)
-  let request = messageCache.get(key)
-  if (!request) {
-    request = $fetch<MailMessage>(`/api/mail/messages/${mail.uid}`, { query: { service: props.service, mailbox: mail.mailbox } })
-    messageCache.set(key, request)
-    request.catch(() => messageCache.delete(key))
-  }
-  return request
+  return loadMailMessage(queryCache, requestFetch, props.service, mail.mailbox, mail.uid)
 }
 
 async function sendReply() {
@@ -203,15 +196,6 @@ async function sendReply() {
     sending.value = false
   }
 }
-
-// A sent mail is announced as a change; the conversation picks up its own copy
-const refreshFromEvents = useDebounceFn(() => refresh(), 300)
-
-useDomainEvents({ domains: ['mail'] }, (event) => {
-  if (event.type === 'changed' && event.service === props.service) {
-    refreshFromEvents()
-  }
-})
 </script>
 
 <template>

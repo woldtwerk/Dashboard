@@ -1,73 +1,65 @@
 import type { MaybeRefOrGetter } from 'vue'
 import type { MailSummary } from '#layers/mail/shared/types/mail'
 
-type NuxtApp = ReturnType<typeof useNuxtApp>
+type QueryCache = ReturnType<typeof useQueryCache>
 type Fetcher = ReturnType<typeof useRequestFetch>
 
-/**
- * One cache per Nuxt app: the server hands each request its own app, the browser
- * each tab its own, so a cached conversation can never reach another visitor.
- */
-const caches = new WeakMap<NuxtApp, Map<string, Promise<MailSummary[]>>>()
-
-function conversationCache(nuxtApp: NuxtApp): Map<string, Promise<MailSummary[]>> {
-  let cache = caches.get(nuxtApp)
-  if (!cache) {
-    cache = new Map()
-    caches.set(nuxtApp, cache)
-  }
-  return cache
+/** The key is stable per service and conversation, so the panel, a prefetch and a remount share one entry. */
+export function mailConversationQueryKey(service: string, key: string) {
+  return ['mail', service, 'conversation', key] as const
 }
 
-const cacheKey = (service: string, key: string) => `${service}:${key}`
-
-/**
- * A conversation's mails; an in-flight request is shared, a resolved one is kept.
- * `fetcher` is the caller's request-scoped fetch, so a server render forwards the
- * session cookie the same way `useFetch` does.
- */
-export function loadMailConversation(nuxtApp: NuxtApp, fetcher: Fetcher, service: string, key: string): Promise<MailSummary[]> {
-  const cache = conversationCache(nuxtApp)
-  const id = cacheKey(service, key)
-  let request = cache.get(id)
-  if (!request) {
-    request = fetcher<MailSummary[]>(`/api/mail/conversations/${encodeURIComponent(key)}`, { query: { service } })
-    cache.set(id, request)
-    request.catch(() => cache.delete(id))
+/** The one query the panel and a prefetch share. */
+export function mailConversationQueryOptions(fetcher: Fetcher, service: string, key: string) {
+  return {
+    key: mailConversationQueryKey(service, key),
+    query: () => fetcher<MailSummary[]>(`/api/mail/conversations/${encodeURIComponent(key)}`, { query: { service } })
   }
-  return request
 }
 
-/** Warm a conversation the panel is about to open; the panel reuses the very same request */
-export function prefetchMailConversation(nuxtApp: NuxtApp, fetcher: Fetcher, service: string, key: string) {
-  loadMailConversation(nuxtApp, fetcher, service, key).catch(() => {})
+/**
+ * A conversation's mails from the shared cache: a fresh entry answers without a
+ * request, an in-flight one is joined, and a failed query throws.
+ */
+export async function loadMailConversation(
+  queryCache: QueryCache,
+  fetcher: Fetcher,
+  service: string,
+  key: string
+): Promise<MailSummary[]> {
+  const entry = queryCache.ensure(mailConversationQueryOptions(fetcher, service, key))
+  const { data, error } = await queryCache.refresh(entry)
+  if (error) throw error
+  return data!
+}
+
+/** Warm a conversation the panel is about to open; fire and forget. */
+export function prefetchMailConversation(
+  queryCache: QueryCache,
+  fetcher: Fetcher,
+  service: string,
+  key: string
+): void {
+  queryCache.refresh(queryCache.ensure(mailConversationQueryOptions(fetcher, service, key))).then(() => {}, () => {})
 }
 
 /**
  * The open conversation's mails. The key is stable per selection, so the panel,
- * a hover prefetch and a remount all share one request. `refresh()` drops the
- * cached copy first, so a reload after a reply or a change really asks again.
+ * a hover prefetch and a remount share one request. A reply or a seen change
+ * must force the reload, hence `refresh` maps to `refetch`.
  */
 export function useMailConversation(conversationKey: MaybeRefOrGetter<string | undefined>, service: MaybeRefOrGetter<string>) {
-  const nuxtApp = useNuxtApp()
-  const requestFetch = useRequestFetch()
-  const asyncData = useAsyncData<MailSummary[]>(
-    () => `mail-conversation:${toValue(service)}:${toValue(conversationKey) ?? ''}`,
-    async () => {
-      const key = toValue(conversationKey)
-      return key ? loadMailConversation(nuxtApp, requestFetch, toValue(service), key) : []
-    },
-    { default: () => [], lazy: true }
-  )
+  const fetcher = useRequestFetch()
+  const query = useQuery<MailSummary[], Error & { statusMessage?: string }>({
+    key: () => mailConversationQueryKey(toValue(service), toValue(conversationKey) ?? ''),
+    // Never called without a conversation; `enabled` guards it
+    query: () => fetcher<MailSummary[]>(`/api/mail/conversations/${encodeURIComponent(toValue(conversationKey) ?? '')}`, {
+      query: { service: toValue(service) }
+    }),
+    enabled: () => !!toValue(conversationKey),
+    ssrCatchError: true
+  })
 
-  const reload = asyncData.refresh
-  asyncData.refresh = (...args) => {
-    const key = toValue(conversationKey)
-    if (key) {
-      conversationCache(nuxtApp).delete(cacheKey(toValue(service), key))
-    }
-    return reload(...args)
-  }
-
-  return asyncData
+  const data = computed(() => query.data.value ?? [])
+  return { ...query, data, refresh: query.refetch }
 }
