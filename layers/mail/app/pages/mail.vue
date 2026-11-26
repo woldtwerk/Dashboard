@@ -18,6 +18,7 @@ import { mailAttachmentPreviewFromQuery, mailAttachmentPreviewToQuery } from '#l
 import { attachmentActionsForKey, type AttachmentActionContext } from '#layers/core/app/utils/attachment-actions'
 import type { SetupState } from '#layers/core/shared/types/setup'
 import type { MailListView, MailSettings } from '#layers/mail/shared/types/settings'
+import { MAIL_MESSAGE_GC_TIME, MAIL_QUERY_GC_TIME } from '#layers/mail/app/utils/mail-cache'
 
 useSeoMeta({ title: 'Mail' })
 
@@ -225,6 +226,7 @@ async function applyAssistant() {
 const indexStatusQuery = useQuery<MailIndexStatus[] | null>({
   key: ['mail', 'index-status'],
   query: () => requestFetch<MailIndexStatus[] | null>('/api/mail/index-status'),
+  gcTime: MAIL_QUERY_GC_TIME,
   ssrCatchError: true
 })
 // The effective view — and with it the first list request — depends on the
@@ -306,6 +308,7 @@ const listQuery = useQuery<MailListData, Error & { statusMessage?: string }>({
   },
   // The conversations view shows none of the list; it loads when the view switches back
   enabled: () => !showThreads.value,
+  gcTime: MAIL_QUERY_GC_TIME,
   ssrCatchError: true
 })
 const { data: listData, status, error, refetch: refetchList } = listQuery
@@ -490,6 +493,7 @@ const conversationsQuery = useQuery<MailConversationListData>({
     }
   },
   enabled: () => showThreads.value && import.meta.client,
+  gcTime: MAIL_QUERY_GC_TIME,
   ssrCatchError: true
 })
 const { data: conversationsData, refetch: refetchConversations } = conversationsQuery
@@ -757,6 +761,7 @@ const { data: linkedMail } = useQuery<MailMessage>({
     query: { service: service.value, mailbox: selection.value?.mailbox ?? '' }
   }),
   enabled: () => !!selection.value && !mails.value.some(mail => isSelectedMail(mail, selection.value!)),
+  gcTime: MAIL_MESSAGE_GC_TIME,
   ssrCatchError: true
 })
 

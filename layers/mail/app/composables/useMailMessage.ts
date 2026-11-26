@@ -1,11 +1,9 @@
 import type { MaybeRefOrGetter } from 'vue'
 import type { MailMessage, MailSummary } from '#layers/mail/shared/types/mail'
+import { MAIL_MESSAGE_GC_TIME } from '#layers/mail/app/utils/mail-cache'
 
 type QueryCache = ReturnType<typeof useQueryCache>
 type Fetcher = ReturnType<typeof useRequestFetch>
-
-// The body's flags still go stale in the default 30 s; only the cache lifetime is longer.
-const MAIL_MESSAGE_GC_TIME = 30 * 60_000
 
 /** Uids repeat across accounts and folders, so the service and mailbox are part of the key. */
 export function mailMessageQueryKey(service: string, mailbox: string, uid: number) {

@@ -1,4 +1,5 @@
 import type { MailFolders } from '#layers/mail/shared/types/mail'
+import { MAIL_QUERY_GC_TIME } from '#layers/mail/app/utils/mail-cache'
 
 type QueryCache = ReturnType<typeof useQueryCache>
 type Fetcher = ReturnType<typeof useRequestFetch>
@@ -10,7 +11,8 @@ export const MAIL_FOLDERS_KEY = ['mail', 'folders'] as const
 export function mailFoldersQueryOptions(fetcher: Fetcher) {
   return {
     key: MAIL_FOLDERS_KEY,
-    query: () => fetcher<MailFolders[]>('/api/mail/folders')
+    query: () => fetcher<MailFolders[]>('/api/mail/folders'),
+    gcTime: MAIL_QUERY_GC_TIME
   }
 }
 

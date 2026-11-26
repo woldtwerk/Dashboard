@@ -10,6 +10,7 @@ const emit = defineEmits<{
 }>()
 
 const { user, clear } = useUserSession()
+const queryCache = useQueryCache()
 const themeItems = useThemeMenuItems()
 const signingOut = ref(false)
 
@@ -33,6 +34,7 @@ async function signOut() {
     // Already signed out on the server; still clear the client below
   }
 
+  await clearQueryCacheForSignOut(queryCache, user.value?.id)
   await clear()
   await navigateTo('/login')
 }

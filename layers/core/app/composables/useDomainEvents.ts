@@ -13,6 +13,8 @@ const subscriptions = new Set<Subscription>()
 let source: EventSource | undefined
 let watchingVisibility = false
 let sessionChecked = false
+let signedInUserId: string | undefined
+let signOutCache: ReturnType<typeof useQueryCache> | undefined
 
 function dispatch(event: DomainEvent) {
   for (const subscription of [...subscriptions]) {
@@ -45,6 +47,9 @@ async function leaveIfSignedOut() {
     const session = await $fetch('/api/_auth/session', { headers: { accept: 'application/json' } })
     if (!session?.user) {
       closeSource()
+      if (signOutCache) {
+        await clearQueryCacheForSignOut(signOutCache, signedInUserId)
+      }
       // Reloading the page we are already on would loop, so only leave elsewhere
       if (window.location.pathname !== '/login') {
         window.location.assign('/login')
@@ -128,7 +133,8 @@ export function useDomainEvents(
     return
   }
 
-  const { loggedIn } = useUserSession()
+  const { loggedIn, user } = useUserSession()
+  signOutCache ??= useQueryCache()
   const subscription: Subscription = { filter, handler, onReconnect: options?.onReconnect }
   let subscribed = false
 
@@ -141,6 +147,7 @@ export function useDomainEvents(
     subscribed = loggedIn.value
 
     if (subscribed) {
+      signedInUserId = user.value?.id
       subscriptions.add(subscription)
       lifecycle.subscribe()
     } else {

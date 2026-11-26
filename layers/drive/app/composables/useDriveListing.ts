@@ -1,8 +1,12 @@
 import type { MaybeRefOrGetter } from 'vue'
 import type { QueryCache } from '@pinia/colada'
 import type { DriveEntry } from '#layers/drive/shared/types/drive'
+import { PERSISTED_LIST_MAX_AGE } from '#layers/core/app/utils/query-cache-persistence'
 
 type Fetcher = ReturnType<typeof useRequestFetch>
+
+/** A visited folder stays cached for a day so a reload opens with last visit's data. */
+const DRIVE_LISTING_GC_TIME = PERSISTED_LIST_MAX_AGE
 
 /** A folder listing across accounts; paths repeat, so the service is part of the key. */
 export function driveListingQueryKey(service: string, path: string) {
@@ -13,7 +17,8 @@ export function driveListingQueryKey(service: string, path: string) {
 export function driveListingQueryOptions(fetcher: Fetcher, service: string, path: string) {
   return {
     key: driveListingQueryKey(service, path),
-    query: () => fetcher<DriveEntry[]>('/api/drive/contents', { query: { service, path } })
+    query: () => fetcher<DriveEntry[]>('/api/drive/contents', { query: { service, path } }),
+    gcTime: DRIVE_LISTING_GC_TIME
   }
 }
 
@@ -56,6 +61,7 @@ export function useDriveListing(
     query: () => fetcher<DriveEntry[]>('/api/drive/contents', {
       query: { service: toValue(service), path: toValue(path) }
     }),
+    gcTime: DRIVE_LISTING_GC_TIME,
     ssrCatchError: true
   })
 

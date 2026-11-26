@@ -3,6 +3,7 @@ import type { ImportantMail } from '#layers/mail/shared/mail-importance'
 import { mailLink } from '#layers/mail/shared/mail-source'
 import { formatRelative } from '#layers/core/app/utils/time'
 import { useDashboardNow } from '#layers/core/app/composables/useDashboardNow'
+import { MAIL_QUERY_GC_TIME } from '#layers/mail/app/utils/mail-cache'
 import { formatMailAddress, mailKey } from '../../utils/mail'
 
 const queryCache = useQueryCache()
@@ -12,6 +13,7 @@ const now = useDashboardNow()
 const { data: importantMails, status } = useQuery<ImportantMail[]>({
   key: ['mail', 'important'],
   query: () => requestFetch<ImportantMail[]>('/api/mail/important', { query: { limit: 8 } }),
+  gcTime: MAIL_QUERY_GC_TIME,
   ssrCatchError: true
 })
 const mails = computed(() => importantMails.value ?? [])

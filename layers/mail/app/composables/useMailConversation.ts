@@ -1,5 +1,6 @@
 import type { MaybeRefOrGetter } from 'vue'
 import type { MailSummary } from '#layers/mail/shared/types/mail'
+import { MAIL_QUERY_GC_TIME } from '#layers/mail/app/utils/mail-cache'
 
 type QueryCache = ReturnType<typeof useQueryCache>
 type Fetcher = ReturnType<typeof useRequestFetch>
@@ -13,7 +14,8 @@ export function mailConversationQueryKey(service: string, key: string) {
 export function mailConversationQueryOptions(fetcher: Fetcher, service: string, key: string) {
   return {
     key: mailConversationQueryKey(service, key),
-    query: () => fetcher<MailSummary[]>(`/api/mail/conversations/${encodeURIComponent(key)}`, { query: { service } })
+    query: () => fetcher<MailSummary[]>(`/api/mail/conversations/${encodeURIComponent(key)}`, { query: { service } }),
+    gcTime: MAIL_QUERY_GC_TIME
   }
 }
 
@@ -57,6 +59,7 @@ export function useMailConversation(conversationKey: MaybeRefOrGetter<string | u
       query: { service: toValue(service) }
     }),
     enabled: () => !!toValue(conversationKey),
+    gcTime: MAIL_QUERY_GC_TIME,
     ssrCatchError: true
   })
 
