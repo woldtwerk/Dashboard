@@ -133,7 +133,7 @@ describe('thumbnailAllowed', () => {
 describe('entryVersion', () => {
   it('combines the modification time and size', () => {
     expect(entryVersion({ modified: '2026-10-18T09:30:00Z', size: 42 })).toBe('2026-10-18T09:30:00Z-42')
-    expect(entryVersion({})).toBe('-')
+    expect(entryVersion({})).toBe('')
   })
 })
 

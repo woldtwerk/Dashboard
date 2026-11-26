@@ -2,7 +2,8 @@ import type { H3Event } from 'h3'
 import { createError, defineEventHandler, getQuery, getRouterParam } from 'nuxt/server'
 import { verifySource } from '../../../utils/imgproxy'
 import { getImageSource } from '../../../utils/image-sources'
-import type { ImageSourceResult } from '../../../utils/image-sources'
+import { cachedOriginal } from '../../../utils/original-cache'
+import type { CachedOriginal } from '../../../utils/original-cache'
 import { decodeImageId } from '../../../../shared/image-id'
 
 /**
@@ -33,9 +34,9 @@ export default defineEventHandler(async (event) => {
     throw createError({ status: 404, statusText: 'Unknown image source' })
   }
 
-  let result: ImageSourceResult
+  let cached: CachedOriginal
   try {
-    result = await source.load(id, event as unknown as H3Event)
+    cached = await cachedOriginal(sourceName, id, version, () => source.load(id, event as unknown as H3Event))
   } catch (error) {
     // The file name is part of the id, so the cause stays at debug level
     logger.warn('Could not read an image original', { source: sourceName })
@@ -43,6 +44,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ status: 502, statusText: 'The original could not be read' })
   }
 
+  const result = cached.result
   const headers = new Headers()
   headers.set('content-type', result.contentType)
   if (result.size !== undefined) {
@@ -50,6 +52,9 @@ export default defineEventHandler(async (event) => {
   }
   headers.set('cache-control', 'private, max-age=31536000, immutable')
   headers.set('x-content-type-options', 'nosniff')
+  if (import.meta.dev) {
+    headers.set('x-original-cache', cached.status)
+  }
 
   return new Response(result.body as BodyInit, { status: 200, headers })
 })

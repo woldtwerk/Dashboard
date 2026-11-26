@@ -1,7 +1,9 @@
-import type { DriveEntry, DriveOrder, DriveSection, DriveSectionKey, DriveSort } from '../../shared/types/drive'
-import type { FilePreviewKind } from '../../../core/shared/file-preview'
-import { filePreviewKind } from '../../../core/shared/file-preview'
+import type { DriveEntry, DriveSection, DriveSectionKey } from '../../shared/types/drive'
 import { DRIVE_MY_FILES_ROOT, DRIVE_SHARED_ROOT, DRIVE_TRASH_ROOT, normalizePath } from '../../shared/drive-path'
+
+export { previewKind, thumbnailAllowed, entryVersion, THUMBNAIL_MAX_BYTES, THUMBNAIL_TILE_WIDTH, THUMBNAIL_ICON_WIDTH } from '../../shared/drive-thumbnails'
+export type { DrivePreviewKind } from '../../shared/drive-thumbnails'
+export { sortEntries } from '../../shared/drive-sort'
 
 /** The three top-level areas of the explorer, in the order their tabs appear. */
 export const DRIVE_SECTIONS: DriveSection[] = [
@@ -74,45 +76,6 @@ export function entryKindLabel(entry: Pick<DriveEntry, 'type' | 'mediaType' | 'n
   return extension ? `${extension} file` : 'File'
 }
 
-export type DrivePreviewKind = FilePreviewKind
-
-/** How a file can be previewed inline, or undefined when it cannot. */
-export function previewKind(entry: Pick<DriveEntry, 'type' | 'mediaType' | 'name'>): DrivePreviewKind | undefined {
-  if (entry.type === 'folder') {
-    return undefined
-  }
-  return filePreviewKind(entry.mediaType, entry.name)
-}
-
-/** The largest image whose whole file is worth fetching as a grid thumbnail. */
-export const THUMBNAIL_MAX_BYTES = 50 * 1024 * 1024
-
-/** Width of the 1x derivative for a grid tile; the 2x candidate is twice that. */
-export const THUMBNAIL_TILE_WIDTH = 256
-
-/** Width of the 1x derivative for a list row's icon; the 2x candidate is twice that. */
-export const THUMBNAIL_ICON_WIDTH = 64
-
-/**
- * Whether a tile shows the file itself instead of its icon. Only images small
- * enough to be downloaded at grid size qualify; an entry of unknown size is not
- * fetched, since it cannot be shown to be small.
- */
-export function thumbnailAllowed(entry: Pick<DriveEntry, 'type' | 'name' | 'mediaType' | 'size'>): boolean {
-  return previewKind(entry) === 'image'
-    && entry.size !== undefined
-    && entry.size <= THUMBNAIL_MAX_BYTES
-}
-
-/**
- * The version token of an entry, derived from its modification time and size.
- * It rides along as `v` so the download endpoint can build an ETag without an
- * extra CLI call, and so the browser cache hits again on a revisit.
- */
-export function entryVersion(entry: Pick<DriveEntry, 'modified' | 'size'>): string {
-  return `${entry.modified ?? ''}-${entry.size ?? ''}`
-}
-
 const SIZE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB']
 
 /** Formats a byte count, e.g. `1.4 MB`; folders have none. */
@@ -145,29 +108,6 @@ export function formatDate(iso?: string): string {
 
   const match = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(iso)
   return match ? `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}` : iso
-}
-
-/** Folders first, then the chosen field; the order flips the field, never the folders. */
-export function sortEntries(entries: DriveEntry[], sort: DriveSort, order: DriveOrder): DriveEntry[] {
-  const direction = order === 'desc' ? -1 : 1
-
-  return [...entries].sort((left, right) => {
-    if (left.type !== right.type) {
-      return left.type === 'folder' ? -1 : 1
-    }
-    return compareEntries(left, right, sort) * direction
-  })
-}
-
-function compareEntries(left: DriveEntry, right: DriveEntry, sort: DriveSort): number {
-  switch (sort) {
-    case 'modified':
-      return (left.modified ?? '').localeCompare(right.modified ?? '')
-    case 'size':
-      return (left.size ?? 0) - (right.size ?? 0)
-    default:
-      return left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
-  }
 }
 
 /** Entries whose name contains the query, case-insensitively. */

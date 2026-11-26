@@ -3,6 +3,8 @@ import { DRIVE_SHARED_ROOT, DRIVE_TRASH_ROOT, parentPath } from '../../shared/dr
 import { sharedStorage } from '../../../core/server/utils/shared-storage'
 import type { DriveListingCache, StoredListing } from './drive-listing-cache'
 import { markDriveFoldersDue, recordDriveListing } from './drive-sync'
+import { isDriveBusy } from './drive-busy'
+import { enqueueDrivePrewarm, touchDriveInteractive } from './drive-prewarm'
 
 /**
  * Folder listings are cached in the shared Nitro storage (Redis when mounted,
@@ -136,22 +138,13 @@ export function sameEntries(a: DriveEntry[], b: DriveEntry[]): boolean {
   return b.every(entry => signatures.get(entry.path) === entrySignature(entry))
 }
 
-/** Whether a provider failure means the CLI is busy rather than genuinely broken. */
-export function isDriveBusy(error: unknown): boolean {
-  const status = (error as { status?: number, statusCode?: number } | undefined)?.status
-    ?? (error as { statusCode?: number } | undefined)?.statusCode
-  if (status === 423 || status === 429) {
-    return true
-  }
-  const message = error instanceof Error ? error.message : String(error ?? '')
-  return /\bbusy\b/i.test(message)
-}
-
 async function loadListing(
   service: string,
   path: string,
   load: () => Promise<DriveEntry[]>
 ): Promise<DriveEntry[]> {
+  void touchDriveInteractive().catch(() => {})
+
   const entries = await load()
   await storeListing(service, path, entries)
 
@@ -196,7 +189,7 @@ async function revalidate(
  * the same folder make one CLI call, not several. When the provider is busy, a
  * cached listing is always preferred over an error.
  */
-export async function cachedList(service: string, path: string, load: () => Promise<DriveEntry[]>): Promise<DriveEntry[]> {
+async function cachedListing(service: string, path: string, load: () => Promise<DriveEntry[]>): Promise<DriveEntry[]> {
   const key = driveListKey(service, path)
   const cached = await readListing(key)
 
@@ -209,6 +202,12 @@ export async function cachedList(service: string, path: string, load: () => Prom
   }
 
   return await loadCold(service, path, key, load)
+}
+
+export async function cachedList(service: string, path: string, load: () => Promise<DriveEntry[]>): Promise<DriveEntry[]> {
+  const entries = await cachedListing(service, path, load)
+  void enqueueDrivePrewarm(service, path, entries).catch(() => {})
+  return entries
 }
 
 /** A cache miss: one worker loads it, the others wait for that listing instead of loading too. */

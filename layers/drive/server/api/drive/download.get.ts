@@ -5,6 +5,7 @@ import { baseName } from '../../../shared/drive-path'
 import { matchesEtag } from '../../../../core/shared/file-preview'
 import { PRIVATE_CACHE } from '../../../../core/server/utils/file-response'
 import { driveFileResponse } from '../../utils/drive-file'
+import { touchDriveInteractive } from '../../utils/drive-prewarm'
 
 // Streams the selected entries back; a single file as itself, several as a zip.
 // The headers, including the preview policy, are built by driveFileResponse.
@@ -22,6 +23,8 @@ export default defineEventHandler(async (event) => {
     headers.set('cache-control', PRIVATE_CACHE)
     return sendWebResponse(event as unknown as H3Event, new Response(null, { status: 304, headers }))
   }
+
+  void touchDriveInteractive()
 
   const response = await (await useDriveProvider(service)).download(path)
 

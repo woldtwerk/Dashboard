@@ -18,6 +18,12 @@ export default defineNuxtConfig({
     imageSourceUrl: '',
     // NUXT_IMAGE_SOURCE_SECRET — HMAC secret of the derivative endpoint. It signs the source
     // URL that imgproxy fetches, and is what protects the session-less source endpoint.
-    imageSourceSecret: ''
+    imageSourceSecret: '',
+    imageOriginalCache: {
+      // NUXT_IMAGE_ORIGINAL_CACHE_DIR — where originals are cached on disk; relative to the app dir
+      dir: '',
+      // NUXT_IMAGE_ORIGINAL_CACHE_MAX_BYTES — disk budget; eviction keeps it below 90 %
+      maxBytes: 2 * 1024 * 1024 * 1024
+    }
   }
 })

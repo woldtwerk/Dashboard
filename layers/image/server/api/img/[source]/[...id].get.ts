@@ -87,6 +87,13 @@ export default defineEventHandler(async (event) => {
     ? 'private, max-age=31536000, immutable'
     : 'private, max-age=300')
 
+  if (import.meta.dev) {
+    const cacheStatus = upstream.headers.get('x-cache-status')
+    if (cacheStatus) {
+      headers.set('x-cache-status', cacheStatus)
+    }
+  }
+
   // Nuxt's RequestEvent is a narrower type than h3's H3Event; cast at the h3 boundary
   return sendWebResponse(event as unknown as H3Event, new Response(upstream.body, { status: 200, headers }))
 })

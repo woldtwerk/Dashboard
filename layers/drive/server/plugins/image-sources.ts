@@ -1,6 +1,7 @@
 import { createError } from 'nuxt/server'
 import { registerImageSource } from '../../../image/server/utils/image-sources'
 import { parseDriveImageId } from '../../shared/drive-image'
+import { touchDriveInteractive } from '../utils/drive-prewarm'
 
 /**
  * Lets imgproxy read Drive originals. The download follows the same control API
@@ -10,7 +11,11 @@ import { parseDriveImageId } from '../../shared/drive-image'
  */
 export default defineNitroPlugin(() => {
   registerImageSource('drive', {
-    async load(id) {
+    async load(id, event) {
+      if (event) {
+        void touchDriveInteractive()
+      }
+
       const parsed = parseDriveImageId(id)
       if (!parsed) {
         throw createError({ status: 400, statusText: 'Invalid drive image id' })
